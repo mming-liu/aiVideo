@@ -22,8 +22,6 @@ from __future__ import annotations
 import argparse
 import ast
 import builtins
-import io
-import json
 import shutil
 import subprocess
 import sys
@@ -335,6 +333,7 @@ def assign_statements(tree: ast.Module, lines: list[str]) -> list[Stmt]:
     current = None
     prev_end = 0
     head_done = False
+    stdlib_phase = True        # 文件开头连续的导入（docstring 之后、首条非导入语句之前）
     for node in tree.body:
         start = node.lineno
         if getattr(node, "decorator_list", None):
@@ -349,8 +348,14 @@ def assign_statements(tree: ast.Module, lines: list[str]) -> list[Stmt]:
             if nm in CLUSTER_STARTS:
                 current = CLUSTER_STARTS[nm]
                 head_done = True
+        is_import = isinstance(node, (ast.Import, ast.ImportFrom))
+        is_future = isinstance(node, ast.ImportFrom) and node.module == "__future__"
+        is_docstring = (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+                        and node is tree.body[0])
+        if not (is_import or is_docstring):
+            stdlib_phase = False
         if not head_done:
-            if node.lineno <= STDLIB_HEAD_END_LINE and isinstance(node, (ast.Import, ast.ImportFrom)):
+            if stdlib_phase and is_import and not is_future:
                 owner = "stdlib_head"
             elif isinstance(node, ast.Expr) and node.lineno == 1:
                 owner = "main"
@@ -544,13 +549,13 @@ class Layout:
     def module_text(self, mod: str) -> str:
         body = [s for s in self.stmts if self.stmt_module(s) == mod]
         head = ["# -*- coding: utf-8 -*-",
+                GEN_BEGIN,
                 f'"""step01_script_gen.orchestrator.{mod} —— {DOCS[mod]}.',
                 "",
                 "顶层语句原样迁自 `step01_script_gen/main.py`（2026-11-19 S00–S10 拆分）。",
                 "跨模块引用一律经模块属性访问（如 `_rt.X`），测试对",
                 "`step01_script_gen.main.X` 的打桩由门面（`orchestrator/_facade.py`）转发到这里。",
                 '"""',
-                GEN_BEGIN,
                 "from __future__ import annotations",
                 ""]
         head += self._stdlib_import_lines(mod)
@@ -756,6 +761,8 @@ def cmd_apply(args) -> int:
         print("拒绝搬迁：先运行 plan 解决 errors / cycles / order_violations")
         return 1
     original = base_path.read_bytes().decode("utf-8-sig")
+    # 行尾跟随工作区现有 main.py（autocrlf 下工作区为 CRLF，git 基线为 LF）
+    lay.crlf = b"\r\n" in SRC.read_bytes()
     with tempfile.TemporaryDirectory() as tmp:
         files = _write_outputs(lay, Path(tmp))
         problems = verify(original, files, lay.moved)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import sys
 from pathlib import Path
+from tests.verification_helpers import step01_getsource  # noqa: E402
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
@@ -1022,7 +1023,7 @@ def test_repair_output_token_budget_matches_the_batch(monkeypatch):
 
     import step01_script_gen.main as m
 
-    src = inspect.getsource(m._repair_shot_warnings)
+    src = step01_getsource(m._repair_shot_warnings)
     assert "_repair_cap = _repair_max_output_tokens()" in src, "上限必须走统一取值口"
     assert src.count("_repair_max_output_tokens()") == 1, (
         "上限只该取一次：请求与台账记录必须同一个值")

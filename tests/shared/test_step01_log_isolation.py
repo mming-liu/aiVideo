@@ -28,7 +28,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 from shared.paths import chapter_dir, step01_log_file  # noqa: E402
 
 _LOGGER_SITES = [
-    "step01_script_gen/main.py",
+    # 2026-11-19 S05：main.py 的模块级 logger 初始化随头部一起迁到 orchestrator/runtime.py
+    "step01_script_gen/orchestrator/runtime.py",
     "step01_script_gen/timecode.py",
     "step01_script_gen/validation.py",
 ]

@@ -12,8 +12,8 @@
 输出：
   - script_result.json: 分镜脚本（位于 OUTPUT_BASE/book_N/chapter_N/）
 """
+# <split:generated>
 from __future__ import annotations
-
 import sys
 import os
 import copy
@@ -21,7 +21,7 @@ from pathlib import Path
 import json
 import re
 from collections import Counter as _Counter
-from contextlib import redirect_stdout
+# </split:generated>
 
 # 确保从项目根目录解析导入
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -34,120 +34,14 @@ if __name__ == "__main__":
     from shared.run_scope import bootstrap as _bootstrap_scope
     _bootstrap_scope("step01 分镜脚本生成", presentation_mode=True)
 
-# 统一配置（从 shared.config 读取 .env）
-from shared.config import (DURATION_MIN_SEC, DURATION_MAX_SEC,
-                           DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC,
-                           duration_band, duration_band_matches)
-from shared.config import (
-    NOVEL_CHAPTER, BOOK_INDEX, resolve_novel_file,
-    CHARACTER_EXTRACTION_ENABLED,
-    SCENE_OBJECT_EXTRACTION_ENABLED,
-    SCENE_ASSET_EXTRACTION_ENABLED,
-    PROP_ASSET_EXTRACTION_ENABLED,
-    COMPLIANCE_STRICT, COMPLIANCE_AUTO_FIX,
-    HOOK_ENABLED,
-    HOOK_MAX_SENDS,
-    GAP_ANALYSIS_ENABLED, GAP_MAX_REGEN_ATTEMPTS,
-    SHOT_COUNT_REGEN_ENABLED,
-    REPAIR_ROUNDS_ENABLED,
-    SCRIPT_CANDIDATE_TOPK,
-)
+# <split:generated>
+# 编排实现已按职责拆到 step01_script_gen/orchestrator/；本文件保留入口 main()。
+# 门面：对本模块的读写（含 mock.patch / monkeypatch）转发到实现所在模块。
+from step01_script_gen.orchestrator import _facade
+from step01_script_gen.orchestrator import runtime as _mrt
+_facade.install(sys.modules[__name__], [_mrt])
+# </split:generated>
 
-# import 期 HOOK_ENABLED 快照：调用方/测试显式改写模块常量时视为强制覆盖，
-# 运行期判定让位于它；否则按调用时 env 重算（S16-1 根因 B）。
-_HOOK_ENABLED_DEFAULT = HOOK_ENABLED
-#: 钩子分类预算的 import 期快照（运行期以 env 为准，见 `_hook_max_sends`）。
-_HOOK_MAX_SENDS_DEFAULT = HOOK_MAX_SENDS
-
-# v6.23：大纲两阶段开关（ShortVideoDirector director-outline 吸收，默认开启）
-OUTLINE_ENABLED = os.getenv("OUTLINE_ENABLED", "1").strip() == "1"
-
-# 输出目录基于 book/chapter 计算（统一路径来源: shared/paths.py）
-from shared.paths import (
-    chapter_dir,
-    script_file,
-    step01_log_file,
-    audio_dir,
-    vimax_working_dir,
-    vimax_shots_dir,
-    stretched_dir,
-    final_file,
-    subtitles_file,
-)
-from shared.constants import SCRIPT_PARSE_RETRIES, SCRIPT_PARSE_RETRY_SLEEP_SEC
-from shared.utils.text import text_integrity_errors
-from shared.quality_gate import ensure_script_revision, attach_gate_metadata
-from step01_script_gen.quality_issues import (
-    Issue, collect_structured_issues, is_blocking, RULE_VERSION, RULE_SOURCE_FINGERPRINT,
-    PROMPT_SOURCE_FINGERPRINT,
-)
-from step01_script_gen.commit_gate import REUSE_MISS_TEXT as _REUSE_MISS_TEXT
-# M1（2026-11-18）：入口安装不可变 RunContext；STEP01_READ_ONLY=1 时
-# step01.log 落点改 devnull、章节目录 JSON 写直接拒绝（探针零写入）。
-from shared.run_context import RunContext as _RunContext, install as _install_run_context
-_RUN_CONTEXT = _install_run_context(_RunContext.from_env())
-
-CHAPTER_DIR = chapter_dir()
-OUTPUT_FILE = script_file()
-SCRIPT_FILE = OUTPUT_FILE
-
-# 模块级日志
-from shared.tee_logger import get_logger
-_logger = get_logger(step01_log_file(), console_level="INFO")
-
-# v6.59 (2026-09-04)：检测 shell 环境变量是否覆盖 .env.content 的 PROVIDER 设置。
-# 媒体/语音通道不阻断，仅 WARN 提示。详细设计见 shared/env_guard.py 顶部。
-from shared.env_guard import warn_shell_overrides as _warn_shell_overrides
-_warn_shell_overrides(
-    ["IMAGE_PROVIDER", "VIDEO_PROVIDER", "TTS_PROVIDER"],
-    logger=_logger,
-)
-# 2026-11-12 用户裁决：Step01 文本通道绑定 OpenCode Go 订阅制套餐，禁止被 shell
-# 覆盖成 deepseek / api.deepseek.com 官方按次计费 API。复用 env_guard 已有的
-# raise_if_override，对**决定套餐身份**的三个 key 做硬阻断（不新增开关、不区分模式）。
-# AUDIT_TEXT_PROVIDER / REPAIR_TEXT_PROVIDER 只 WARN：tools/audit_frozen_candidate
-# 会按冻结包把这俩设成 deepseek 走桩回放（零真实发送），硬阻断会破坏历史审计回放；
-# 非订阅通道下 budget.unlimited 本就不生效、退回一次性授权，规则层也禁止真实运行改它。
-_warn_shell_overrides(
-    ["AUDIT_TEXT_PROVIDER", "REPAIR_TEXT_PROVIDER"],
-    logger=_logger,
-)
-_warn_shell_overrides(
-    ["TEXT_PROVIDER", "AGENT_PLAN_TEXT_BASE_URL", "AGENT_PLAN_TEXT_MODEL"],
-    logger=_logger,
-    raise_if_override=True,
-)
-
-
-# ============================================================================
-# 控制台静默：把运行期间的 print() 全部重定向到 step01.log
-# 控制台只保留关键进度提示（_logger.console）和最终摘要
-# ============================================================================
-class _ConsoleToLog:
-    """把 print() 输出重定向到 log 文件的对象（配合 contextlib.redirect_stdout）."""
-
-    def write(self, s: str):
-        if s and s.strip():
-            _logger.verbose(s.rstrip("\n"))
-
-    def flush(self):
-        pass
-
-
-def _redirect_to_log() -> _ConsoleToLog:
-    """返回一个 file-like 对象，print 写进去会落到 step01.log 而非控制台."""
-    return _ConsoleToLog()
-
-
-def _console(msg: str) -> None:
-    """直接写原始 stdout（绕过重定向），用于控制台进度提示与最终摘要.
-
-    重定向期间 _logger.info() 也会被吞进 log，故关键控制台输出走这里.
-    """
-    try:
-        print(msg, file=_REAL_STDOUT)
-    except UnicodeEncodeError:
-        print(msg.encode("ascii", errors="replace").decode("ascii"), file=_REAL_STDOUT)
 
 
 def _warn_silent_video_model() -> None:
@@ -160,76 +54,12 @@ def _warn_silent_video_model() -> None:
     from shared.model_caps import active_video_supports_audio
     voice_enabled = os.getenv("VIDEO_MODEL_VOICE", "1").strip() == "1"
     if voice_enabled and not active_video_supports_audio():
-        _console(
+        _mrt._console(
             "[!] 当前视频模型不生成语音（VIDEO_MODEL_VOICE=1 默认把对话/背景音交给"
             "视频模型，但该模型无声）。\n"
             "    成片将无对白/背景音。建议：换有声模型（Seedance 2.0+/wan2.7-r2v），"
             "或设 VIDEO_MODEL_VOICE=0 走 step03 TTS。"
         )
-
-
-# 保存真实 stdout 引用（redirect 前赋值）
-_REAL_STDOUT = sys.stdout
-
-# ============================================================================
-# 导入子模块
-# ============================================================================
-from shared.chapter_reader import extract_section, get_chapter_meta
-from _text_gen import create_service, TextGenerationRequest
-from shared.character_bank import CharacterBank
-from shared.scene_objects_bank import SceneObjectsBank
-from shared.assets_bank import SceneAssetsBank, PropAssetsBank
-from step01_script_gen.prompts import (
-    build_prompt, build_hook_prompt, parse_hook_response,
-    _load_gap_analysis_context, _build_regen_iron_rules,
-    _build_character_anchors,
-    _load_knowledge_skills, _load_local_skill_context,
-    _load_knowledge_skills_for,
-    auto_select_prompt_builder, auto_select_system_prompt,
-    resolve_model_prompt_profile, render_execution_contract,
-    append_execution_contract,
-)
-
-# v2026-09-03: 按 TEXT_PROVIDER 自动选择 prompt builder。
-# agent_plan（doubao-seed-2-1-turbo）→ doubao 专属（XML schema + few-shot + workflow）
-# 其他 provider → 沿用 deepseek 调优的 build_prompt / build_hook_prompt
-from _text_gen.config import TEXT_PROVIDER_DEFAULT
-_TEXT_PROVIDER = (os.getenv("TEXT_PROVIDER") or TEXT_PROVIDER_DEFAULT).strip().lower()
-build_prompt, build_hook_prompt = auto_select_prompt_builder(_TEXT_PROVIDER)
-_SYSTEM_PROMPT = auto_select_system_prompt(_TEXT_PROVIDER)
-if _TEXT_PROVIDER == "agent_plan":
-    # v6.143：这行原写「使用 doubao 专属 prompt」——**错**。v6.68 起 prompt 剖面跟
-    # **模型**走（`resolve_model_prompt_profile`，见 `MODEL_PROMPT_PROFILES`）：
-    # agent_plan 通道跑 deepseek-v4-flash 时用的是 `build_prompt` + `system.md`，
-    # 与 doubao 毫无关系。硬编码这句话会主动误导「step01 在用 doubao」——
-    # 2026-09-26 用户据此提出「改用 deepseek-flash」，而实测 764 次提交**全是**
-    # deepseek-v4-flash。改为按**实际候选模型**逐个解析后打印。
-    from shared.config import SCRIPT_CANDIDATE_MODELS as _CAND_MODELS
-    _profiles = ", ".join(
-        "%s→%s" % (_m, resolve_model_prompt_profile(_m)[0].__name__)
-        for _m in (_CAND_MODELS or [None])) or "(provider 默认)"
-    _logger.info("[INFO] agent_plan 通道：prompt 剖面按模型解析 = %s" % _profiles)
-from step01_script_gen.character_extractor import extract_characters
-from step01_script_gen.object_extractor import extract_scene_objects
-from step01_script_gen.asset_extractor import extract_scene_assets, extract_props
-from step01_script_gen.validation import parse_response, build_regen_feedback, _set_novel_text, _run_prompt_checklist
-from step01_script_gen.timecode import (
-    _compute_timecodes,
-    write_timeline_from_durations,
-    timeline_consistency_errors,
-)
-from step01_script_gen.hash_cache import _prompt_changed, _hash_source
-from step01_script_gen.gap_analysis import (
-    gap_needs_full_regen,
-    generate_gap_report,
-    print_gap_report,
-    validate_script_gap,
-)
-
-
-from shared import style_prefix
-import scene_compliance
-import shared.content_safety as content_safety
 
 
 # ============================================================================
@@ -238,8 +68,8 @@ import shared.content_safety as content_safety
 
 def read_chapter(path: str | None = None, chapter: int = 1) -> str:
     """提取小说指定章节（合并多个小节），返回完整内容."""
-    full_text = extract_section(resolve_novel_file(path), chapter)
-    _logger.info(f"[INFO] 选取第 {chapter} 章全文 {len(full_text)} 字符作为素材")
+    full_text = _mrt.extract_section(_mrt.resolve_novel_file(path), chapter)
+    _mrt._logger.info(f"[INFO] 选取第 {chapter} 章全文 {len(full_text)} 字符作为素材")
     return full_text
 
 
@@ -293,19 +123,19 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
             # v6.132（用户 2026-09-25）：**生成执行契约**（不压缩）——本集选用的全部台词 +
             # 必保留事实 + 事件顺序。200 字大纲摘要（doubao/agent_plan 剖面）只能装摘要，
             # 选材必须走这一块；四个完整稿生成入口共用。
-            contract_block = render_execution_contract(outline)
+            contract_block = _mrt.render_execution_contract(outline)
             # v6.128（用户 2026-09-25 决定）：道具候选短提示**默认不再注入**。
             # 两次诊断生成都没过验收（提前释放且布局不跟随 / 连释放都不写），提示词
             # 路线暂停；离线代码与取证保留，`STEP01_PROP_ANCHOR_BLOCK=1` 可复测。
             from step01_script_gen.prop_state_anchor import prop_anchor_block_for
             prop_anchor_block = prop_anchor_block_for(outline)
             if prop_anchor_block:
-                _logger.info("[INFO] 道具状态候选锚点 %d 条已注入独立短提示"
+                _mrt._logger.info("[INFO] 道具状态候选锚点 %d 条已注入独立短提示"
                              % len((outline or {}).get("prop_state_candidates") or []))
             elif (outline or {}).get("prop_state_candidates"):
-                _logger.info("[INFO] 道具候选短提示已关闭（默认；"
+                _mrt._logger.info("[INFO] 道具候选短提示已关闭（默认；"
                              "STEP01_PROP_ANCHOR_BLOCK=1 可开启），本轮不注入")
-            _logger.info("[INFO] 章节大纲已预提取（并发），注入分镜 prompt")
+            _mrt._logger.info("[INFO] 章节大纲已预提取（并发），注入分镜 prompt")
         except Exception as e:
             # v6.132（用户 2026-09-25 收口）：这里**不再吞异常**。门已经判过计划可行，
             # 走到本函数说明计划应当被完整传递；构造失败还继续生成，就会产出一份
@@ -320,14 +150,14 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
     # v6.68: prompt/system 跟着实际模型走——deepseek-v4-flash → deepseek 剖面；
     # doubao → doubao 剖面。两者都保留完整 novel，由 PROMPT_MAX_CHARS 统一控上限。
     # 此前 agent_plan 下所有模型共用 doubao prompt，是候选结构性零高潮的根因。
-    _main_builder, _system = resolve_model_prompt_profile(model)
-    prompt = append_execution_contract(
+    _main_builder, _system = _mrt.resolve_model_prompt_profile(model)
+    prompt = _mrt.append_execution_contract(
         _main_builder(novel_text, bank, objects_bank, outline_anchor,
                       prop_anchor_block=prop_anchor_block),
         contract_block)
-    _metrics_inc("calls.script_generation")
-    service = create_service()
-    req = TextGenerationRequest(
+    _mrt._metrics_inc("calls.script_generation")
+    service = _mrt.create_service()
+    req = _mrt.TextGenerationRequest(
         system_prompt=_system,
         user_prompt=prompt,
         temperature=temperature,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
@@ -335,8 +165,8 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
         model=model,  # v6.66: 跨模型候选池——per-request model 覆盖（None=用 provider 默认）
         timeout_sec=timeout_sec,  # v6.70.3: 候选 300s 分级超时
     )
-    _logger.info("[INFO] 正在调用 LLM 生成分镜脚本...")
-    _console("  [生成] 正在调用 LLM 生成分镜脚本（18 镜，约需 3-6 分钟）...")
+    _mrt._logger.info("[INFO] 正在调用 LLM 生成分镜脚本...")
+    _mrt._console("  [生成] 正在调用 LLM 生成分镜脚本（18 镜，约需 3-6 分钟）...")
     result = service.generate(req)
     if not result.success:
         raise RuntimeError(f"LLM 生成失败: {result.error}")
@@ -355,12 +185,12 @@ def gen_spy_script(novel_text: str, bank=None, objects_bank=None,
 def _post_process(script: dict) -> dict:
     """增强：注入全局渲染配置 + 合规过滤 + 敏感词校验."""
     # 注入全局渲染参数（若 LLM 未输出则补上）
-    script = style_prefix.inject_global_config_into_script(script)
+    script = _mrt.style_prefix.inject_global_config_into_script(script)
 
     # 自动合规过滤
-    if COMPLIANCE_AUTO_FIX:
-        script = style_prefix.sanitize_script_shots(script, verbose=True)
-        script = scene_compliance.auto_sanitize_shot_prompts(script, verbose=True)
+    if _mrt.COMPLIANCE_AUTO_FIX:
+        script = _mrt.style_prefix.sanitize_script_shots(script, verbose=True)
+        script = _mrt.scene_compliance.auto_sanitize_shot_prompts(script, verbose=True)
         # v6.32（08-12）：台词（narration/subtitle）做「台词级」敏感词替换——只替换
         # 语义风险词表里的词（如「杀人」→「出人命」），不套用画面 prompt 的全表
         # （「死了→倒了」「杀了→击了」会把对话语义改碎，step01.log 镜头16/18 实测）。
@@ -368,18 +198,18 @@ def _post_process(script: dict) -> dict:
         for _shot in script.get("shots", []):
             for _f in ("narration_segment", "subtitle"):
                 if _shot.get(_f):
-                    _shot[_f] = content_safety.sanitize_narration(_shot[_f])
+                    _shot[_f] = _mrt.content_safety.sanitize_narration(_shot[_f])
 
     # v6 新增：敏感词校验（强制级）
-    validation_result = style_prefix.validate_sensitive_words(script, verbose=True)
+    validation_result = _mrt.style_prefix.validate_sensitive_words(script, verbose=True)
     if validation_result["has_issues"]:
-        _logger.warn("[WARN] 检测到残留敏感词，再次进行合规过滤...")
+        _mrt._logger.warn("[WARN] 检测到残留敏感词，再次进行合规过滤...")
         # 再次过滤确保干净
-        script = style_prefix.sanitize_script_shots(script, verbose=True)
+        script = _mrt.style_prefix.sanitize_script_shots(script, verbose=True)
         # 再次校验
-        validation_result = style_prefix.validate_sensitive_words(script, verbose=True)
+        validation_result = _mrt.style_prefix.validate_sensitive_words(script, verbose=True)
         if validation_result["has_issues"]:
-            _logger.error("[ERROR] 仍有残留敏感词，请检查脚本!")
+            _mrt._logger.error("[ERROR] 仍有残留敏感词，请检查脚本!")
 
     return script
 
@@ -405,29 +235,29 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
         model: v6.70.1 钩子后置校验轮——互补模型重生钩子（None=provider 默认，
             零行为变化）
     """
-    if not HOOK_ENABLED:
+    if not _mrt.HOOK_ENABLED:
         return None
 
-    prompt = build_hook_prompt(novel_text, bank=bank, objects_bank=objects_bank,
+    prompt = _mrt.build_hook_prompt(novel_text, bank=bank, objects_bank=objects_bank,
                                forbidden_lines=forbidden_lines)
     if dup_note:
         prompt = prompt + f"\n\n# 钩子台词去重反馈（必须遵守）\n{dup_note}"
-    _metrics_inc("calls.hook_generation")
-    service = create_service()
+    _mrt._metrics_inc("calls.hook_generation")
+    service = _mrt.create_service()
     from _text_gen.deepseek_schema import HOOK_SCHEMA
-    req = TextGenerationRequest(
+    req = _mrt.TextGenerationRequest(
         system_prompt="你是短视频脚本大师，擅长在视频开头制造悬念和吸引力。禁止血腥暴力细节。",
         user_prompt=prompt,
         temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
         json_schema=HOOK_SCHEMA,
         model=model,  # v6.70.1 钩子后置校验轮：互补模型重生（None=provider 默认）
-        timeout_sec=_repair_timeout_sec(),  # v6.70.3: hook 180s（09-13 实测 600s 超时已让重生白等）
+        timeout_sec=_mrt._repair_timeout_sec(),  # v6.70.3: hook 180s（09-13 实测 600s 超时已让重生白等）
     )
-    _logger.info("[INFO] 正在调用 LLM 生成钩子分镜...")
-    _console("  [生成] 正在生成钩子分镜（约 30 秒）...")
+    _mrt._logger.info("[INFO] 正在调用 LLM 生成钩子分镜...")
+    _mrt._console("  [生成] 正在生成钩子分镜（约 30 秒）...")
     result = service.generate(req)
     if not result.success:
-        _logger.warn(f"[WARN] 钩子分镜生成失败: {result.error}，跳过钩子")
+        _mrt._logger.warn(f"[WARN] 钩子分镜生成失败: {result.error}，跳过钩子")
         return None
 
     import re
@@ -437,27 +267,27 @@ def gen_hook_script(novel_text: str, bank=None, objects_bank=None,
     raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
     try:
-        hook_data = parse_hook_response(raw)
+        hook_data = _mrt.parse_hook_response(raw)
         hook = hook_data.get("hook")
         if hook:
             # 钩子也需合规过滤
-            hook["prompt"] = style_prefix.sanitize_prompt(hook.get("prompt", ""), verbose=False)
+            hook["prompt"] = _mrt.style_prefix.sanitize_prompt(hook.get("prompt", ""), verbose=False)
             # 钩子镜头也需要做敏感词校验
             for field in ("ff_desc", "lf_desc", "motion_desc"):
                 if hook.get(field):
-                    hook[field] = style_prefix.sanitize_prompt(hook[field], verbose=False)
+                    hook[field] = _mrt.style_prefix.sanitize_prompt(hook[field], verbose=False)
             # v6.32：钩子台词（narration/subtitle）做「台词级」敏感词替换——只替换
             # 语义风险词表里的词（如「杀人」→「出人命」），不套用画面 prompt 的全表
             # （「死了→倒了」会把对话改得语义破碎）。见 shared.content_safety.sanitize_narration。
             for field in ("narration_segment", "subtitle"):
                 if hook.get(field):
-                    hook[field] = content_safety.sanitize_narration(hook[field])
+                    hook[field] = _mrt.content_safety.sanitize_narration(hook[field])
             # W16/W17 兜底：标记 is_hook=True，让 step02a vimax_bridge 在生成层
             # 追加泳池/室内禁词（即使 W17 因 hook ff_desc 缺水面词未触发）。
             hook["is_hook"] = True
         return hook
     except Exception as e:
-        _logger.warn(f"[WARN] 钩子分镜解析失败: {e}，跳过钩子")
+        _mrt._logger.warn(f"[WARN] 钩子分镜解析失败: {e}，跳过钩子")
         return None
 
 
@@ -797,7 +627,7 @@ def _bind_regen_plan_identity(baseline: dict, candidate: dict, *, plan) -> list:
     if not isinstance(baseline, dict) or not isinstance(candidate, dict):
         return []
     if not isinstance(plan, dict) or not plan:
-        _logger.info("[REGEN] 本请求没有计划（旧缓存路径）⇒ 无契约可验，不绑定身份")
+        _mrt._logger.info("[REGEN] 本请求没有计划（旧缓存路径）⇒ 无契约可验，不绑定身份")
         return []
     _prev = {k: candidate.get(k, _ABSENT) for k in ("chapter_outline", "plan_id")}
     candidate["chapter_outline"] = plan
@@ -905,7 +735,7 @@ def _build_gap_regen_prompt(novel_text: str, bank, objects_bank, outline, contra
 
     Returns `(prompt, system_prompt)`。
     """
-    _gap_builder, _gap_system = resolve_model_prompt_profile(None)
+    _gap_builder, _gap_system = _mrt.resolve_model_prompt_profile(None)
     # v6.116（审核）：GAP 重生同样复用大纲锚点
     from step01_script_gen.outline import outline_to_anchor as _o2a
     # v6.128：道具候选短提示默认关闭（用户 2026-09-25 决定）
@@ -915,7 +745,7 @@ def _build_gap_regen_prompt(novel_text: str, bank, objects_bank, outline, contra
         _o2a(outline, novel_text),
         prop_anchor_block=_pabf(outline))
     prompt = prompt + gap_context
-    return append_execution_contract(prompt, contract), _gap_system
+    return _mrt.append_execution_contract(prompt, contract), _gap_system
 
 
 def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=None,
@@ -952,7 +782,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 
     # 重试次数单源 shared.config.GAP_MAX_REGEN_ATTEMPTS（签名默认 None=不覆盖）
     if max_attempts is None:
-        max_attempts = GAP_MAX_REGEN_ATTEMPTS
+        max_attempts = _mrt.GAP_MAX_REGEN_ATTEMPTS
 
     shots = script.get("shots", [])
     # v6.86（**用户决定 B1**，2026-09-21）：判定口径改用**实际** `Σduration_sec`。
@@ -964,7 +794,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
     # 投影 < 90 而实际 > 90 时**该收敛的不触发**；投影 ≫ 实际时反复重生成，且要求
     # 模型压的是投影而不是门禁量的那个数。投影口径保留给候选打分。
     shots_total = _actual_shots_total(script)
-    duration_over = shots_total > DURATION_MAX_SEC + 0.01
+    duration_over = shots_total > _mrt.DURATION_MAX_SEC + 0.01
     over_max = SHOT_COUNT_MAX > 0 and len(shots) > SHOT_COUNT_MAX
 
     # 镜头数不限时仍需保留时长硬约束：一次显式压缩重生成优于让 100s
@@ -978,17 +808,17 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
 
         current = len(script.get("shots", []))
         if over_max:
-            _logger.warn(
+            _mrt._logger.warn(
                 f"[COUNT] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，"
                 f"反馈 LLM 合并冗余镜头（尝试 {attempt}/{max_attempts}）..."
             )
-            _console(f"  [收敛] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，重新生成精简版（{attempt}/{max_attempts}）...")
+            _mrt._console(f"  [收敛] 镜头数 {current} 超上限 {SHOT_COUNT_MAX}，重新生成精简版（{attempt}/{max_attempts}）...")
         if duration_over:
-            _logger.warn(
-                f"[DURATION] 正片 {shots_total:.1f}s > {DURATION_MAX_SEC:g}s，"
-                f"反馈 LLM 精简/合并到 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s（尝试 {attempt}/{max_attempts}）..."
+            _mrt._logger.warn(
+                f"[DURATION] 正片 {shots_total:.1f}s > {_mrt.DURATION_MAX_SEC:g}s，"
+                f"反馈 LLM 精简/合并到 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s（尝试 {attempt}/{max_attempts}）..."
             )
-            _console(f"  [时长] 正片 {shots_total:.1f}s 超 {DURATION_MAX_SEC:g}s，重新规划为 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s（{attempt}/{max_attempts}）...")
+            _mrt._console(f"  [时长] 正片 {shots_total:.1f}s 超 {_mrt.DURATION_MAX_SEC:g}s，重新规划为 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s（{attempt}/{max_attempts}）...")
 
         feedback = ""
         if over_max:
@@ -1004,13 +834,13 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
                 f"4. 删减冗余过渡镜头与重复表达的空镜\n"
                 f"5. 保留全部关键剧情节点（开篇冲突 / 刺杀 / 高潮 / 收尾），不删剧情只合并冗余\n"
                 f"6. **不要把多镜拆成单镜的细碎画面**——一镜只承载 1 个核心动作/情绪转折\n\n"
-                f"v6.38 红果硬约束：正片总时长 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s（钩子另算）、单镜 3.5-{_shot_cap():.0f}s（不得超过 {_shot_cap():.0f}s）。\n"
+                f"v6.38 红果硬约束：正片总时长 {_mrt.DURATION_MIN_SEC:g}-{_mrt.DURATION_MAX_SEC:g}s（钩子另算）、单镜 3.5-{_shot_cap():.0f}s（不得超过 {_shot_cap():.0f}s）。\n"
             )
         if duration_over:
             feedback += (
                 f"\n\n# ★ 正片时长硬约束（本轮拒收，最高优先级）\n"
-                f"当前正片分镜合计 {shots_total:.1f}s，超过 {DURATION_MAX_SEC:g}s 上限。\n"
-                f"**本轮必须把正片分镜 duration_sec 之和压到 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s，最多 {DURATION_MAX_SEC:g}s**。\n"
+                f"当前正片分镜合计 {shots_total:.1f}s，超过 {_mrt.DURATION_MAX_SEC:g}s 上限。\n"
+                f"**本轮必须把正片分镜 duration_sec 之和压到 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s，最多 {_mrt.DURATION_MAX_SEC:g}s**。\n"
                 f"禁止删掉关键剧情（开篇冲突/刺杀/高潮/收尾）、致命伤、武器归属或台词原文依据。\n"
                 f"允许的压缩方式：\n"
                 f"1. 合并同地点、同主体、连续动作或重复信息镜头；\n"
@@ -1020,36 +850,36 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             )
         # v6.33（08-12）：附加 checklist 聚合反馈——镜头数收敛之外，把内容密度/景别
         # 跳跃/致命伤等真实缺陷也喂给 LLM（此前只喂镜头数/覆盖率，LLM 重生成还是老问题）
-        _checklist_fb = build_regen_feedback(script, novel_text)
+        _checklist_fb = _mrt.build_regen_feedback(script, novel_text)
         if _checklist_fb:
             feedback = feedback + _checklist_fb
         # v6.68: prompt/system 跟着实际模型走（接力模型可能是另一家模型）
-        _rl_builder, _rl_system = resolve_model_prompt_profile(model)
+        _rl_builder, _rl_system = _mrt.resolve_model_prompt_profile(model)
         # v6.131（2026-09-25 收口）：超限收敛也是**完整稿生成入口**，必须同样带上大纲锚点
         # ——否则它会绕开计划（选用的逐字台词/必保留事实/事件顺序）另写一版，等于在收敛
         # 这一步重新决定选材。此处此前只传 novel_text/bank/objects_bank（漏了大纲锚点）。
         prompt = _rl_builder(novel_text, bank, objects_bank, outline_anchor)
         prompt = prompt + feedback
         # 契约**最后**追加（用户 2026-09-25）：反馈之后才是模型最后一眼看到的内容
-        prompt = append_execution_contract(prompt, contract_block)
+        prompt = _mrt.append_execution_contract(prompt, contract_block)
 
-        _metrics_inc("calls.regen_over_limit")
-        service = create_service()
+        _mrt._metrics_inc("calls.regen_over_limit")
+        service = _mrt.create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
-        req = TextGenerationRequest(
+        req = _mrt.TextGenerationRequest(
             system_prompt=_rl_system,
             user_prompt=prompt,
             json_schema=SCRIPT_SCHEMA,
             model=model,  # v6.67 接力修复：None=provider 默认（零行为变化）
-            timeout_sec=_repair_timeout_sec(),  # v6.70.3: 超限收敛 180s
+            timeout_sec=_mrt._repair_timeout_sec(),  # v6.70.3: 超限收敛 180s
         )
         try:
             result = service.generate(req)
         except Exception as e:
-            _logger.warn(f"[WARN] 收敛重生成失败: {e}，保留原版")
+            _mrt._logger.warn(f"[WARN] 收敛重生成失败: {e}，保留原版")
             break
         if not result.success:
-            _logger.warn(f"[WARN] 收敛重生成失败: {result.error}，保留原版")
+            _mrt._logger.warn(f"[WARN] 收敛重生成失败: {result.error}，保留原版")
             break
 
         import re
@@ -1059,14 +889,14 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
         try:
-            new_script = parse_response(raw, novel_text=novel_text)
+            new_script = _mrt.parse_response(raw, novel_text=novel_text)
         except (ValueError, json.JSONDecodeError) as e:
-            _logger.warn(f"[WARN] 收敛重生成 JSON 解析失败，保留原版: {e}")
+            _mrt._logger.warn(f"[WARN] 收敛重生成 JSON 解析失败，保留原版: {e}")
             break
 
         new_shots = new_script.get("shots", [])
         if not new_shots:
-            _logger.warn("[WARN] 收敛重生成返回空 shots，保留原版")
+            _mrt._logger.warn("[WARN] 收敛重生成返回空 shots，保留原版")
             break
 
         # v6.86（**用户决定 B2**，2026-09-21）：采纳判据——**严格改善 + 内容完整性**。
@@ -1084,7 +914,7 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         # 两者任一不满足 → 保留原稿并结束（不做「再多试一次看看」）。
         _new_total = _actual_shots_total(new_script)
         if _new_total >= shots_total - 0.01:
-            _logger.warn(
+            _mrt._logger.warn(
                 f"[DURATION] 重生成未改善实际时长（{shots_total:.1f}s → "
                 f"{_new_total:.1f}s），保留原版"
             )
@@ -1094,31 +924,31 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         # 采纳分支永不通过，时长收敛轮等于没有。
         _ok, _why = _accept_regen_candidate(script, new_script, novel_text, plan=plan)
         if not _ok:
-            _logger.warn(
+            _mrt._logger.warn(
                 f"[DURATION] 重生成缩短了时长（{shots_total:.1f}s → {_new_total:.1f}s）"
                 f"但未通过不退化验收，保留原版：{_why}"
             )
             break
 
         # 收敛有效：替换并重算时间轴
-        _logger.info(
+        _mrt._logger.info(
             f"[DURATION] 实际时长改善：{shots_total:.1f}s → {_new_total:.1f}s，采纳新稿"
         )
         script = new_script
-        _compute_timecodes(script)
+        _mrt._compute_timecodes(script)
         total_duration = float(script.get("total_duration", 0) or 0)
         shots_total = _new_total
-        duration_over = shots_total > DURATION_MAX_SEC + 0.01
+        duration_over = shots_total > _mrt.DURATION_MAX_SEC + 0.01
         if over_max:
             if len(new_shots) <= SHOT_COUNT_MAX:
-                _logger.info(
+                _mrt._logger.info(
                     f"[COUNT] 收敛成功: {current} → {len(new_shots)} 镜, "
                     f"总时长 {total_duration:.0f}s"
                 )
             over_max = len(new_shots) > SHOT_COUNT_MAX
         if not duration_over:
-            _logger.info(
-                f"[DURATION] 时长收敛成功: 正片 {shots_total:.1f}s（目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s）"
+            _mrt._logger.info(
+                f"[DURATION] 时长收敛成功: 正片 {shots_total:.1f}s（目标 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s）"
             )
 
     if over_max:
@@ -1126,17 +956,17 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         # 到 SHOT_COUNT_MAX 镜。LLM 软话不收敛时这是最后兜底，优先保留前 N 镜（开篇+冲突+高潮）
         # 截断后再跑一次 _compute_timecodes 校正 timecode。
         from shared.config import SHOT_COUNT_MAX
-        _console(
+        _mrt._console(
             f"  [COUNT] 重试 {max_attempts} 次后仍 {len(script.get('shots', []))} 镜，"
             f"按 v6.38 红果硬约束强制截断到 {SHOT_COUNT_MAX} 镜"
         )
-        _logger.warn(
+        _mrt._logger.warn(
             f"[COUNT] 强制截断: {len(script.get('shots', []))} → {SHOT_COUNT_MAX} 镜（v6.38 兜底）"
         )
         shots = script.get("shots", [])
         script["shots"] = shots[:SHOT_COUNT_MAX]
         # 同步处理 hook：若 hook 之前被算入 shots 之外的，截断不影响 hook
-        _compute_timecodes(script)
+        _mrt._compute_timecodes(script)
     return script
 
 
@@ -1181,7 +1011,7 @@ def _structural_feedback(issues: list) -> str:
         f"   每个子镜的台词估时都必须 ≤ {_shot_cap():.0f}s（留余量，目标 4-7s）。\n"
         "2. **时长低于下限**：把该镜合并进相邻的同地点连续剧情，或补足动作/台词——\n"
         "   禁止靠事后加秒数凑时长。\n"
-        f"3. 单镜 duration_sec 必须落在 3.5-{_shot_cap():.0f}s；正片合计 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s（钩子另算）。\n"
+        f"3. 单镜 duration_sec 必须落在 3.5-{_shot_cap():.0f}s；正片合计 {_mrt.DURATION_MIN_SEC:g}-{_mrt.DURATION_MAX_SEC:g}s（钩子另算）。\n"
         "4. 禁止复制字段制造 ff==lf 的空壳子镜；每个子镜都要有独立的事件与画面。\n"
         "5. **开篇空镜过多**：抖音黄金 3 秒必须有主体入场——把多余的开篇空镜"
         "**合并或替换成带主体的建立镜**（人物入画、手持道具、明确动作），"
@@ -1465,7 +1295,7 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
     if not segments:
         # v6.136 B：无**句末合法切点**（逗号/等字长兜底已废除，与台词完整性门同判据）
         # ——在调用拆分模型之前停下，交整脚本 regen / 规划层处理
-        _logger.warn(
+        _mrt._logger.warn(
             "[SPLIT] 镜头%s 无句末合法切点（单句超长且句内只有逗号）——"
             "不调用拆分模型，交整脚本 regen／规划层重选"
             % idx
@@ -1477,28 +1307,28 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
     except (TypeError, ValueError):
         base = None
 
-    _sp_builder, _sp_system = resolve_model_prompt_profile(model)
-    service = create_service()
+    _sp_builder, _sp_system = _mrt.resolve_model_prompt_profile(model)
+    service = _mrt.create_service()
     feedback = ""
 
     for attempt in range(1, _SPLIT_MAX_ATTEMPTS + 1):
-        _metrics_inc("calls.split_shot")
+        _mrt._metrics_inc("calls.split_shot")
         prompt = _build_split_prompt(shot, novel_text, cap, segments,
                                      feedback=feedback)
-        req = TextGenerationRequest(
+        req = _mrt.TextGenerationRequest(
             system_prompt=_sp_system,
             user_prompt=prompt,
             json_schema=SPLIT_SHOT_SCHEMA,
             model=model,
-            timeout_sec=_repair_timeout_sec(),
+            timeout_sec=_mrt._repair_timeout_sec(),
         )
         try:
             result = service.generate(req)
         except Exception as e:
-            _logger.warn("[SPLIT] 镜头%s 拆分请求失败: %s" % (idx, e))
+            _mrt._logger.warn("[SPLIT] 镜头%s 拆分请求失败: %s" % (idx, e))
             return None
         if not result.success:
-            _logger.warn("[SPLIT] 镜头%s 拆分请求失败: %s" % (idx, result.error))
+            _mrt._logger.warn("[SPLIT] 镜头%s 拆分请求失败: %s" % (idx, result.error))
             return None
 
         raw = result.text.strip()
@@ -1508,14 +1338,14 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
         try:
             data = _json.loads(raw)
         except Exception as e:
-            _logger.warn("[SPLIT] 镜头%s 拆分 JSON 解析失败: %s" % (idx, e))
+            _mrt._logger.warn("[SPLIT] 镜头%s 拆分 JSON 解析失败: %s" % (idx, e))
             return None
         subs = data.get("sub_shots") if isinstance(data, dict) else None
         if not isinstance(subs, list) or not all(isinstance(s, dict) for s in subs):
-            _logger.warn("[SPLIT] 镜头%s 未返回 sub_shots 数组" % idx)
+            _mrt._logger.warn("[SPLIT] 镜头%s 未返回 sub_shots 数组" % idx)
             return None
         if len(subs) != len(segments):
-            _logger.warn(
+            _mrt._logger.warn(
                 "[SPLIT] 镜头%s 子镜数 %d 与指定段数 %d 不一致"
                 % (idx, len(subs), len(segments))
             )
@@ -1523,7 +1353,7 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
 
         ok, why = _narration_continuous(shot.get("narration_segment"), subs)
         if not ok:
-            _logger.warn("[SPLIT] 镜头%s 拆分被拒：%s" % (idx, why))
+            _mrt._logger.warn("[SPLIT] 镜头%s 拆分被拒：%s" % (idx, why))
             return None
         # v6.92：逐段逐字校验——切点是**我们给的**，所以这里能做精确比对：
         # 「补字 / 只回一段 / 段落错位」全部在此挡住。
@@ -1538,7 +1368,7 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
                 )
                 break
         if _bad_seg:
-            _logger.warn(_bad_seg)
+            _mrt._logger.warn(_bad_seg)
             return None
 
         # 子镜时长由**内容需求**派生（不照抄模型给的 duration）：容器必须装得下内容。
@@ -1571,26 +1401,26 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
         if not ok:
             # v6.95（②）：容量/KF 覆盖不合格也是**可修**的一类（模型写歪），带反馈重试
             if attempt < _SPLIT_MAX_ATTEMPTS:
-                _logger.warn("[SPLIT] 镜头%s 子镜仍不合法，带反馈重试（%d/%d）：%s"
+                _mrt._logger.warn("[SPLIT] 镜头%s 子镜仍不合法，带反馈重试（%d/%d）：%s"
                              % (idx, attempt + 1, _SPLIT_MAX_ATTEMPTS, why))
                 feedback = why
                 continue
-            _logger.warn("[SPLIT] 镜头%s 拆分被拒（重试后仍不合法）：%s" % (idx, why))
+            _mrt._logger.warn("[SPLIT] 镜头%s 拆分被拒（重试后仍不合法）：%s" % (idx, why))
             return None
 
         ok, why = _split_has_duplicate_pair(out)
         if ok:
             if attempt > 1:
-                _logger.info("[SPLIT] 镜头%s 带反馈重试后通过（机位/景别已区分）" % idx)
+                _mrt._logger.info("[SPLIT] 镜头%s 带反馈重试后通过（机位/景别已区分）" % idx)
             return out
         if attempt < _SPLIT_MAX_ATTEMPTS:
-            _logger.warn(
+            _mrt._logger.warn(
                 "[SPLIT] 镜头%s 视觉重复，带反馈重试（%d/%d）：%s"
                 % (idx, attempt + 1, _SPLIT_MAX_ATTEMPTS, why)
             )
             feedback = why
             continue
-        _logger.warn("[SPLIT] 镜头%s 拆分被拒（重试后仍重复）：%s" % (idx, why))
+        _mrt._logger.warn("[SPLIT] 镜头%s 拆分被拒（重试后仍重复）：%s" % (idx, why))
         return None
     return None
 
@@ -1607,7 +1437,7 @@ def _scoped_split_over_cap_shots(script: dict, novel_text: str, *, model=None) -
     done = 0
     for issue in over:
         if done >= _STRUCT_SPLIT_MAX_SHOTS:
-            _logger.info(
+            _mrt._logger.info(
                 "[SPLIT] 已达单轮拆分上限 %d，其余超载镜头交整脚本 regen"
                 % _STRUCT_SPLIT_MAX_SHOTS
             )
@@ -1618,7 +1448,7 @@ def _scoped_split_over_cap_shots(script: dict, novel_text: str, *, model=None) -
         if pos is None:
             continue
         parent = shots[pos]
-        _logger.info(
+        _mrt._logger.info(
             "[SPLIT] 镜头%s 需要 %.1fs > %.1fs，请求定向拆分…"
             % (issue.shot_id, _content_need(parent), cap)
         )
@@ -1627,17 +1457,17 @@ def _scoped_split_over_cap_shots(script: dict, novel_text: str, *, model=None) -
             continue
         shots[pos:pos + 1] = subs
         done += 1
-        _logger.info(
+        _mrt._logger.info(
             "[SPLIT] 镜头%s 已拆为 %d 镜：%s（台词逐字连续 ✓）"
             % (issue.shot_id, len(subs),
                [round(float(s.get("duration") or 0), 2) for s in subs])
         )
-        _console("  [拆分] 镜头%s → %d 镜（超载已消）" % (issue.shot_id, len(subs)))
+        _mrt._console("  [拆分] 镜头%s → %d 镜（超载已消）" % (issue.shot_id, len(subs)))
     if done:
         try:
-            write_timeline_from_durations(script)
+            _mrt.write_timeline_from_durations(script)
         except Exception as e:
-            _logger.warn("[SPLIT] 拆分后 timeline 序列化失败: %s" % e)
+            _mrt._logger.warn("[SPLIT] 拆分后 timeline 序列化失败: %s" % e)
     return script
 
 
@@ -1682,50 +1512,50 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
             return script
         # v6.143 P3 已撤回（2026-09-28 复核）：目标集合回到「超载/过短 + 开篇空镜」，
         # 缺帧不再触发整篇重生成——它走质量门 + 定向修复轮（见 `_structural_shot_issues`）。
-        _logger.warn(
+        _mrt._logger.warn(
             f"[STRUCT] {len(issues)} 个镜头结构不合法（内容超 cap / 低于下限 / 开篇空镜）："
             f"{[str(i.shot_id) for i in issues]}，重做 shot-plan（尝试 {attempt}/{max_attempts}）"
         )
-        _console(f"  [结构] {len(issues)} 镜超载/过短/空镜，重做分镜规划"
+        _mrt._console(f"  [结构] {len(issues)} 镜超载/过短/空镜，重做分镜规划"
                  f"（{attempt}/{max_attempts}）...")
 
-        _sb_builder, _sb_system = resolve_model_prompt_profile(model)
+        _sb_builder, _sb_system = _mrt.resolve_model_prompt_profile(model)
         # v6.116（审核）：重生必须**复用首稿用过的大纲锚点**——否则「花 79 秒重做
         # 整章」却把主要事件/高潮/时间预算全丢了，等于换个随机种子重来。
         prompt = _sb_builder(novel_text, bank, objects_bank, outline_anchor,
                              prop_anchor_block=prop_anchor_block)
         prompt = prompt + _structural_feedback(issues)
         try:
-            _checklist_fb = build_regen_feedback(script, novel_text)
+            _checklist_fb = _mrt.build_regen_feedback(script, novel_text)
             if _checklist_fb:
                 prompt += _checklist_fb
         except Exception:
             pass
         # 契约**最后**追加（用户 2026-09-25）：所有反馈之后
-        prompt = append_execution_contract(prompt, contract_block)
+        prompt = _mrt.append_execution_contract(prompt, contract_block)
 
-        _metrics_inc("calls.regen_structural")
-        service = create_service()
+        _mrt._metrics_inc("calls.regen_structural")
+        service = _mrt.create_service()
         from _text_gen.deepseek_schema import SCRIPT_SCHEMA
         # v6.101（2026-09-23 第十四次重跑实测）：结构收敛轮是**全脚本级**请求
         # （输入整章原文 + 反馈，输出 ~26k token），却一直用**修复轮**的 180s 超时。
         # 第十四次实测直接 `Agent Plan 客户端超时 (180s)` → 连候选都没拿到，
         # 「2 个超载镜重做 shot-plan」这条路整轮作废（第七次重跑时它能产出 → 属延迟波动）。
         # 改走与 GAP 重生同档的 `_full_script_timeout_sec()`（默认 300s）。
-        req = TextGenerationRequest(
+        req = _mrt.TextGenerationRequest(
             system_prompt=_sb_system,
             user_prompt=prompt,
             json_schema=SCRIPT_SCHEMA,
             model=model,
-            timeout_sec=_full_script_timeout_sec(),
+            timeout_sec=_mrt._full_script_timeout_sec(),
         )
         try:
             result = service.generate(req)
         except Exception as e:
-            _logger.warn(f"[WARN] 结构收敛重生成失败: {e}，保留原版")
+            _mrt._logger.warn(f"[WARN] 结构收敛重生成失败: {e}，保留原版")
             return script
         if not result.success:
-            _logger.warn(f"[WARN] 结构收敛重生成失败: {result.error}，保留原版")
+            _mrt._logger.warn(f"[WARN] 结构收敛重生成失败: {result.error}，保留原版")
             return script
 
         import re as _sb_re
@@ -1734,15 +1564,15 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
         raw = _sb_re.sub(r"^```\s*", "", raw, flags=_sb_re.MULTILINE)
         raw = _sb_re.sub(r"```\s*$", "", raw, flags=_sb_re.MULTILINE)
         try:
-            new_script = parse_response(raw, novel_text=novel_text)
+            new_script = _mrt.parse_response(raw, novel_text=novel_text)
         except (ValueError, json.JSONDecodeError) as e:
-            _logger.warn(f"[WARN] 结构收敛 JSON 解析失败，保留原版: {e}")
+            _mrt._logger.warn(f"[WARN] 结构收敛 JSON 解析失败，保留原版: {e}")
             return script
         if not new_script.get("shots"):
-            _logger.warn("[WARN] 结构收敛返回空 shots，保留原版")
+            _mrt._logger.warn("[WARN] 结构收敛返回空 shots，保留原版")
             return script
 
-        _compute_timecodes(new_script)
+        _mrt._compute_timecodes(new_script)
         new_issues = _structural_shot_issues(new_script)
 
         # 采纳判据：**结构非法数严格变少**由本轮的收敛目标主导。
@@ -1768,7 +1598,7 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
         # 现在统一为：**先严格改善 → 再过统一验收 → 才提交**；`M = 0` 只是让它
         # 不需要再迭代（提交后直接结束），而不是绕过验收。
         if len(new_issues) >= len(issues):
-            _logger.warn(
+            _mrt._logger.warn(
                 f"[STRUCT] 新稿未改善（{len(issues)} → {len(new_issues)} 个非法镜头），"
                 f"保留原版"
             )
@@ -1777,32 +1607,32 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
         if not _ok:
             # v6.87：判据是「**不退化**」，不是「必须干净」——原稿不干净时
             # 布尔判据会让采纳分支永不通过（实测 5 → 4 被拒）。
-            _logger.warn(
+            _mrt._logger.warn(
                 f"[STRUCT] 新稿结构改善（{len(issues)} → {len(new_issues)}）"
                 f"但未通过不退化验收，保留原版：{_why}"
             )
             return script
-        _logger.info(
+        _mrt._logger.info(
             f"[STRUCT] 结构改善：{len(issues)} → {len(new_issues)} 个非法镜头，采纳新稿"
         )
         script = new_script
         if not new_issues:
-            _logger.info(
+            _mrt._logger.info(
                 f"[STRUCT] 结构收敛成功：{len(issues)} 个非法镜头 → 0；"
                 f"共 {len(script.get('shots', []))} 镜（已通过统一验收）"
             )
-            _console("  [结构] 收敛成功：无超载/过短镜头")
+            _mrt._console("  [结构] 收敛成功：无超载/过短镜头")
             return script
         continue
 
     remaining = _structural_shot_issues(script)
     if remaining:
         # 无预算/未收敛：**明确结束为 BLOCK**，不再「再试一次看看」
-        _logger.warn(
+        _mrt._logger.warn(
             f"[STRUCT] 结构收敛用尽 {max_attempts} 次尝试，仍有 "
             f"{len(remaining)} 个镜头超载/过短——交质量门判 BLOCK，需人工介入"
         )
-        _console(f"  [结构] 收敛失败：仍有 {len(remaining)} 个镜头超载/过短（BLOCK）")
+        _mrt._console(f"  [结构] 收敛失败：仍有 {len(remaining)} 个镜头超载/过短（BLOCK）")
     return script
 
 
@@ -1887,14 +1717,14 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
     historical ``{_has_hard, shots}`` shape.
     """
     if novel_text:
-        _set_novel_text(novel_text)
-    issues, checker_failed, rule_version = collect_structured_issues(
+        _mrt._set_novel_text(novel_text)
+    issues, checker_failed, rule_version = _mrt.collect_structured_issues(
         script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
-        checklist_runner=_run_prompt_checklist,
+        checklist_runner=_mrt._run_prompt_checklist,
     )
     per_shot: dict = {}
     for issue in issues:
-        if not is_blocking(issue):
+        if not _mrt.is_blocking(issue):
             continue
         ids = []
         if issue.shot_id is not None:
@@ -1909,12 +1739,12 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
             else:
                 per_shot.setdefault(f"shot_{sid}", []).append(issue.message)
     return {
-        "_has_hard": any(is_blocking(i) for i in issues),
+        "_has_hard": any(_mrt.is_blocking(i) for i in issues),
         "shots": per_shot,
         "checker_failed": checker_failed,
         "rule_version": rule_version,
-        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
-        "duration_band": duration_band(),
+        "rule_source_fingerprint": _mrt.RULE_SOURCE_FINGERPRINT,
+        "duration_band": _mrt.duration_band(),
         "issues": [i.to_dict() for i in issues],
     }
 
@@ -1924,17 +1754,17 @@ def _collect_repair_warnings(script: dict, novel_text: str) -> dict:
 _HOOK_QC_WARNING_CATEGORIES = {"gaze_state_conflict"}
 
 
-def _issue_from_record(rec: dict) -> Issue:
+def _issue_from_record(rec: dict) -> _mrt.Issue:
     """`Issue.to_dict()` 记录 → `Issue` 对象（授权推导要它的 `field_path`）."""
-    fields = getattr(Issue, "__dataclass_fields__", {})
-    return Issue(**{k: v for k, v in (rec or {}).items() if k in fields})
+    fields = getattr(_mrt.Issue, "__dataclass_fields__", {})
+    return _mrt.Issue(**{k: v for k, v in (rec or {}).items() if k in fields})
 
 
 def _collect_hook_issues(script: dict) -> list[str]:
     """Return all blocking issues attached to the hook shot."""
-    issues, checker_failed, _ = collect_structured_issues(
+    issues, checker_failed, _ = _mrt.collect_structured_issues(
         script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
-        checklist_runner=_run_prompt_checklist,
+        checklist_runner=_mrt._run_prompt_checklist,
     )
     out: list[str] = []
     if checker_failed:
@@ -1942,7 +1772,7 @@ def _collect_hook_issues(script: dict) -> list[str]:
     for issue in issues:
         if str(issue.shot_id) not in ("0", "hook"):
             continue
-        if is_blocking(issue):
+        if _mrt.is_blocking(issue):
             out.append(f"[{issue.code}] {issue.message}")
     return out
 
@@ -2003,7 +1833,7 @@ def _collect_text_integrity_issues(script: dict) -> list[str]:
             text = shot.get(field)
             if not isinstance(text, str) or not text.strip():
                 continue
-            for err in text_integrity_errors(text):
+            for err in _mrt.text_integrity_errors(text):
                 issues.append(f"{label}.{field}: {err}")
             if (("双目紧闭" in text or "头颈僵直" in text)
                     and any(w in text for w in _open_eye_words)):
@@ -2060,12 +1890,12 @@ def _temporal_plan_stats(script: dict) -> dict:
 def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
     """Candidate risk summary from the same structured issue collector."""
     if novel_text:
-        _set_novel_text(novel_text)
-    issues, checker_failed, rule_version = collect_structured_issues(
+        _mrt._set_novel_text(novel_text)
+    issues, checker_failed, rule_version = _mrt.collect_structured_issues(
         script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
-        checklist_runner=_run_prompt_checklist,
+        checklist_runner=_mrt._run_prompt_checklist,
     )
-    blocking = [i for i in issues if is_blocking(i)]
+    blocking = [i for i in issues if _mrt.is_blocking(i)]
     integrity_codes = {
         "text_integrity", "eye_state_conflict",
         "action_time_out_of_range", "state_order_replay",
@@ -2102,10 +1932,10 @@ def _candidate_quality_summary(script: dict, novel_text: str = "") -> dict:
         "integrity_ok": not checker_failed and not integrity_issues,
         "integrity_issues": [i.message for i in integrity_issues],
         "rule_version": rule_version,
-        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
-        "duration_band": duration_band(),
+        "rule_source_fingerprint": _mrt.RULE_SOURCE_FINGERPRINT,
+        "duration_band": _mrt.duration_band(),
         "checker_failed": checker_failed,
-        "structured_issues": [i.to_dict() for i in issues if is_blocking(i)],
+        "structured_issues": [i.to_dict() for i in issues if _mrt.is_blocking(i)],
     }
 
 
@@ -2175,10 +2005,10 @@ def _quality_rank(score: float, quality: dict | None) -> tuple:
 def _build_step01_quality_gate(script: dict, novel_text: str) -> dict:
     """构造确定性质量门报告（**不落盘**）——唯一提交点的 staged 产物之一."""
     if novel_text:
-        _set_novel_text(novel_text)
-    issues, checker_failed, rule_version = collect_structured_issues(
+        _mrt._set_novel_text(novel_text)
+    issues, checker_failed, rule_version = _mrt.collect_structured_issues(
         script, _QUALITY_BLOCKING_CATEGORIES, _VIDEO_ONLY_CATEGORIES,
-        checklist_runner=_run_prompt_checklist,
+        checklist_runner=_mrt._run_prompt_checklist,
     )
     hard = [i.to_dict() for i in issues if i.severity == "hard"]
     visual = [i.to_dict() for i in issues if i.severity == "visual_risk"]
@@ -2197,11 +2027,11 @@ def _build_step01_quality_gate(script: dict, novel_text: str) -> dict:
         "blocking_categories": sorted({x["code"] for x in hard + visual}),
         "checker_failed": checker_failed,
         "rule_version": rule_version,
-        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
-        "duration_band": duration_band(),
+        "rule_source_fingerprint": _mrt.RULE_SOURCE_FINGERPRINT,
+        "duration_band": _mrt.duration_band(),
         "status": "BLOCK" if (hard or visual or checker_failed) else "PASS",
     }
-    attach_gate_metadata(payload, script, stage="step01.quality_gate")
+    _mrt.attach_gate_metadata(payload, script, stage="step01.quality_gate")
     return payload
 
 
@@ -2219,69 +2049,17 @@ def _write_step01_quality_gate(script: dict, novel_text: str) -> dict:
         # attach_gate_metadata recomputes script_revision from final content.
         # Persist that revision back to script_result.json in the same step so
         # BEST-GUARD / downstream gates can never observe report != script.
-        atomic_dump_json(OUTPUT_FILE, _strip_runtime_fields(script),
+        atomic_dump_json(_mrt.OUTPUT_FILE, _strip_runtime_fields(script),
                          ensure_ascii=False, indent=2)
-        atomic_dump_json(CHAPTER_DIR / "step01_quality.json", payload, ensure_ascii=False, indent=2)
+        atomic_dump_json(_mrt.CHAPTER_DIR / "step01_quality.json", payload, ensure_ascii=False, indent=2)
     except Exception as exc:
-        _logger.warn(f"[QUALITY-GATE] write failed: {exc}")
+        _mrt._logger.warn(f"[QUALITY-GATE] write failed: {exc}")
     return payload
-
-
-# ===========================================================================
-# v6.103（2026-09-23 总计划阶段 4）：**唯一最终提交点**
-# ===========================================================================
-# 正常生成 / 缓存命中 / BEST-GUARD 恢复三条入口此前各写一遍落盘序列，时序互不
-# 相同：缓存路径不写 quality/audit；BEST-GUARD 在 finalize 之后还能重生 hook；
-# final semantic audit 只由离线工具 `tools/run_step01_final_audit.py` 补跑，
-# 生产链路里根本没有「审计 → 提交」这一步。结果是 `step01_quality.json` PASS、
-# 同 revision 的审计却有 4 条 blocking，`require_semantic_gate()` 必然拒绝。
-#
-# 现在只有一条提交路径，顺序固定（总计划 §3）：
-#
-#   候选（BEST-GUARD 只**选**）→ hook QC/regen → finalize → revision
-#     → 确定性 quality → final semantic audit
-#         ├─ 无 blocking → staged 三件套 → require_semantic_gate 自验
-#         │                → audit → quality → script 依次替换 → commit manifest
-#         │                → 正式路径再自验 + manifest 校验
-#         └─ 有 blocking → 受限修复（≤2 轮，每轮重新 finalize+revision）
-#                          → 仍有 blocking 就 BLOCK（不写三份产物）
-#
-# 「final audit 之后禁止任何语义写入」由两件事保证：① 提交点之后不再调用任何
-# 修复/约束/post_fix；② audit 前后各算一次 revision，不等则本轮审计作废。
-STEP01_AUDIT_SCOPE = "final_after_deterministic_fixes"
 # v6.137（2026-09-26 用户决策）：2 → 4。§1.1 定 2 轮时修复轮还不可靠（零改善/
 # new_blocking 死路一轮即弃）；v6.137 之后每轮都有验收闸兜底且实测连续净改善
 # （resolved=4/6、new=0），2 轮不够把 24 条 blocking 收敛到 0（实测 24→21→13）。
 # 4 轮 = 修复调用 ≤4 次 + 每轮 1 次新审计（脚本已变不可复用），成本约 +5 分钟/次。
 STEP01_AUDIT_REPAIR_MAX_ROUNDS = 4
-
-
-def _step01_run_id() -> str:
-    """本轮运行身份（提交产物/台账/诊断/bank/调用记录都用它自证是哪一轮）.
-
-    实现在 `shared.run_identity`（**单一来源**）：`STEP01_RUN_ID` 由跑批驱动注入
-    （父子同身份），否则**进程内首次调用生成一次并缓存**。
-
-    2026-10-02 复核：旧实现每次按**当前秒**重拼 `%Y%m%dT%H%M%S-<pid>`——同一轮里
-    相隔一秒调用就得到两个不同 id（实测 `…183824-18820` / `…183825-18820`），
-    于是「诊断」与「manifest」各写一个 id，产物无法自证同轮。缓存是硬要求。
-    """
-    from shared.run_identity import current_run_id
-    return current_run_id()
-
-
-def _step01_now() -> str:
-    import time as _time
-    return _time.strftime("%Y-%m-%dT%H:%M:%S")
-
-
-def _read_json_quiet(path) -> "dict | None":
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
 
 
 def _audit_blocking_records(payload: "dict | None") -> list:
@@ -2333,7 +2111,7 @@ def _baseline_chapter_dir():
     raw = (os.getenv("STEP01_BASELINE_CHAPTER_DIR") or "").strip()
     if raw:
         return Path(raw)
-    return CHAPTER_DIR
+    return _mrt.CHAPTER_DIR
 
 
 def _committed_baseline_script():
@@ -2351,7 +2129,7 @@ def _committed_baseline_script():
             return None
         script = _json.loads(path.read_text(encoding="utf-8"))
         verify_step01_commit_manifest(base_dir, script, stage="step01",
-                                      expected_chapter=NOVEL_CHAPTER)
+                                      expected_chapter=_mrt.NOVEL_CHAPTER)
         return script
     except Exception:
         return None
@@ -2397,7 +2175,7 @@ def _downgrade_out_of_delta_audit_issues(audit, active_scope, *,
             issue["severity"] = "warning"
             issue["out_of_delta_scope"] = True
             changed += 1
-            _logger.warn(
+            _mrt._logger.warn(
                 "[COMMIT] 审计项 %s@shot%s 落在未改动镜头（增量作用域 %s），降级为 warning"
                 % (issue.get("code"), issue.get("shot_id"),
                    ",".join(sorted(active_scope))))
@@ -2456,7 +2234,7 @@ def _downgrade_stage_enum_false_positives(audit: "dict | None", script: dict, *,
             issue["severity"] = "warning"
             issue["_downgraded_stage_enum"] = True
             changed += 1
-            _logger.warn(
+            _mrt._logger.warn(
                 "[COMMIT] 审计项 %s@shot%s 把合法 stage 枚举误判为非法，降级为 warning"
                 % (issue.get("code"), issue.get("shot_id")))
     return changed
@@ -2485,7 +2263,7 @@ def _downgrade_locked_only_audit_issues(audit: "dict | None", *,
             issue["severity"] = "warning"
             issue["_downgraded_locked_only"] = True
             changed += 1
-            _logger.warn(
+            _mrt._logger.warn(
                 "[COMMIT] 审计项 %s@shot%s 仅指向已过契约门的锁定字段 %s，降级为 warning"
                 % (issue.get("code"), issue.get("shot_id"), ",".join(locked)))
     return changed
@@ -2566,14 +2344,14 @@ def _audit_payload_to_issues(payload: "dict | None") -> list:
         _chunks = _split_oversize_repair_targets(_rt)
         if len(_chunks) > 1:
             _split_n += len(_chunks) - 1
-            _logger.warn(
+            _mrt._logger.warn(
                 "[COMMIT] 审计问题 %s 的成对目标覆盖 %d 镜 > 上限 %d → 按镜拆成 %d 条"
                 "（镜内目标保持整组；这是声明粒度，不是拆联动事务）"
                 % (rec.get("code"), len({str(t.get("shot_id")) for t in _rt
                                         if isinstance(t, dict)}),
                    _AUDIT_MAX_TARGET_SHOTS, len(_chunks)))
         for _chunk in _chunks:
-            out.append(Issue(
+            out.append(_mrt.Issue(
                 code=str(rec.get("code") or "model_audit_issue"),
                 severity="visual_risk",
                 message=str(rec.get("message") or ""),
@@ -2586,7 +2364,7 @@ def _audit_payload_to_issues(payload: "dict | None") -> list:
                 repairable=True,
             ))
     if _split_n:
-        _metrics_inc("commit.audit_targets_split", _split_n)
+        _mrt._metrics_inc("commit.audit_targets_split", _split_n)
     return out
 
 
@@ -2640,9 +2418,9 @@ def _audit_payload_to_relations(payload: "dict | None") -> dict:
                 continue
             out[name] = ident
     if dropped:
-        _logger.info("[AUDIT] 身份关系声明丢弃 %d 项（形状不合法）" % dropped)
+        _mrt._logger.info("[AUDIT] 身份关系声明丢弃 %d 项（形状不合法）" % dropped)
     if conflicts:
-        _logger.warn("[AUDIT] 身份关系声明**互相矛盾**！同一个称谓被指向不同角色，"
+        _mrt._logger.warn("[AUDIT] 身份关系声明**互相矛盾**！同一个称谓被指向不同角色，"
                      "已整条丢弃（不猜）：%s" % conflicts[:4])
     return out
 
@@ -2819,13 +2597,13 @@ def _final_audit_metadata(script: dict, *, run_id: str = "") -> dict:
 
     return {
         "input_revision": compute_script_revision(script),
-        "rule_version": RULE_VERSION,
-        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
-        "duration_band": duration_band(),
+        "rule_version": _mrt.RULE_VERSION,
+        "rule_source_fingerprint": _mrt.RULE_SOURCE_FINGERPRINT,
+        "duration_band": _mrt.duration_band(),
         # v6.112：生成/修复提示词版本——**诊断字段**，不参与复用判定
         # （改提示词改变的是稿件内容，内容变化已由 revision 覆盖）。
-        "prompt_source_fingerprint": PROMPT_SOURCE_FINGERPRINT,
-        "audit_scope": STEP01_AUDIT_SCOPE,
+        "prompt_source_fingerprint": _mrt.PROMPT_SOURCE_FINGERPRINT,
+        "audit_scope": _mrt.STEP01_AUDIT_SCOPE,
         # v6.111（审核 P2-5 / 总计划 §1.3）：模型、温度与 prompt 版本都要进元数据，
         # 并参与复用判定——只比 revision + 规则指纹 + scope 时，改了审计提示词
         # 旧结论仍会被复用。
@@ -2867,11 +2645,11 @@ def _final_audit_source_identity(script: dict, novel_text: str, plan: "dict | No
         "novel_sha256": _hashlib.sha256((novel_text or "").encode("utf-8")).hexdigest(),
         "plan": plan or {},
         "script_revision": compute_script_revision(script),
-        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
-        "prompt_source_fingerprint": PROMPT_SOURCE_FINGERPRINT,
-        "audit_scope": STEP01_AUDIT_SCOPE,
+        "rule_source_fingerprint": _mrt.RULE_SOURCE_FINGERPRINT,
+        "prompt_source_fingerprint": _mrt.PROMPT_SOURCE_FINGERPRINT,
+        "audit_scope": _mrt.STEP01_AUDIT_SCOPE,
         "audit_prompt_version": audit_prompt_version(),
-        "duration_band": duration_band(),
+        "duration_band": _mrt.duration_band(),
         "channel_provider": _provider or "",
         "model": _chan_model or model or "",
     }
@@ -2891,7 +2669,7 @@ def _memoizable_final_audit(audit: "dict | None") -> "dict | None":
         return None
     if str(audit.get("status") or "").strip().lower() != "ok":
         return None
-    if not duration_band_matches(audit):
+    if not _mrt.duration_band_matches(audit):
         return None
     return audit
 
@@ -2919,7 +2697,7 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         _heal = heal_pre_audit_hard(script)
         _heal_status = str(_heal.get("status") or "")
         if _heal_status == "healed":
-            _logger.warn(
+            _mrt._logger.warn(
                 "[AUDIT] 送审前确定性预审门：局部自愈成功（hard %d→0，repairs=%d）"
                 "——修复稿交由调用方决定是否送审，本函数不写盘、不采纳"
                 % (len(_heal.get("hard_before") or []),
@@ -2944,7 +2722,7 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         if _heal_status in ("needs_llm_repair", "unresolved"):
             _hard_left = list(_heal.get("hard_after")
                               or _heal.get("hard_before") or [])
-            _logger.warn(
+            _mrt._logger.warn(
                 "[AUDIT] 送审前确定性预审门拒绝：status=%s（%s）"
                 % (_heal_status, _heal.get("reason") or ""))
             return {
@@ -2969,26 +2747,26 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
     # 定向项只解析一次：请求里发的那一份、身份里算的那一份必须是同一份，
     # 否则「身份相同」与「请求逐字相同」会分家（S05）。
     _focus_now = focus or _final_audit_focus(script, None)
-    _metrics_inc("calls.final_audit")
-    _allow, _deadline, _to_info = _audit_budget_allowance()
-    _logger.info("[AUDIT] 本次审计可用 %ss（%s）｜总预算剩余 %s 秒｜截止时刻 %s"
+    _mrt._metrics_inc("calls.final_audit")
+    _allow, _deadline, _to_info = _mrt._audit_budget_allowance()
+    _mrt._logger.info("[AUDIT] 本次审计可用 %ss（%s）｜总预算剩余 %s 秒｜截止时刻 %s"
                  % (_allow, _to_info.get("why") or "-",
                     _to_info.get("left") if _to_info.get("left") is not None else "未知",
                     ("不限" if _deadline is None else "now+%ss" % _allow)))
     result = run_same_model_audit_with_status(
         novel_text, plan, script, model=model,
-        timeout_sec=int(_to_info.get("cap") or AUDIT_TIMEOUT_CAP_SEC),
+        timeout_sec=int(_to_info.get("cap") or _mrt.AUDIT_TIMEOUT_CAP_SEC),
         deadline_ts=_deadline,
         audit_focus=_focus_now,
         metadata=metadata,
     )
     # M04：四项读数分别记（剩余预算 / 审计允许时长 / 服务端等待 / 流式耗时）。
     # 只进 metrics 与日志，**不改 payload 形状**（单次成功产物与历史逐字一致）。
-    _budget_timing = _audit_budget_timing(
+    _budget_timing = _mrt._audit_budget_timing(
         result, allowance_sec=_allow,
         left_sec=_to_info.get("left"), phase="final_audit")
-    _metrics_set("audit.budget_timing", _budget_timing)
-    _logger.info(
+    _mrt._metrics_set("audit.budget_timing", _budget_timing)
+    _mrt._logger.info(
         "[AUDIT][BUDGET] 剩余预算=%s｜审计允许=%ss｜服务端等待=%ss｜"
         "流式耗时=%s（来源=%s）"
         % (_budget_timing["remaining_budget_sec"],
@@ -3004,7 +2782,7 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
     # 否则「这份审计由哪个通道/模型产出」在事后无从核对。
     _deviations = [str(d) for d in (getattr(result, "schema_deviations", None) or [])]
     if _deviations:
-        _logger.warn("[AUDIT] 响应体与 AUDIT_SCHEMA 有偏离（已归一，结论仍可用）: "
+        _mrt._logger.warn("[AUDIT] 响应体与 AUDIT_SCHEMA 有偏离（已归一，结论仍可用）: "
                      + "；".join(_deviations))
     payload = {
         **metadata,
@@ -3024,7 +2802,7 @@ def _run_final_semantic_audit(script: dict, novel_text: str, plan: "dict | None"
         # 只剩「照做」或「猜」两条路——实测第 21 轮 ch2 就是「模型删对了、约束又加
         # 回来、却被记成没修好」。空表 = 未声明（旧响应缺该键的兼容读法）。
         "character_aliases": list(getattr(result, "character_aliases", None) or []),
-        "created_at": _step01_now(),
+        "created_at": _mrt._step01_now(),
         # v6.133（2026-09-26 实跑 BLOCK：final audit parse_failed，00:58 那次重跑）：
         # 失败时**必须**留下原始响应头——`AuditResult.raw_text` 本来带着原文，但原先
         # 没进 payload，台账里只剩一句 "not valid JSON or lacks issues[]"，于是
@@ -3079,10 +2857,10 @@ def _write_audit_adjudication(audit: dict, script: dict) -> None:
         from step01_script_gen.audit_adjudication import (
             build_shadow_report, dump_report, render_report_text)
         report = build_shadow_report(audit, script, context={"source": "final_audit"})
-        dump_report(CHAPTER_DIR / _ADJUDICATION_NAME, report)
-        _logger.info(render_report_text(report).replace("\n", " ｜ "))
+        dump_report(_mrt.CHAPTER_DIR / _ADJUDICATION_NAME, report)
+        _mrt._logger.info(render_report_text(report).replace("\n", " ｜ "))
     except Exception as exc:
-        _logger.warn(f"[ADJUDICATION] 影子裁决报告写入失败（不影响结论）: {exc}")
+        _mrt._logger.warn(f"[ADJUDICATION] 影子裁决报告写入失败（不影响结论）: {exc}")
 
 
 # 台账保留条数：单条约等于一次审计的完整 issue 列表（约 10KB），40 条 ≈ 400KB 封顶。
@@ -3129,7 +2907,7 @@ def _record_audit_diag(audit: "dict | None", *, phase: str, round_index: int,
     _blocking = [i for i in issues
                  if str(i.get("severity") or "").strip() in ("hard", "visual_risk", "blocking")]
     rec = {
-        "recorded_at": _step01_now(),
+        "recorded_at": _mrt._step01_now(),
         "run_id": run_id or str(_payload.get("run_id") or ""),
         "phase": phase,
         "round": int(round_index),
@@ -3144,9 +2922,9 @@ def _record_audit_diag(audit: "dict | None", *, phase: str, round_index: int,
                      or _active_text_provider()),
         "input_revision": _payload.get("input_revision"),
         "rule_source_fingerprint": (_payload.get("rule_source_fingerprint")
-                                    or RULE_SOURCE_FINGERPRINT),
+                                    or _mrt.RULE_SOURCE_FINGERPRINT),
         "duration_band": _payload.get("duration_band"),
-        "prompt_source_fingerprint": PROMPT_SOURCE_FINGERPRINT,
+        "prompt_source_fingerprint": _mrt.PROMPT_SOURCE_FINGERPRINT,
         "audit_scope": _payload.get("audit_scope"),
         "audit_prompt_version": _payload.get("audit_prompt_version"),
         "audit_focus_version": _payload.get("audit_focus_version"),
@@ -3184,12 +2962,12 @@ def _record_audit_diag(audit: "dict | None", *, phase: str, round_index: int,
             _note_degraded("step01_script_gen/main.py:_record_audit_diag", _degrade_exc)
     try:
         from shared.json_io import atomic_dump_json
-        path = CHAPTER_DIR / _AUDIT_DIAG_NAME
+        path = _mrt.CHAPTER_DIR / _AUDIT_DIAG_NAME
         rows = _read_json_list_quiet(path)
         rows.append(rec)
         atomic_dump_json(path, rows[-_AUDIT_DIAG_KEEP:], ensure_ascii=False, indent=2)
     except Exception as exc:
-        _logger.warn(f"[AUDIT] 每轮审计台账写入失败（不影响结论）: {exc}")
+        _mrt._logger.warn(f"[AUDIT] 每轮审计台账写入失败（不影响结论）: {exc}")
 
 
 # 失败响应留档上限（字符）：只留头部，够判"是不是 JSON / 断在哪"即可，避免台账膨胀。
@@ -3226,14 +3004,14 @@ def _record_repair_diag(*, run_id: str, attempt: int, records: list) -> None:
         return
     try:
         from shared.json_io import atomic_dump_json
-        path = CHAPTER_DIR / _REPAIR_DIAG_NAME
+        path = _mrt.CHAPTER_DIR / _REPAIR_DIAG_NAME
         rows = _read_json_list_quiet(path)
         for _rec in records:
-            rows.append({"recorded_at": _step01_now(), "run_id": run_id,
+            rows.append({"recorded_at": _mrt._step01_now(), "run_id": run_id,
                          "commit_round": int(attempt), **dict(_rec)})
         atomic_dump_json(path, rows[-_REPAIR_DIAG_KEEP:], ensure_ascii=False, indent=2)
     except Exception as exc:
-        _logger.warn(f"[REPAIR] 修复轮诊断台账写入失败（不影响结论）: {exc}")
+        _mrt._logger.warn(f"[REPAIR] 修复轮诊断台账写入失败（不影响结论）: {exc}")
 
 
 def _reuse_miss_key(audit: dict, *, revision: str,
@@ -3259,11 +3037,11 @@ def _reuse_miss_key(audit: dict, *, revision: str,
     # 只在其余项全同、仍不相等时才作为「原文/计划/契约内容变化」的兜底。
     if str(audit.get("input_revision") or "").strip() != revision:
         return "input_revision"
-    if str(audit.get("rule_source_fingerprint") or "").strip() != RULE_SOURCE_FINGERPRINT:
+    if str(audit.get("rule_source_fingerprint") or "").strip() != _mrt.RULE_SOURCE_FINGERPRINT:
         return "rule_source_fingerprint"
-    if not duration_band_matches(audit):
+    if not _mrt.duration_band_matches(audit):
         return "duration_band"
-    if str(audit.get("audit_scope") or "").strip() != STEP01_AUDIT_SCOPE:
+    if str(audit.get("audit_scope") or "").strip() != _mrt.STEP01_AUDIT_SCOPE:
         return "audit_scope"
     # v6.111：提示词/focus 版本也要一致（改提示词后旧结论不得复用）。
     from step01_script_gen.audit import audit_prompt_version as _apv
@@ -3317,9 +3095,9 @@ def _record_reuse_miss(key: str, audit: dict, *, src, revision: str = "") -> Non
                            "expected": str(revision or "")[:16]},
         "rule_source_fingerprint": {
             "audit": str(audit.get("rule_source_fingerprint") or ""),
-            "expected": str(RULE_SOURCE_FINGERPRINT)},
+            "expected": str(_mrt.RULE_SOURCE_FINGERPRINT)},
         "audit_scope": {"audit": str(audit.get("audit_scope") or ""),
-                        "expected": str(STEP01_AUDIT_SCOPE)},
+                        "expected": str(_mrt.STEP01_AUDIT_SCOPE)},
         "duration_band": {"audit": dict(audit.get("duration_band") or {})},
         "audit_prompt_version": {"audit": str(audit.get("audit_prompt_version") or ""),
                                  "expected": str(_apv())},
@@ -3333,14 +3111,14 @@ def _record_reuse_miss(key: str, audit: dict, *, src, revision: str = "") -> Non
     _LAST_REUSE_MISS.clear()
     _LAST_REUSE_MISS.update({
         "key": key,
-        "text": _REUSE_MISS_TEXT.get(key, key),
+        "text": _mrt._REUSE_MISS_TEXT.get(key, key),
         "source": str(src),
         "audit_revision": str(audit.get("input_revision") or "")[:16],
         "detail": dict({"field": key}, **(_vals.get(key) or {})),
     })
     try:
-        _logger.warn("[COMMIT] 旧审计不可复用：%s｜key=%s｜审计=%s"
-                     % (_REUSE_MISS_TEXT.get(key, key), key, str(src)))
+        _mrt._logger.warn("[COMMIT] 旧审计不可复用：%s｜key=%s｜审计=%s"
+                     % (_mrt._REUSE_MISS_TEXT.get(key, key), key, str(src)))
     except Exception:
         pass
 
@@ -3381,9 +3159,9 @@ def _reusable_final_audit(script: dict, *, expected_identity: "str | None" = Non
     if _ov:
         _audit_sources.append(Path(_ov))
     for name in ("step01_audit.json", "step01_audit.blocked.json"):
-        _audit_sources.append(CHAPTER_DIR / name)
+        _audit_sources.append(_mrt.CHAPTER_DIR / name)
     for _src in _audit_sources:
-        audit = _read_json_quiet(_src)
+        audit = _mrt._read_json_quiet(_src)
         if not audit:
             continue
         # M2.3：逐项判定并**命名**失配键（"哪一项不符"必须是数据，不是猜）。
@@ -3393,12 +3171,12 @@ def _reusable_final_audit(script: dict, *, expected_identity: "str | None" = Non
             expected_identity_without_focus=expected_identity_without_focus)
         if _miss:
             _record_reuse_miss(_miss, audit, src=_src, revision=revision)
-            _reject_reason = _reject_reason or _REUSE_MISS_TEXT.get(_miss, _miss)
+            _reject_reason = _reject_reason or _mrt._REUSE_MISS_TEXT.get(_miss, _miss)
             continue
         _LAST_REUSE_MISS.clear()
         return audit
     if _reject_reason:
-        _logger.warn("[COMMIT] 旧审计不可复用：%s" % _reject_reason)
+        _mrt._logger.warn("[COMMIT] 旧审计不可复用：%s" % _reject_reason)
     return None
 
 
@@ -3413,7 +3191,7 @@ def _clear_staged_dir() -> None:
     """
     import shutil as _shutil
     try:
-        _shutil.rmtree(CHAPTER_DIR / "_staged", ignore_errors=True)
+        _shutil.rmtree(_mrt.CHAPTER_DIR / "_staged", ignore_errors=True)
     except Exception:
         pass
 
@@ -3430,10 +3208,10 @@ def _write_blocked_audit_sidecar(audit: "dict | None") -> None:
         return
     try:
         from shared.json_io import atomic_dump_json
-        atomic_dump_json(CHAPTER_DIR / "step01_audit.blocked.json", audit,
+        atomic_dump_json(_mrt.CHAPTER_DIR / "step01_audit.blocked.json", audit,
                          ensure_ascii=False, indent=2)
     except Exception as exc:
-        _logger.warn(f"[COMMIT] BLOCK 审计 sidecar 写入失败（不影响结论）: {exc}")
+        _mrt._logger.warn(f"[COMMIT] BLOCK 审计 sidecar 写入失败（不影响结论）: {exc}")
 
 
 class FinalizeError(RuntimeError):
@@ -3460,15 +3238,15 @@ def _write_blocked_manifest(revision: str, *, run_id: str, detail: str,
                                      write_step01_commit_manifest)
     try:
         manifest = build_step01_commit_manifest(
-            run_id=run_id, created_at=_step01_now(), revision=revision,
-            rule_source_fingerprint=RULE_SOURCE_FINGERPRINT,
-            rule_version=RULE_VERSION, audit_scope=STEP01_AUDIT_SCOPE,
-            prompt_source_fingerprint=PROMPT_SOURCE_FINGERPRINT,
-            chapter_dir=CHAPTER_DIR, status="BLOCK",
+            run_id=run_id, created_at=_mrt._step01_now(), revision=revision,
+            rule_source_fingerprint=_mrt.RULE_SOURCE_FINGERPRINT,
+            rule_version=_mrt.RULE_VERSION, audit_scope=_mrt.STEP01_AUDIT_SCOPE,
+            prompt_source_fingerprint=_mrt.PROMPT_SOURCE_FINGERPRINT,
+            chapter_dir=_mrt.CHAPTER_DIR, status="BLOCK",
             blocking=blocking, detail=detail, audit_status=audit_status)
-        write_step01_commit_manifest(CHAPTER_DIR, manifest)
+        write_step01_commit_manifest(_mrt.CHAPTER_DIR, manifest)
     except Exception as exc:
-        _logger.warn(f"[COMMIT] BLOCK manifest 写入失败（不影响结论）: {exc}")
+        _mrt._logger.warn(f"[COMMIT] BLOCK manifest 写入失败（不影响结论）: {exc}")
 
 
 def _is_hook_enabled() -> bool:
@@ -3479,11 +3257,11 @@ def _is_hook_enabled() -> bool:
     对同一份输入的结果不同（M09 跨进程 revision 分叉）。提交点改为动态读取：
     env 存在时以 env 为准，缺失时回退 import 期常量。
     """
-    if HOOK_ENABLED != _HOOK_ENABLED_DEFAULT:
-        return bool(HOOK_ENABLED)
+    if _mrt.HOOK_ENABLED != _mrt._HOOK_ENABLED_DEFAULT:
+        return bool(_mrt.HOOK_ENABLED)
     raw = os.environ.get("HOOK_ENABLED")
     if raw is None:
-        return bool(HOOK_ENABLED)
+        return bool(_mrt.HOOK_ENABLED)
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
@@ -3493,15 +3271,15 @@ def _hook_max_sends() -> int:
     2026-11-15（P05 实测）：钩子初始 1 次 + 重复重试 2 次 = 3 次，全部走同一通道；
     固定输入验证需要把它收窄（如 1），否则审计/修复额度会被钩子挤占。
     """
-    if HOOK_MAX_SENDS != _HOOK_MAX_SENDS_DEFAULT:
-        return max(0, int(HOOK_MAX_SENDS))
+    if _mrt.HOOK_MAX_SENDS != _mrt._HOOK_MAX_SENDS_DEFAULT:
+        return max(0, int(_mrt.HOOK_MAX_SENDS))
     raw = os.environ.get("HOOK_MAX_SENDS")
     if raw is None:
-        return max(0, int(HOOK_MAX_SENDS))
+        return max(0, int(_mrt.HOOK_MAX_SENDS))
     try:
         return max(0, min(3, int(str(raw).strip())))
     except (TypeError, ValueError):
-        return max(0, int(HOOK_MAX_SENDS))
+        return max(0, int(_mrt.HOOK_MAX_SENDS))
 
 
 def _sync_missing_onscreen_layout_entries(script: dict) -> int:
@@ -3626,7 +3404,7 @@ def _sync_missing_onscreen_layout_entries(script: dict) -> int:
                 target.append(entry)
                 known[name] = entry
                 added += 1
-                _logger.info("[FINALIZE] 自动补齐漏登记的在场角色布局条目: shot=%s frame=%s name=%s"
+                _mrt._logger.info("[FINALIZE] 自动补齐漏登记的在场角色布局条目: shot=%s frame=%s name=%s"
                              % (shot.get("index"), fkey, name))
         for e in all_entries:
             if isinstance(e, dict):
@@ -3664,9 +3442,9 @@ def project_for_commit(script: dict, novel_text: str = "", *, label: str = "落�
     _added = (0 if (repair_effects is not None or not _autofill)
               else _sync_missing_onscreen_layout_entries(_s))
     if _added:
-        _logger.info("[FINALIZE] 布局自愈共补齐 %d 条在场角色条目" % _added)
+        _mrt._logger.info("[FINALIZE] 布局自愈共补齐 %d 条在场角色条目" % _added)
     _s = _strip_runtime_fields(_s)
-    ensure_script_revision(_s)
+    _mrt.ensure_script_revision(_s)
     return _s, []
 
 
@@ -3686,7 +3464,7 @@ def _create_adoption_receipt(revision: str, run_id: str) -> str:
     from pathlib import Path as _Path
     from tools import production_context as _pc
 
-    ch = _Path(CHAPTER_DIR)
+    ch = _Path(_mrt.CHAPTER_DIR)
     formal = {}
     for name in ("script_result.json", "step01_quality.json",
                  "step01_audit.json", "step01_commit.json"):
@@ -3703,7 +3481,7 @@ def _create_adoption_receipt(revision: str, run_id: str) -> str:
         "output_base_override": str(_Path(os.getenv("OUTPUT_BASE") or ch.parent.parent.parent)),
         "script_revision": revision,
         "source_run_id": run_id,
-        "adopted_at": _step01_now(),
+        "adopted_at": _mrt._step01_now(),
         "scope": {"novel": os.getenv("NOVEL_NAME", ""),
                   "book_index": int(os.getenv("BOOK_INDEX", "1") or 1),
                   "book_name": os.getenv("BOOK_NAME", ""),
@@ -3715,7 +3493,7 @@ def _create_adoption_receipt(revision: str, run_id: str) -> str:
                              "DURATION_TARGET_MAX_SEC": _band["target_max"]},
         "authorization": {"adopted_by": "step01_commit",
                           "run_id": run_id,
-                          "rule_version": RULE_VERSION},
+                          "rule_version": _mrt.RULE_VERSION},
         "previous_receipt": None,
     }
     try:
@@ -3745,21 +3523,21 @@ def _sync_adoption_receipt(revision: str, run_id: str) -> str:
     import hashlib as _hashlib
     from pathlib import Path as _Path
 
-    p = _Path(CHAPTER_DIR) / "step01_adoption.json"
+    p = _Path(_mrt.CHAPTER_DIR) / "step01_adoption.json"
     if not p.exists():
         return _create_adoption_receipt(revision, run_id)
     receipt = json.loads(p.read_text(encoding="utf-8"))
     formal = dict(receipt.get("formal_sha256") or {})
     for name in ("script_result.json", "step01_quality.json",
                  "step01_audit.json", "step01_commit.json"):
-        f = _Path(CHAPTER_DIR) / name
+        f = _Path(_mrt.CHAPTER_DIR) / name
         if not f.exists():
             raise RuntimeError("采纳凭据更新缺少正式产物: %s" % name)
         formal[name] = _hashlib.sha256(f.read_bytes()).hexdigest()
     receipt["formal_sha256"] = formal
     receipt["script_revision"] = revision
     receipt["source_run_id"] = run_id
-    receipt["adopted_at"] = _step01_now()
+    receipt["adopted_at"] = _mrt._step01_now()
     receipt["status"] = "adopted_and_verified"
     # 时长带必须跟着新产物走：凭据里的 effective_config 是 verify() 的核验输入，
     # 沿用旧带会让"新稿 + 旧配置"通过不了导入顺序检查（也会误导下游）。
@@ -3817,23 +3595,23 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # 调用方必须使用返回值（三条入口本来就只看返回值）。
     script = copy.deepcopy(script)
 
-    run_id = _step01_run_id()
+    run_id = _mrt._step01_run_id()
     summary: dict = {"status": "BLOCK", "run_id": run_id, "audit_repair_rounds": 0,
                      # v6.133：修复轮结论（improved / no_progress / call_failed /
                      # patch_unusable / oversized_group）——"零改善"不再吞掉
                      # "修复调用失败"与"响应不可用"这两类
                      "repair_outcome": "",
                      "blocking": [], "reused_audit": False, "detail": ""}
-    _metrics_inc("commit.attempts")
+    _mrt._metrics_inc("commit.attempts")
 
     # M2.3 / CP2（2026-11-16）：**候选已生成并 finalize**——阶段边界即落盘。
     # 之后任何阶段被预算/网络/上限拦下，都不必重新生成正文。
     from shared import step01_checkpoint as _ckpt
     try:
         summary["checkpoint_cp2"] = _ckpt.write(
-            CHAPTER_DIR, _ckpt.CP2_CANDIDATE_GENERATED, script=script,
+            _mrt.CHAPTER_DIR, _ckpt.CP2_CANDIDATE_GENERATED, script=script,
             extra={"run_id": run_id, "label": label,
-                   "source_revision": source_revision}, log=_logger)
+                   "source_revision": source_revision}, log=_mrt._logger)
     except Exception as _degrade_exc:  # noqa: BLE001
         from shared.degrade import note_degraded as _note_degraded
         _note_degraded("step01_script_gen/main.py:_commit_step01_outputs", _degrade_exc)
@@ -3858,7 +3636,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _entry_aliases = _revision_aliases_or_empty(script)
         _entry_revision = str(_entry_aliases.get(SCRIPT_REVISION_VERSION) or "")
     except Exception as _e:
-        _logger.warn(f"[COMMIT] 进入提交点的 revision 计算失败（欠账台账少记一条）: {_e}")
+        _mrt._logger.warn(f"[COMMIT] 进入提交点的 revision 计算失败（欠账台账少记一条）: {_e}")
     summary["entry_revision"] = _entry_revision
 
     # M1.2：局部修订的增量审计作用域。仅在有已 COMMITTED 基线、且确有改动镜
@@ -3870,11 +3648,11 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _changed = _changed_shot_ids(script, _baseline_script)
             if 0 < len(_changed) < len(_baseline_script.get("shots") or []):
                 _active_audit_scope = _changed
-                _logger.info(
+                _mrt._logger.info(
                     "[COMMIT] 增量审计作用域：changed_shot_ids=%s（其余镜头仅确定性质量门全量生效）"
                     % ",".join(sorted(_active_audit_scope)))
     except Exception as _scope_err:
-        _logger.warn("[COMMIT] 增量审计作用域计算失败，回退全量审计: %s" % _scope_err)
+        _mrt._logger.warn("[COMMIT] 增量审计作用域计算失败，回退全量审计: %s" % _scope_err)
 
     # 统一收口：缓存稿和 BEST-GUARD 历史快照可能仍含旧钩子——归一在
     # `project_for_commit` 里做（唯一实现）；这里只保证禁用时不跑钩子质量门。
@@ -3884,7 +3662,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         try:
             _ensure_hook_quality(script, novel_text=novel_text, **hook_ctx)
         except Exception as exc:
-            _logger.warn(f"[COMMIT] 钩子质量门异常（继续提交，问题会在审计里暴露）: {exc}")
+            _mrt._logger.warn(f"[COMMIT] 钩子质量门异常（继续提交，问题会在审计里暴露）: {exc}")
 
     # §14 P3：**已通过验收的布局效果**跨 attempt 累积，供下面 `_finalize` 那一趟
     # `is_final_pass=True` 的 hard-fix 复用——「本轮已授权删除的条目不得按类别别名
@@ -3905,7 +3683,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                     effects=tuple(_effect_state["effects"]),
                     bindings=dict(_effect_state.get("bindings") or {}))
             except Exception as _eff_view_err:
-                _logger.warn(f"[COMMIT] 布局效果视图构建失败（finalize 按无效果处理）:"
+                _mrt._logger.warn(f"[COMMIT] 布局效果视图构建失败（finalize 按无效果处理）:"
                              f" {_eff_view_err}")
                 _view = None
         # 投影算法只此一份（离线交付工具调同一个函数）：复制、hook 归一、finalize、
@@ -3929,7 +3707,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         _clear_staged_dir()
         _write_blocked_manifest(_entry_revision, run_id=run_id, detail=str(exc),
                                 blocking=summary["blocking"])
-        _console(f"  [COMMIT] finalize 未通过：{str(exc)[:160]}")
+        _mrt._console(f"  [COMMIT] finalize 未通过：{str(exc)[:160]}")
         return script, summary
 
     audit = None
@@ -3962,7 +3740,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             # 不放行（缓存路径只靠本门复核，放行 = 门失效时裸奔进审计/提交）。
             _dlg_ok = False
             _dlg_broken = [{"line": "", "reason": "gate_error: %s" % _e}]
-            _logger.error(f"[COMMIT] 台词完整性门异常，fail-closed BLOCK：{_e}")
+            _mrt._logger.error(f"[COMMIT] 台词完整性门异常，fail-closed BLOCK：{_e}")
     if not _dlg_ok:
         _dlg_total = len(_dlg_plan_lines)
         _gate_error = bool(_dlg_broken) and str(
@@ -3981,8 +3759,8 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             % (len(_dlg_broken), _dlg_total,
                "；".join("%s（%s）" % (b.get("line", "")[:30], b.get("reason"))
                          for b in _dlg_broken[:3])))
-        _logger.error(f"[COMMIT] x {summary['detail']}")
-        _console(f"  [COMMIT] 台词完整性硬门 BLOCK（{len(_dlg_broken)}/{_dlg_total} 句破损）")
+        _mrt._logger.error(f"[COMMIT] x {summary['detail']}")
+        _mrt._console(f"  [COMMIT] 台词完整性硬门 BLOCK（{len(_dlg_broken)}/{_dlg_total} 句破损）")
         blocking = [{"code": summary["repair_outcome"], "severity": "blocking",
                      "message": summary["detail"]}]
         _contracts_ok = False
@@ -4002,7 +3780,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         except Exception as _e:
             _ct_ok = False
             _ct_viol = [{"code": "gate_error", "shot": "", "detail": str(_e)}]
-            _logger.error(f"[COMMIT] 事件履约契约门异常，fail-closed BLOCK：{_e}")
+            _mrt._logger.error(f"[COMMIT] 事件履约契约门异常，fail-closed BLOCK：{_e}")
         if not _ct_ok:
             summary["repair_outcome"] = "event_contract_broken"
             summary["detail"] = (
@@ -4010,8 +3788,8 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 + "；".join("%s@%s %s" % (v.get("code"), v.get("shot") or "-",
                                           str(v.get("detail"))[:60])
                             for v in _ct_viol[:3]))
-            _logger.error(f"[COMMIT] x {summary['detail']}")
-            _console("  [COMMIT] 事件履约契约 BLOCK（节拍/台词/镜头关系断开）")
+            _mrt._logger.error(f"[COMMIT] x {summary['detail']}")
+            _mrt._console("  [COMMIT] 事件履约契约 BLOCK（节拍/台词/镜头关系断开）")
             blocking = [{"code": "event_contract_broken", "severity": "blocking",
                          "message": summary["detail"]}]
             _contracts_ok = False
@@ -4078,7 +3856,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     _pre_audit_heal_used = False
     for _attempt in range(0 if _dlg_skip_audit else STEP01_AUDIT_REPAIR_MAX_ROUNDS + 1):
         quality = _build_step01_quality_gate(script, novel_text)
-        _timing_mark("commit_quality", status=quality.get("status"))
+        _mrt._timing_mark("commit_quality", status=quality.get("status"))
         _q_blocking = _quality_blocking_records(quality)
         _audit_focus_now = _final_audit_focus(script, quality)
         _audit_identity = _final_audit_identity(
@@ -4100,7 +3878,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _audit_reused = audit is not None
             if _audit_reused:
                 _reuse_source = "disk"
-                _logger.info(
+                _mrt._logger.info(
                     "[COMMIT] 复用已有 final audit（revision + 规则指纹 + scope 全同且为 ok）"
                 )
             else:
@@ -4121,12 +3899,12 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                                            .get("repairs") or []),
                         }
                         summary["pre_audit_healed"] = _healed_meta
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[COMMIT] 送审前确定性局部自愈已消费到本轮内存稿"
                             "（不写正式产物）：hard %d→0，repairs=%d；重算身份后送审"
                             % (_healed_meta["hard_before"], _healed_meta["repairs"]))
                         quality = _build_step01_quality_gate(script, novel_text)
-                        _timing_mark("commit_quality", status=quality.get("status"))
+                        _mrt._timing_mark("commit_quality", status=quality.get("status"))
                         _q_blocking = _quality_blocking_records(quality)
                         _audit_focus_now = _final_audit_focus(script, quality)
                         _audit_identity = _final_audit_identity(
@@ -4153,14 +3931,14 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                                       "（拒绝循环，保持 blocked）"),
                             "pre_audit_status": "unresolved",
                         }
-                _timing_mark("commit_audit", status=audit.get("status"))
+                _mrt._timing_mark("commit_audit", status=audit.get("status"))
                 # 只把**真的跑出结论**、且身份可复核的审计放进 memo。
                 _memo = _memoizable_final_audit(audit)
                 if _memo is not None:
                     _audit_memo[_audit_identity] = _memo
         if _reuse_source == "in_loop":
             summary["reused_audit"] = True
-            _logger.info(
+            _mrt._logger.info(
                 "[COMMIT] 复用**本轮已完成**的 final audit（稿件与请求逐字未变，不再调用）："
                 "身份 %s" % _audit_identity[:16]
             )
@@ -4176,7 +3954,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             summary["detail"] = (
                 "final semantic audit %s: %s" % (audit.get("status"), audit.get("error"))
             )
-            _logger.warn(f"[COMMIT] x {summary['detail']}（调用失败 != 0 issue，直接 BLOCK）")
+            _mrt._logger.warn(f"[COMMIT] x {summary['detail']}（调用失败 != 0 issue，直接 BLOCK）")
             break
         audit_ok = True
         # M2.3 / CP3（2026-11-16）：**首轮审计完成**——阶段边界即落盘（含复用轮）。
@@ -4185,9 +3963,9 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             from shared import step01_checkpoint as _ckpt
             try:
                 summary["checkpoint_cp3"] = _ckpt.write(
-                    CHAPTER_DIR, _ckpt.CP3_INITIAL_AUDIT_DONE, script=script,
+                    _mrt.CHAPTER_DIR, _ckpt.CP3_INITIAL_AUDIT_DONE, script=script,
                     audit=audit, extra={"run_id": run_id, "round": 1,
-                                        "reused": bool(_audit_reused)}, log=_logger)
+                                        "reused": bool(_audit_reused)}, log=_mrt._logger)
             except Exception as _degrade_exc:  # noqa: BLE001
                 from shared.degrade import note_degraded as _note_degraded
                 _note_degraded("step01_script_gen/main.py:_commit_step01_outputs", _degrade_exc)
@@ -4199,15 +3977,15 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _delta_downgraded = _downgrade_out_of_delta_audit_issues(
                 audit, _active_audit_scope, contracts_ok=True)
             if _downgraded:
-                _logger.warn(
+                _mrt._logger.warn(
                     "[COMMIT] 本轮 %d 条审计项仅指向已过契约门的锁定字段，已降级为 warning"
                     % _downgraded)
             if _stage_downgraded:
-                _logger.warn(
+                _mrt._logger.warn(
                     "[COMMIT] 本轮 %d 条审计项把合法 stage 枚举误判为非法，已降级为 warning"
                     % _stage_downgraded)
             if _delta_downgraded:
-                _logger.warn(
+                _mrt._logger.warn(
                     "[COMMIT] 本轮 %d 条审计项落在未改动镜头（增量作用域），已降级为 warning"
                     % _delta_downgraded)
         blocking = _audit_blocking_records(audit) + _q_blocking
@@ -4235,7 +4013,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         if _prev_audit_issues:
             _now_ids_g1 = {
                 _audit_issue_identity(_i)
-                for _i in _audit_payload_to_issues(audit) if is_blocking(_i)}
+                for _i in _audit_payload_to_issues(audit) if _mrt.is_blocking(_i)}
             _now_det_families = {_record_family_identity(_r) for _r in _q_blocking
                                  if isinstance(_r, dict)}
             _now_det_checked = not bool(quality.get("checker_failed"))
@@ -4264,11 +4042,11 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                     "（证据仍在稿中或不可判，且无确定性复核通过；"
                     "blocking 必须有依据关闭）"
                     % len(_g1_unclosed))
-                _logger.warn("[COMMIT] x %s" % summary["detail"])
+                _mrt._logger.warn("[COMMIT] x %s" % summary["detail"])
                 break
         if not blocking:
             break
-        _logger.warn(
+        _mrt._logger.warn(
             "[COMMIT] 第 %d 轮发现 %d 条 blocking（审计 %d + 确定性质量门 %d）：%s"
             % (_attempt + 1, len(blocking), len(_audit_blocking_records(audit)),
                len(_q_blocking),
@@ -4283,19 +4061,19 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             summary["detail"] = (
                 "STEP01_AUDIT_ONLY=1：保留 %d 条 blocking，未进入修复轮（不再发调用/审计）"
                 % len(blocking))
-            _logger.warn(f"[COMMIT] {summary['detail']}")
+            _mrt._logger.warn(f"[COMMIT] {summary['detail']}")
             break
         # v6.139（修复 2）：审计问题**跨轮身份比对**——按 (shot, family) 归并措辞
         # 漂移（同一问题四轮四名是实测常态），跨轮追踪「具体哪些事件矛盾还在」，
         # 不以审计条数判断收敛。
         _audit_issue_recs = _audit_payload_to_issues(audit)
         _now_ids = {_audit_issue_identity(i) for i in _audit_issue_recs
-                    if is_blocking(i)}
+                    if _mrt.is_blocking(i)}
         if _prev_audit_ids:
             _still = _now_ids & _prev_audit_ids
             _gone = _prev_audit_ids - _now_ids
             _fresh = _now_ids - _prev_audit_ids
-            _logger.warn(
+            _mrt._logger.warn(
                 "[COMMIT] 审计身份比对（(镜头,族) 归并措辞漂移）：仍在 %s｜消失 %s｜"
                 "新现 %s%s"
                 % (sorted(_still) or "无", sorted(_gone) or "无", sorted(_fresh) or "无",
@@ -4326,13 +4104,13 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # M04：提交层的每一轮修复同样要能容纳「本轮动作 + 最终审计 + 收尾」。
         # 不足即冻结候选并给 `budget_exhausted` 明确终局，不把「时间不够」
         # 写成「内容不可行」，也不借用上一轮审计结论。
-        _adm_commit = _action_budget_admission(
-            "commit_repair_round", _action_cost_sec("repair"))
-        if _budget_exceeded_with_pause("commit_repair_round") or not _adm_commit.get("allowed"):
+        _adm_commit = _mrt._action_budget_admission(
+            "commit_repair_round", _mrt._action_cost_sec("repair"))
+        if _mrt._budget_exceeded_with_pause("commit_repair_round") or not _adm_commit.get("allowed"):
             _freeze_commit = _freeze_budget_exhausted(
                 script, action="commit_repair_round",
                 admission=_adm_commit, run_id=run_id)
-            _metrics_set("budget.frozen_candidate", _freeze_commit)
+            _mrt._metrics_set("budget.frozen_candidate", _freeze_commit)
             summary["repair_outcome"] = "budget_exhausted"
             summary["detail"] = (
                 "预算不足：剩余 %.1fs < 本轮修复 %.1fs + 最终审计 %.1fs + 收尾 %.1fs；"
@@ -4342,7 +4120,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                    float(_adm_commit.get("audit_cap_sec") or 0),
                    float(_adm_commit.get("commit_reserve_sec") or 0),
                    _freeze_commit.get("output_root") or "隔离根"))
-            _logger.warn(f"[COMMIT] {summary['detail']}")
+            _mrt._logger.warn(f"[COMMIT] {summary['detail']}")
             break
         # v6.119（用户口径）：进修复轮**之前**先查成对目标契约——不可执行就显式
         # BLOCK，不再花两个审计轮去博一次「也许能顺带修好」（那纯属烧审计额度）。
@@ -4357,7 +4135,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         from step01_script_gen.repair_fields import shot_id_aliases
         _sid_aliases = shot_id_aliases((audit or {}).get("issues") or [])
         if _sid_aliases:
-            _logger.warn("[COMMIT] 审计镜头号记法已归一（%d 处，指向不变）：%s"
+            _mrt._logger.warn("[COMMIT] 审计镜头号记法已归一（%d 处，指向不变）：%s"
                          % (len(_sid_aliases), _sid_aliases[:8]))
         _rt_problems = _audit_repair_target_problems(audit, _shots_by_id_rt)
         if _rt_problems:
@@ -4368,7 +4146,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             # 坏目标连坐。新口径：有问题的条目**保留 blocking**（下一轮审计照常
             # 重报），本轮不授权它；其余合法目标照常进修复轮。改不动 / 全是坏目标
             # 的终局，由既有「提交前修复轮零改善即停」判据给出（失败照常显式）。
-            _logger.warn(
+            _mrt._logger.warn(
                 "[COMMIT] %d 条审计条目缺少可执行的定向修复目标"
                 "（保留 blocking；本轮不授权该条，本轮其余目标继续修）：%s"
                 % (len(_rt_problems), _rt_problems[:3]))
@@ -4397,7 +4175,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                    _paired.get("remaining_attempts_repair"),
                    _paired.get("remaining_attempts_audit"),
                    _paired.get("remaining_attempts_total")))
-            _logger.warn("[COMMIT] " + summary["detail"])
+            _mrt._logger.warn("[COMMIT] " + summary["detail"])
             break
         repaired = _repair_shot_warnings(
             script, novel_text,
@@ -4428,7 +4206,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             summary["detail"] = (
                 "联动修复目标超出单轮可修上限（%d 条）：%s"
                 % (len(_repair_block_reasons), _repair_block_reasons[:2]))
-            _logger.error(f"[COMMIT] {summary['detail']}")
+            _mrt._logger.error(f"[COMMIT] {summary['detail']}")
             break
         summary["audit_repair_rounds"] += 1
         # 零改善：修复轮被拒或没动一个字 → 再发一轮只会重复同一批目标。
@@ -4459,7 +4237,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                       or _legacy_pending)
             if (_grant and not _retry_state.get("terminal")
                     and _attempt + 1 < STEP01_AUDIT_REPAIR_MAX_ROUNDS):
-                _logger.warn(
+                _mrt._logger.warn(
                     "[COMMIT] 修复轮带结构化反馈重试待跑"
                     "（codes=%s，剔除 %s，revision=%s）→ 下一轮继续"
                     % ([r.get("code") for r in
@@ -4479,7 +4257,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 summary["detail"] = ("修复调用失败/响应不完整（未得到完整结果，"
                                      "不是「修复无进展」）：%s"
                                      % str(_call_failed[-1].get("error") or "调用失败")[:200])
-                _logger.error(f"[COMMIT] {summary['detail']}")
+                _mrt._logger.error(f"[COMMIT] {summary['detail']}")
             elif _unusable:
                 _u_last = _unusable[-1]
                 summary["repair_outcome"] = "patch_unusable"
@@ -4488,7 +4266,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                     "%s%s" % (_u_last.get("reason") or "unknown",
                               ("｜%s" % _u_last.get("detail"))
                               if _u_last.get("detail") else ""))
-                _logger.error(f"[COMMIT] {summary['detail']}")
+                _mrt._logger.error(f"[COMMIT] {summary['detail']}")
             else:
                 # `no_progress` 只表示**稿件没有改动**（且台账里没有调用失败/不可用补丁
                 # 记录）；能取到上一轮事务时把它的结论一并写出，便于分辨"改完被回滚"
@@ -4516,7 +4294,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 if (_grp_members and _outside_exists
                         and _attempt + 1 < STEP01_AUDIT_REPAIR_MAX_ROUNDS):
                     _deferred_targets |= _grp_members
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[COMMIT] 联动组 %s 本轮零解决（reason=%s）→ 整组暂缓"
                         "（本 run 后续轮次不再选它）；组外目标（如 %s）继续用剩余"
                         "预算修复；组的 blocking 保留、仍会照常 BLOCK"
@@ -4535,7 +4313,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                 else:
                     summary["detail"] = ("提交前修复轮零改善（稿件未变；台账中无调用失败/"
                                          "不可用补丁记录），停止修复")
-                _logger.warn(f"[COMMIT] {summary['detail']}")
+                _mrt._logger.warn(f"[COMMIT] {summary['detail']}")
             script = repaired
             break
         try:
@@ -4555,8 +4333,8 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             summary["detail"] = (
                 "修复稿破坏事件履约契约（%s）→ **不采纳**，保留基线；"
                 "基线自身的 blocking 仍在（见 blocking 清单）" % _ct_why)
-            _logger.error(f"[COMMIT] x {summary['detail']}")
-            _console("  [COMMIT] 修复稿破坏事件履约契约 → 不采纳（保留基线）")
+            _mrt._logger.error(f"[COMMIT] x {summary['detail']}")
+            _mrt._console("  [COMMIT] 修复稿破坏事件履约契约 → 不采纳（保留基线）")
             break
         summary["repair_outcome"] = "improved"
         # M2.2（2026-11-16）：**先落盘再复审**——采纳即快照。修复已经花钱且通过
@@ -4572,8 +4350,8 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             summary["detail"] = (
                 "修复稿已采纳但**落盘失败**（%s）→ 停止后续调用：继续复审只会产出一份"
                 "无法恢复的结论。请检查磁盘/权限后重跑" % _why)
-            _logger.error("[COMMIT] x " + summary["detail"])
-            _console("  [COMMIT] 修复稿落盘失败 → 停止（不发起修后复审）")
+            _mrt._logger.error("[COMMIT] x " + summary["detail"])
+            _mrt._console("  [COMMIT] 修复稿落盘失败 → 停止（不发起修后复审）")
             break
         script = _cand
 
@@ -4586,7 +4364,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             "final audit 之后 revision 发生变化（audit=%s current=%s）——审计作废"
             % (audit_rev[:12], revision[:12])
         )
-        _logger.warn(f"[COMMIT] x {summary['detail']}")
+        _mrt._logger.warn(f"[COMMIT] x {summary['detail']}")
         blocking = blocking or [{"code": "revision_changed_after_audit",
                                  "severity": "blocking", "message": summary["detail"]}]
 
@@ -4620,9 +4398,9 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             summary["last_known_blocking_note"] = (
                 "审计调用失败（%s）——上述清单来自**上一次成功审计那一轮**，"
                 "仅作诊断，不是本次结论" % _audit_status)
-        _metrics_inc("commit.blocked")
+        _mrt._metrics_inc("commit.blocked")
         if _audit_call_failed:
-            _logger.warn(
+            _mrt._logger.warn(
                 "[COMMIT] 审计调用失败（%s）——本次**不登记欠账台账**："
                 "「没有可用审计结论」不是稿件的语义欠账，登记会污染选稿台账；"
                 "陈旧清单已降级为诊断字段 last_known_blocking（%d 条）"
@@ -4636,7 +4414,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             if _entry_revision and _entry_revision != revision:
                 _record_blocked_revision(_entry_revision, issues=_debt_issues,
                                          versions=_entry_aliases)
-                _logger.warn(
+                _mrt._logger.warn(
                     "[COMMIT] 欠账台账同时登记进入提交点的原稿 revision %s"
                     "（修后 %s）——否则该历史稿会因漏记而在后续选稿中再次入选"
                     % (_entry_revision[:12], revision[:12]))
@@ -4646,7 +4424,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             if source_revision and source_revision not in (revision, _entry_revision):
                 _record_blocked_revision(source_revision, issues=_debt_issues,
                                          versions=dict(source_aliases or {}))
-                _logger.warn(
+                _mrt._logger.warn(
                     "[COMMIT] 欠账台账登记**被选中的历史快照自身** revision %s"
                     "（提交入口 %s / 修后 %s）——BEST-GUARD 用快照自身 revision 判欠账"
                     % (source_revision[:12], (_entry_revision or "")[:12], revision[:12]))
@@ -4659,34 +4437,34 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             _snapshot_run_artifacts(script, audit=audit, novel_text=novel_text)  # 诊断证据 + 不可变配对
         except Exception:
             pass
-        _console(f"  [COMMIT] x BLOCK：{summary['detail']}")
-        _console("  [COMMIT] 三份正式产物未替换（step01_commit.json 标记为 BLOCK）")
+        _mrt._console(f"  [COMMIT] x BLOCK：{summary['detail']}")
+        _mrt._console("  [COMMIT] 三份正式产物未替换（step01_commit.json 标记为 BLOCK）")
         return script, summary
 
     # ---- staged 三件套 + 真自验 ----
-    stage_dir = CHAPTER_DIR / "_staged"
+    stage_dir = _mrt.CHAPTER_DIR / "_staged"
     try:
         stage_dir.mkdir(parents=True, exist_ok=True)
         from shared.json_io import atomic_dump_json
         staged = {}
         for _name, _payload in (("step01_audit.json", audit),
                                 ("step01_quality.json", quality),
-                                (OUTPUT_FILE.name, _strip_runtime_fields(script))):
+                                (_mrt.OUTPUT_FILE.name, _strip_runtime_fields(script))):
             _path = stage_dir / _name
             atomic_dump_json(_path, _payload, ensure_ascii=False, indent=2)
             staged[_name] = _path
         # 用**真实** gate 函数读 staged 文件——不是 mock，也不是自己重写一遍判据。
-        staged_script = json.loads(staged[OUTPUT_FILE.name].read_text(encoding="utf-8"))
+        staged_script = json.loads(staged[_mrt.OUTPUT_FILE.name].read_text(encoding="utf-8"))
         require_semantic_gate(
             staged["step01_quality.json"], staged["step01_audit.json"],
             staged_script, stage="step01")
     except Exception as exc:
         summary["detail"] = f"staged 自验失败：{exc}"
-        _metrics_inc("commit.blocked")
+        _mrt._metrics_inc("commit.blocked")
         _write_blocked_manifest(revision, run_id=run_id,
                                detail=summary["detail"], blocking=blocking)
         _clear_staged_dir()
-        _console(f"  [COMMIT] x {summary['detail']}")
+        _mrt._console(f"  [COMMIT] x {summary['detail']}")
         return script, summary
 
     # ---- 发布事务（S06）：一次事务覆盖**全部**发布步骤 ----
@@ -4694,35 +4472,35 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # 新 audit + 旧 script 的身份不一致组合。这里先备份、再写、验完再 commit；
     # **manifest 构造与写入也在事务内**——它抛错同样要回滚，不能留下半套发布。
     from shared.publish_txn import PublishTransaction
-    _txn = PublishTransaction(CHAPTER_DIR, label="step01:%s" % run_id)
+    _txn = PublishTransaction(_mrt.CHAPTER_DIR, label="step01:%s" % run_id)
     manifest = None
     try:
         _txn.begin()
         from shared.json_io import atomic_dump_json
-        atomic_dump_json(CHAPTER_DIR / "step01_audit.json", audit,
+        atomic_dump_json(_mrt.CHAPTER_DIR / "step01_audit.json", audit,
                          ensure_ascii=False, indent=2)
-        atomic_dump_json(CHAPTER_DIR / "step01_quality.json", quality,
+        atomic_dump_json(_mrt.CHAPTER_DIR / "step01_quality.json", quality,
                          ensure_ascii=False, indent=2)
-        atomic_dump_json(OUTPUT_FILE, _strip_runtime_fields(script),
+        atomic_dump_json(_mrt.OUTPUT_FILE, _strip_runtime_fields(script),
                          ensure_ascii=False, indent=2)
         # commit manifest 是「提交完成」的唯一标志
         manifest = build_step01_commit_manifest(
-            run_id=run_id, created_at=_step01_now(), revision=revision,
-            rule_source_fingerprint=RULE_SOURCE_FINGERPRINT,
-            rule_version=RULE_VERSION, audit_scope=STEP01_AUDIT_SCOPE,
-            prompt_source_fingerprint=PROMPT_SOURCE_FINGERPRINT,
-            chapter_dir=CHAPTER_DIR, status="COMMITTED",
+            run_id=run_id, created_at=_mrt._step01_now(), revision=revision,
+            rule_source_fingerprint=_mrt.RULE_SOURCE_FINGERPRINT,
+            rule_version=_mrt.RULE_VERSION, audit_scope=_mrt.STEP01_AUDIT_SCOPE,
+            prompt_source_fingerprint=_mrt.PROMPT_SOURCE_FINGERPRINT,
+            chapter_dir=_mrt.CHAPTER_DIR, status="COMMITTED",
             # S05：COMMITTED 也记审计实际状态——空字符串只表示「没有可用审计」，
             # 不能和「审计跑成功」混为一谈。
             audit_status=str(summary.get("audit_status") or ""))
-        write_step01_commit_manifest(CHAPTER_DIR, manifest)
+        write_step01_commit_manifest(_mrt.CHAPTER_DIR, manifest)
         # 正式路径再自验一次（含 manifest）
-        committed_script = json.loads(OUTPUT_FILE.read_text(encoding="utf-8"))
-        require_semantic_gate(CHAPTER_DIR / "step01_quality.json",
-                              CHAPTER_DIR / "step01_audit.json", committed_script,
+        committed_script = json.loads(_mrt.OUTPUT_FILE.read_text(encoding="utf-8"))
+        require_semantic_gate(_mrt.CHAPTER_DIR / "step01_quality.json",
+                              _mrt.CHAPTER_DIR / "step01_audit.json", committed_script,
                               stage="step01")
-        verify_step01_commit_manifest(CHAPTER_DIR, committed_script, stage="step01",
-                                      expected_chapter=NOVEL_CHAPTER)
+        verify_step01_commit_manifest(_mrt.CHAPTER_DIR, committed_script, stage="step01",
+                                      expected_chapter=_mrt.NOVEL_CHAPTER)
         # 凭据与新产物同事务：写失败同样回滚，避免"产物新、凭据旧"
         summary["adoption"] = _sync_adoption_receipt(revision, run_id)
     except Exception as exc:
@@ -4734,11 +4512,11 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         # 保持阶段语义：替换阶段失败 vs 提交后自验失败，调用方/测试都按它判读。
         _stage = "提交后自验失败" if manifest is not None else "正式产物替换失败"
         summary["detail"] = f"{_stage}：{exc}（{_rb}）"
-        _metrics_inc("commit.blocked")
+        _mrt._metrics_inc("commit.blocked")
         _write_blocked_manifest(revision, run_id=run_id,
                                detail=summary["detail"], blocking=[])
         _clear_staged_dir()
-        _console(f"  [COMMIT] x {summary['detail']}")
+        _mrt._console(f"  [COMMIT] x {summary['detail']}")
         return script, summary
 
     _txn.commit()
@@ -4749,14 +4527,14 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # 避免「落盘的报告」与「打印的报告」是两个对象（那正是漂移的老形态）。
     summary["quality"] = quality
     summary["audit"] = audit
-    _metrics_inc("commit.committed")
-    _metrics_update("commit.last", {
+    _mrt._metrics_inc("commit.committed")
+    _mrt._metrics_update("commit.last", {
         "status": "COMMITTED", "revision": revision,
         "audit_repair_rounds": summary["audit_repair_rounds"],
         "reused_audit": summary["reused_audit"],
         "blocking": 0, "run_id": run_id,
     })
-    _logger.info(
+    _mrt._logger.info(
         f"[COMMIT] OK 三份产物已提交（revision={revision[:12]}，"
         f"审计修复轮 {summary['audit_repair_rounds']}，"
         f"复用审计 {'是' if summary['reused_audit'] else '否'}）"
@@ -4765,7 +4543,7 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
 
 
 def _prepare_hook_for_qc(script: dict) -> None:
-    _metrics_inc("hook.prepare")
+    _mrt._metrics_inc("hook.prepare")
     """Deterministically normalize a hook before the quality gate.
 
     Hook generation happens after the main hard-fix pass.  Without this, a hook
@@ -4811,7 +4589,7 @@ def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
     try:
         _prepare_hook_for_qc(script)
     except Exception as _prep_err:
-        _logger.warn(f"[WARN] 钩子质量门前结构补齐失败（继续检查）: {_prep_err}")
+        _mrt._logger.warn(f"[WARN] 钩子质量门前结构补齐失败（继续检查）: {_prep_err}")
     # v6.84（二次审核发现 5）：**先把钩子的时长/时间轴派生出来，再收集 issue**。
     #
     # 原顺序是「收集 issue → …」，而钩子质量门跑在 `_compute_timecodes` **之前**
@@ -4824,26 +4602,26 @@ def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
         from step01_script_gen.timecode import sync_hook_timeline
         sync_hook_timeline(script)
     except Exception as _sync_err:
-        _logger.warn(f"[WARN] 钩子质量门时长派生失败（继续检查）: {_sync_err}")
+        _mrt._logger.warn(f"[WARN] 钩子质量门时长派生失败（继续检查）: {_sync_err}")
     issues = _collect_hook_issues(script)
-    _metrics_set("hook.initial_issues", len(issues))
+    _mrt._metrics_set("hook.initial_issues", len(issues))
     if not issues:
-        _metrics_set("hook.final_issues", 0)
+        _mrt._metrics_set("hook.final_issues", 0)
         return []
-    _logger.warn(
+    _mrt._logger.warn(
         f"[HOOK-QC] 钩子检出 {len(issues)} 条 issue，互补模型重生："
         + " | ".join(issues[:3]))
-    _console(f"  [钩子校验] 检出 {len(issues)} 条 issue → 互补模型重生钩子…")
-    _metrics_inc("hook.regenerations")
+    _mrt._console(f"  [钩子校验] 检出 {len(issues)} 条 issue → 互补模型重生钩子…")
+    _mrt._metrics_inc("hook.regenerations")
     _hook_regen = gen_hook_script(
         novel_text, bank=bank, objects_bank=objects_bank,
         forbidden_lines=forbidden_lines,
         model=_complementary_repair_model(producer_model),
     )
     if not _hook_regen:
-        _logger.warn("[HOOK-QC] ⚠️ 钩子重生失败，带 issue 落盘（人工过目）：\n  - "
+        _mrt._logger.warn("[HOOK-QC] ⚠️ 钩子重生失败，带 issue 落盘（人工过目）：\n  - "
                      + "\n  - ".join(issues))
-        _console("  [钩子校验] ⚠️ 重生失败，钩子带 issue 落盘")
+        _mrt._console("  [钩子校验] ⚠️ 重生失败，钩子带 issue 落盘")
         return issues
     script["hook"] = _hook_regen
     try:
@@ -4851,7 +4629,7 @@ def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
         _prepare_hook_for_qc(script)
         validate_hook(script["hook"], script.get("characters", []))
     except Exception as _e:
-        _logger.warn(f"[WARN] 重生钩子修复/校验异常（不阻断）: {_e}")
+        _mrt._logger.warn(f"[WARN] 重生钩子修复/校验异常（不阻断）: {_e}")
     from step01_script_gen.timecode import sync_hook_timeline as _sync_hk
     try:
         _sync_hk(script)
@@ -4859,29 +4637,23 @@ def _ensure_hook_quality(script: dict, *, novel_text: str, bank=None,
         from shared.degrade import note_degraded as _note_degraded
         _note_degraded("step01_script_gen/main.py:_ensure_hook_quality", _degrade_exc)
     remaining = _collect_hook_issues(script)
-    _metrics_set("hook.final_issues", len(remaining))
+    _mrt._metrics_set("hook.final_issues", len(remaining))
     # v6.84（09-21 重跑发现）：钩子时长可能在门内被改（`sync_hook_timeline` 按
     # motion/台词重算，或换成了重生版钩子）。**必须重建时间轴**，否则 hook 的
     # `duration_sec` 与 `timeline[0].end` 不一致 → `timeline_consistency` BLOCK
     # （实测：timeline 写的是 4.0s，钩子被重算成 3.5s，total 78.14 vs sum 74.14）。
     try:
-        write_timeline_from_durations(script)
+        _mrt.write_timeline_from_durations(script)
     except Exception as _tl_e:
-        _logger.warn(f"[WARN] 钩子质量门后重建时间轴失败: {_tl_e}")
+        _mrt._logger.warn(f"[WARN] 钩子质量门后重建时间轴失败: {_tl_e}")
     if remaining:
-        _logger.warn("[HOOK-QC] ⚠️ 重生后钩子仍有 issue（保留落盘，人工过目）：\n  - "
+        _mrt._logger.warn("[HOOK-QC] ⚠️ 重生后钩子仍有 issue（保留落盘，人工过目）：\n  - "
                      + "\n  - ".join(remaining))
-        _console("  [钩子校验] ⚠️ 重生后仍有 issue，已按原样落盘（见日志）")
+        _mrt._console("  [钩子校验] ⚠️ 重生后仍有 issue，已按原样落盘（见日志）")
     else:
-        _logger.info("[OK] 钩子后置校验通过（互补模型重生版）")
-        _console("  [钩子校验] 重生钩子通过校验")
+        _mrt._logger.info("[OK] 钩子后置校验通过（互补模型重生版）")
+        _mrt._console("  [钩子校验] 重生钩子通过校验")
     return remaining
-
-
-# v6.63.1：_locate_narration_in_novel 下沉至 gap_analysis（constraints 层复用，
-# 反向 import main 有重依赖 + 循环导入风险 + 触发 style_prefix 弃用 shim）。
-# 此处保留同名兼容导出，行为零变化。
-from step01_script_gen.gap_analysis import _locate_narration_in_novel  # noqa: F401,E402
 
 
 def _strip_runtime_fields(obj):
@@ -4924,7 +4696,7 @@ def _count_ungrounded_narrations(script: dict, novel_text: str) -> int:
         narr = str(sh.get("narration_segment") or sh.get("narration") or "").strip()
         if not narr:
             continue
-        s, e = _locate_narration_in_novel(narr, novel_text)
+        s, e = _mrt._locate_narration_in_novel(narr, novel_text)
         if s < 0:
             cnt += 1
     return cnt
@@ -5094,9 +4866,9 @@ def _score_script(script: dict, novel_text: str) -> dict:
     eff_dur = float(_projected.get("duration_sec", dur) or dur)
     eff_n = int(_projected.get("shot_count", n) or n)
     _split_n = int(_projected.get("split_count", 0) or 0)
-    if DURATION_MIN_SEC <= eff_dur <= DURATION_MAX_SEC:
+    if _mrt.DURATION_MIN_SEC <= eff_dur <= _mrt.DURATION_MAX_SEC:
         score += 10
-    elif DURATION_MIN_SEC - 10 <= eff_dur < DURATION_MIN_SEC or DURATION_MAX_SEC < eff_dur <= DURATION_MAX_SEC + 30:
+    elif _mrt.DURATION_MIN_SEC - 10 <= eff_dur < _mrt.DURATION_MIN_SEC or _mrt.DURATION_MAX_SEC < eff_dur <= _mrt.DURATION_MAX_SEC + 30:
         score += 7
     else:
         score += 3
@@ -5176,10 +4948,10 @@ def _retry_degrade_reason(prev: dict, new: dict, novel_text: str,
     # 镜数多 3+ → 判退化回退。救援态不豁免（救援补高潮不靠膨胀镜头数达成）。
     _prev_n = len(prev.get("shots", []) or [])
     _new_n = len(new.get("shots", []) or [])
-    if (prev_dur >= DURATION_MIN_SEC and new_dur > DURATION_MAX_SEC) or (_new_n - _prev_n >= 3):
+    if (prev_dur >= _mrt.DURATION_MIN_SEC and new_dur > _mrt.DURATION_MAX_SEC) or (_new_n - _prev_n >= 3):
         return (f"镜数/时长膨胀（新版 {_new_n} 镜 {new_dur:.0f}s，上一版 {_prev_n} 镜 "
-                f"{prev_dur:.0f}s）——重生版把镜头预算炸出合法带（{DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s），"
-                f"越修越多的镜头会让总时长超出本轮合法上限（{DURATION_MAX_SEC:g}s）")
+                f"{prev_dur:.0f}s）——重生版把镜头预算炸出合法带（{_mrt.DURATION_MIN_SEC:g}-{_mrt.DURATION_MAX_SEC:g}s），"
+                f"越修越多的镜头会让总时长超出本轮合法上限（{_mrt.DURATION_MAX_SEC:g}s）")
     # 1.5) 高潮塌缩（v6.62.8，09-09）——与「零高潮救援」对称的反向护栏。
     # 09-10 run3 实测：retry1 把高潮镜从 0 补到 1（救援采纳），retry2 又打回 0，
     # 而三条判据都不看高潮，于是 retry2 被静默接受，终稿高潮镜 0、台词镜 0。
@@ -5266,7 +5038,7 @@ def _build_novel_slice_for_picked(picked: dict, shots_by_id: dict,
     # 2) 每个 narration 在 novel 里定位 → (start, end) → 扩 ctx
     slices = []
     for tid, narr, idx in items:
-        s, e = _locate_narration_in_novel(narr, novel_text)
+        s, e = _mrt._locate_narration_in_novel(narr, novel_text)
         if s < 0:
             continue
         s2 = max(0, s - ctx)
@@ -5709,13 +5481,6 @@ def _norm_target_id(raw) -> str:
     return sid
 
 
-from step01_script_gen.repair_fields import (merge_authorized as _merge_authorized,
-                                          apply_scoped_field_updates as _apply_scoped_field_updates,
-                                          canonical_path_diff,
-                                          frame_layout_structural_violations,
-                                          MODEL_AUDIT_WARNING_PREFIX)
-
-
 def _assemble_keyframe_additions(target: dict, additions,
                                  *, frame_mapping_out: dict | None = None) -> tuple:
     """把「帧 + 对应布局」的**成对数据**装配进完整镜头 → `(new_shot, 拒绝原因)`.
@@ -6088,7 +5853,7 @@ def _apply_shot_replacements(script: dict, replacements: list,
         # 彻底消除模型漏抄未修改锁定字段引发的 `locked_changed` 误伤与 Token 浪费。
         _raw_updates = item.get("updates") if item.get("updates") is not None else item.get("field_patches")
         if new_shot is None and _raw_updates is not None:
-            new_shot, _why = _apply_scoped_field_updates(target, _raw_updates, allowed=allowed)
+            new_shot, _why = _mrt._apply_scoped_field_updates(target, _raw_updates, allowed=allowed)
             if _why:
                 # M03：路径 / 授权集合来自**答卷与授权记录的结构化数据**，
                 # `_why` 只是展示文本，不参与 code 判定。
@@ -6129,9 +5894,9 @@ def _apply_shot_replacements(script: dict, replacements: list,
         # 「未授权路径 = 原样」由**构造保证**（差异只在授权路径内），
         # `check_replacement_authorized` 保留为纵深防御。
         if allowed is not None:
-            new_shot, _echoed = _merge_authorized(target, new_shot, allowed)
+            new_shot, _echoed = _mrt._merge_authorized(target, new_shot, allowed)
             if _echoed:
-                _logger.info(
+                _mrt._logger.info(
                     f"[REPAIR] shot {sid}: 未授权路径已回填 {len(_echoed)} 处: "
                     f"{sorted(set(_echoed))[:5]}"
                 )
@@ -6143,13 +5908,13 @@ def _apply_shot_replacements(script: dict, replacements: list,
             # canonical diff（含 `keyframes.__len__` 这种长度变化）打出来，
             # 「模型有没有真的补帧」一眼可判。
             try:
-                _changed = canonical_path_diff(target, new_shot)
+                _changed = _mrt.canonical_path_diff(target, new_shot)
             except Exception:
                 _changed = []
             _kf_delta = (len(target.get("keyframes") or []),
                          len(new_shot.get("keyframes") or []))
             if _changed or _kf_delta[0] != _kf_delta[1]:
-                _logger.info(
+                _mrt._logger.info(
                     f"[REPAIR] shot {sid}: 授权字段实际改动 {len(_changed)} 处 "
                     f"（keyframes {_kf_delta[0]}->{_kf_delta[1]}）: {_changed[:8]}"
                 )
@@ -6163,7 +5928,7 @@ def _apply_shot_replacements(script: dict, replacements: list,
                 _rel = _rcf(allowed, target)
                 if _rel:
                     _rb = _rrb(target, new_shot, _rel)
-                    _logger.info(
+                    _mrt._logger.info(
                         "[REPAIR] shot %s: 关联字段回读 %d 处（变 %d / 未变 %d）: %s"
                         % (sid, _rb["checked"], _rb["changed"], _rb["unchanged"],
                            [r["field"] for r in _rb["rows"] if r["changed"]][:6]))
@@ -6175,12 +5940,12 @@ def _apply_shot_replacements(script: dict, replacements: list,
                             if any(p == q or p.startswith(q + ".") or q.startswith(p + ".")
                                    for q in _related_all)]
                     if _gap:
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[REPAIR] shot %s: 模型请求改动关联字段但不在授权范围"
                             "（已回填；是否确需改动由重验判定）: %s"
                             % (sid, sorted(_gap)[:4]))
             except Exception as _rb_err:
-                _logger.warn("[REPAIR] shot %s: 关联字段回读失败（不影响本镜提交）: %s"
+                _mrt._logger.warn("[REPAIR] shot %s: 关联字段回读失败（不影响本镜提交）: %s"
                              % (sid, _rb_err))
         # duration_sec 是派生值：授权合并后再同步，避免被回填成旧时长。
         if _raw_updates is not None and isinstance(new_shot, dict) and new_shot.get("duration") != target.get("duration"):
@@ -6196,7 +5961,7 @@ def _apply_shot_replacements(script: dict, replacements: list,
                     _old_d, _new_d = 0.0, 0.0
                 if _old_d > 0 and 0 < _new_d < _old_d:
                     _rescale_shot_timeline(new_shot, _old_d, _new_d)
-                    _logger.info(
+                    _mrt._logger.info(
                         "[REPAIR] shot %s: duration %.2f->%.2f，镜内时间轴按 %.3f 等比缩放"
                         % (sid, _old_d, _new_d, _new_d / _old_d))
         # M03：`code` 由**结构化事实**判定，不解析 `_validate_replacement_shot`
@@ -6220,7 +5985,7 @@ def _apply_shot_replacements(script: dict, replacements: list,
                 if _cra(target, new_shot, allowed):
                     _vr_code = "protected_field"
                     try:
-                        _diff = canonical_path_diff(target, new_shot)
+                        _diff = _mrt.canonical_path_diff(target, new_shot)
                         _vr_path = str(_diff[0]) if _diff else ""
                     except Exception:
                         _vr_path = ""
@@ -6482,7 +6247,7 @@ def _record_time_field_write_audit(script: dict, tracker, *, label: str) -> list
             "structural": [{"constraint": n, "diff": d} for n, d in structural],
         }
     if unauthorized:
-        _logger.warn(
+        _mrt._logger.warn(
             "[WARN] 审计段越权写入时间字段（%d 个约束）：%s —— 链前 KF/时长检查的"
             "结论对最终对象不成立；已升级为 blocking issue（见 %s quality gate）"
             % (len(unauthorized), ", ".join(n for n, _ in unauthorized), label)
@@ -6510,13 +6275,13 @@ def _record_semantic_write_audit(script: dict, tracker, *, label: str) -> list:
             "sanctioned": [{"constraint": n, "diff": d} for n, d in sanctioned],
         }
     if unauthorized:
-        _logger.warn(
+        _mrt._logger.warn(
             "[WARN] 审计段越权写入语义/结构（%d 个约束）：%s —— 镜头增删/重排/语义改写"
             "会让链前结论对最终对象不成立；已升级为 blocking issue（见 %s quality gate）"
             % (len(unauthorized), ", ".join(n for n, _ in unauthorized), label)
         )
     if sanctioned:
-        _logger.info(
+        _mrt._logger.info(
             "[AUDIT] 审计段受豁免的结构写入：%s（不阻塞，已留 advisory 证据）"
             % ", ".join("%s(%d 处)" % (n, len(d)) for n, d in sanctioned)
         )
@@ -6596,9 +6361,9 @@ def finalize_step01_script(script: dict, *, novel_text: str = "",
     try:
         _n_rep = collapse_repetition_fields(script)
         if _n_rep:
-            _logger.info(f"[FINALIZE] 折叠连续重复词句 {_n_rep} 处（{label}）")
+            _mrt._logger.info(f"[FINALIZE] 折叠连续重复词句 {_n_rep} 处（{label}）")
     except Exception as _rep_err:
-        _logger.warn(f"[FINALIZE] 重复折叠失败（保留原版）: {_rep_err}")
+        _mrt._logger.warn(f"[FINALIZE] 重复折叠失败（保留原版）: {_rep_err}")
 
     from step01_script_gen.constraints import run_hard_fix as _hfix_final
     from shared.semantic_barrier import TimeFieldWriteTracker
@@ -6623,17 +6388,17 @@ def finalize_step01_script(script: dict, *, novel_text: str = "",
             # 合同不可消费（改编块/呈现契约）同样等于「约束链没跑完」：返回错误让调用方
             # 拒收，不把「一半约束没跑」的稿子当成通过（2026-10-28 M07 实测的 155/400
             # 两份对象就是从这里来的）。
-            _logger.error(f"[WARN] {label} hard_fix 因合同不可消费而中止: {_hfe}")
+            _mrt._logger.error(f"[WARN] {label} hard_fix 因合同不可消费而中止: {_hfe}")
             return script, ["constraint_failed: %s: %s" % (type(_hfe).__name__, _hfe)]
-        _logger.warn(f"[WARN] {label} hard_fix 失败（保留原版）: {_hfe}")
+        _mrt._logger.warn(f"[WARN] {label} hard_fix 失败（保留原版）: {_hfe}")
     _record_time_field_write_audit(script, tracker, label=label)
     # v6.98（审核 P0-3）：时间字段之外，审计段的**语义/结构**写入同样要收口。
     _record_semantic_write_audit(script, tracker, label=label)
 
     errors: list[str] = []
     try:
-        write_timeline_from_durations(script)
-        _tl_errs = timeline_consistency_errors(script)
+        _mrt.write_timeline_from_durations(script)
+        _tl_errs = _mrt.timeline_consistency_errors(script)
         if _tl_errs:
             errors.extend(str(e) for e in _tl_errs)
     except Exception as _tl_e:
@@ -6643,12 +6408,12 @@ def finalize_step01_script(script: dict, *, novel_text: str = "",
     _inv = final_time_invariant_issues(script)
     if _inv:
         errors.extend(f"{i.code}@shot{i.shot_id}: {i.message}" for i in _inv)
-        _logger.warn(
+        _mrt._logger.warn(
             f"[WARN] {label} 最终时间不变量不成立（{len(_inv)} 条，已交 quality gate "
             f"判 blocking）：{[i.code for i in _inv][:5]}"
         )
     if errors and not _inv:
-        _logger.warn(f"[WARN] {label} 最终时间轴归一失败: {'; '.join(errors[:3])}")
+        _mrt._logger.warn(f"[WARN] {label} 最终时间轴归一失败: {'; '.join(errors[:3])}")
     return script, errors
 
 
@@ -6843,7 +6608,7 @@ def _g1_unclosed_issues(prev_issues, now_ids, script, *,
     now_det = set(now_det_families or ())
     out: list = []
     for issue in prev_issues or ():
-        if not is_blocking(issue):
+        if not _mrt.is_blocking(issue):
             continue
         ident = _audit_issue_identity(issue)
         if ident in now:
@@ -6951,7 +6716,7 @@ def _authorized_changes_lost(merged: "dict | None", after: dict,
 
 
 def _audit_issue_newly_resolved(script_after: dict, script_before: dict | None,
-                                issue: Issue, attempted: set | None = None) -> bool:
+                                issue: _mrt.Issue, attempted: set | None = None) -> bool:
     """该 audit issue 是否**在本轮内新解决**（v6.102）.
 
     `_audit_issue_resolved()` 问的是「evidence **现在**还在不在稿子里」——它是
@@ -7121,7 +6886,7 @@ def _audit_issue_field_touched(before_script: "dict | None", after_script: dict,
     return str(b.get(root) or "") != str(a.get(root) or "")
 
 
-def _audit_issue_resolved(script: dict, issue: Issue) -> bool:
+def _audit_issue_resolved(script: dict, issue: _mrt.Issue) -> bool:
     """Best-effort verification for an audit-only issue without a second LLM call.
 
     An audit issue is considered resolved only when its original evidence is no
@@ -7369,7 +7134,7 @@ def _kf_structural_violations(before_script: dict, after_script: dict,
                 out.extend("%s: %s" % (tid, m) for m in _notes)
             else:
                 for _n in _notes:
-                    _logger.info("[REPAIR] %s 动作范围收窄: %s" % (tid, _n))
+                    _mrt._logger.info("[REPAIR] %s 动作范围收窄: %s" % (tid, _n))
                 if _new_motion != str(after.get("motion_desc") or ""):
                     # `after` 就是 `after_script` 里的那个镜头对象 → 原地写回即生效
                     after["motion_desc"] = _new_motion
@@ -7391,14 +7156,14 @@ def _g7_merged_state(merged_script, novel_text) -> "dict | None":
     try:
         return _collect_repair_warnings(merged_script, novel_text)
     except Exception as exc:
-        _logger.warn("[REPAIR] G7 合并后确定性状态计算失败（本轮拒收）: %s" % exc)
+        _mrt._logger.warn("[REPAIR] G7 合并后确定性状态计算失败（本轮拒收）: %s" % exc)
         return {"issues": [], "checker_failed": True,
                 "error": "merged_state_failed: %s" % exc}
 
 
 def _repair_acceptance_decision(before_state: dict | None,
                                 after_state: dict | None,
-                                audit_issues: list[Issue] | None,
+                                audit_issues: list[_mrt.Issue] | None,
                                 script_after: dict,
                                 locked_changed: bool,
                                 script_before: dict | None = None,
@@ -7442,7 +7207,7 @@ def _repair_acceptance_decision(before_state: dict | None,
     # "检查未完成"当成"没有丢失"。
     merged_checker_failed = bool(isinstance(merged_state, dict)
                                  and merged_state.get("checker_failed"))
-    audit_targets = [i for i in (audit_issues or []) if is_blocking(i)]
+    audit_targets = [i for i in (audit_issues or []) if _mrt.is_blocking(i)]
     # v6.102：audit 判据必须是「**本轮新**解决」——`_audit_issue_resolved` 本身幂等，
     # 拿它当轮内功绩会让空转轮次靠陈旧计数通过验收。
     # v6.139：`audit_attempted` = 本 run 已尝试过（触达兜底记过账）的问题身份集——
@@ -8038,7 +7803,7 @@ def _repair_max_output_tokens() -> int | None:
     try:
         _n = int(_v)
     except ValueError:
-        _logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_v!r} 不是整数，本轮不设上限"
+        _mrt._logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_v!r} 不是整数，本轮不设上限"
                      f"（跟随文本通道全局值）")
         return None
     # v6.133（2026-09-26 用户复核）：本变量**只用于收窄**——`0`/负数不是合法上限，
@@ -8046,12 +7811,12 @@ def _repair_max_output_tokens() -> int | None:
     # 记 WARN 后当作"未设置"，跟随通道全局值（宁可放宽也不因手误把上限变小，
     # 更不能因为一个手误把契约说反）。
     if _n <= 0:
-        _logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_v!r} 不是正数，本轮不设上限"
+        _mrt._logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_v!r} 不是正数，本轮不设上限"
                      f"（跟随文本通道全局值）")
         return None
     _chan_cap = _channel_text_max_tokens()
     if _chan_cap and _n > _chan_cap:
-        _logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_n} 高于当前文本通道"
+        _mrt._logger.warn(f"[WARN] REPAIR_MAX_OUTPUT_TOKENS={_n} 高于当前文本通道"
                      f"（{_active_text_provider() or '未知'}）的项目上限 {_chan_cap}——"
                      f"该变量只用于收窄，本轮忽略它（跟随通道全局值 {_chan_cap}）")
         return None
@@ -8121,12 +7886,12 @@ def _record_repair_call_usage(repair_diag: list | None, repair_round: int, *,
         # v6.152（D2）：**另加**总预算剩余秒数。上面的「余量」是**输出 token 余量**
         # （`max_tokens − output_tokens`），口径不同、保留不动；两者并排放，
         # 才看得出「这次离 token 上限多近」与「本跑还剩多少时间」。
-        "budget_left_sec": _budget_left_sec(),
+        "budget_left_sec": _mrt._budget_left_sec(),
     }
     repair_diag.append(_rec)
     # 把"余量"直接打进 step01.log：不必翻台账就知道这次离上限多近（口径同上）
     _margin = _repair_cap_margin(_rec)
-    _logger.info("[REPAIR] 输出用量 output_tokens=%s（其中思维链 %s）｜本轮上限 %s"
+    _mrt._logger.info("[REPAIR] 输出用量 output_tokens=%s（其中思维链 %s）｜本轮上限 %s"
                  "｜余量 %s｜总预算剩余 %s 秒"
                  % (_rec["output_tokens"], _rec["reasoning_tokens"],
                     max_tokens if max_tokens is not None else "通道全局值",
@@ -8342,7 +8107,7 @@ def _repair_skill_sections(picked: dict, audit_by_shot: dict | None = None) -> t
                  if any(w in blob for w in words)}
     if unknown:
         # 未知类型：保留完整上下文（调用方回退），并明确报告未覆盖。
-        _logger.warn("[REPAIR] 有未登记技能依赖的问题码——本轮保留完整技能上下文：%s"
+        _mrt._logger.warn("[REPAIR] 有未登记技能依赖的问题码——本轮保留完整技能上下文：%s"
                      % sorted(set(unknown))[:6])
         return sections, True
     return sections, False
@@ -8462,7 +8227,7 @@ def _projection_related_residual(script: dict, allowed_by_target: dict,
 def _repair_shot_warnings(script: dict, novel_text: str,
                           bank=None, objects_bank=None,
                           model: str | None = None,
-                          audit_issues: list[Issue] | None = None,
+                          audit_issues: list[_mrt.Issue] | None = None,
                           max_rounds: int | None = None,
                           repair_diag: list | None = None,
                           block_reasons: list | None = None,
@@ -8550,7 +8315,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
     _revision_mismatch = bool(_prior_revision and _entry_revision
                               and _prior_revision != _entry_revision)
     if _revision_mismatch:
-        _logger.warn("[REPAIR] 反馈 source_revision 与本轮基线不符（%s ≠ %s）→ "
+        _mrt._logger.warn("[REPAIR] 反馈 source_revision 与本轮基线不符（%s ≠ %s）→ "
                      "丢弃跨稿反馈，不借用上一轮裁决"
                      % (_prior_revision[:12], _entry_revision[:12]))
         _retry_state_snapshot = {}
@@ -8584,7 +8349,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _stop_msg = ("修复反馈终局（%s）：不再发起新的修复请求；基线原样保留，"
                          "残余按原样交给提交点判 BLOCK"
                          % (_retry_state_snapshot.get("stop_reason") or "terminal"))
-            _logger.error("[REPAIR] " + _stop_msg)
+            _mrt._logger.error("[REPAIR] " + _stop_msg)
             if block_reasons is not None:
                 block_reasons.append(_stop_msg)
             if repair_diag is not None:
@@ -8615,7 +8380,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 % (_effect_conflict_prev.get("reason") or "?",
                    _effect_conflict_prev.get("writer") or "?",
                    _effect_conflict_prev.get("targets") or []))
-            _logger.error("[REPAIR] %s" % _seal_msg)
+            _mrt._logger.error("[REPAIR] %s" % _seal_msg)
             if block_reasons is not None:
                 block_reasons.append(_seal_msg)
             if repair_diag is not None:
@@ -8633,8 +8398,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 调用点（`main` 里 `REPAIR_ROUNDS_ENABLED and not _budget_exceeded()`）
         # 只保证「开始修的时候没超预算」，挡不住多轮叠加把单次 run 拖到 20 分钟
         # （第十四次重跑已经 12 分钟）。已完成的轮次保留，只是不再发下一批。
-        if _round > 1 and _budget_exceeded_with_pause("repair_round"):
-            _logger.warn("[BUDGET] 总预算超时，停止后续定向修复轮（已通过的轮次保留）")
+        if _round > 1 and _mrt._budget_exceeded_with_pause("repair_round"):
+            _mrt._logger.warn("[BUDGET] 总预算超时，停止后续定向修复轮（已通过的轮次保留）")
             return script
         per_shot_dict = _collect_repair_warnings(script, novel_text)
         import copy as _copy_before_accept
@@ -8662,7 +8427,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 _shots_by_id_audit["hook"] = script["hook"]
             _locked_only: list = []
             for _issue in audit_issues:
-                if not is_blocking(_issue):
+                if not _mrt.is_blocking(_issue):
                     continue
                 _tid_audit = _target_of_record(_issue)
                 if _tid_audit and _tid_audit in _shots_by_id_audit:
@@ -8680,7 +8445,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 per_shot_dict["_has_hard"] = True
                 _sid = _issue.shot_id
                 _detail = (
-                    f"{MODEL_AUDIT_WARNING_PREFIX} "
+                    f"{_mrt.MODEL_AUDIT_WARNING_PREFIX} "
                     f"code={_issue.code} frame={_issue.frame_id or '-'} "
                     f"entity={_issue.entity_id or '-'} field={_issue.field_path or '-'} "
                     f"evidence={_issue.evidence or '-'} :: {_issue.message}"
@@ -8693,12 +8458,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     continue          # 无定位镜头的全局问题：不挂到任何目标
                 audited.setdefault(_target_of_record(_issue), []).append(_detail)
             if _locked_only:
-                _logger.info("[REPAIR] 跳过仅指向锁定字段的审计项 %d 条: %s"
+                _mrt._logger.info("[REPAIR] 跳过仅指向锁定字段的审计项 %d 条: %s"
                              % (len(_locked_only), _locked_only[:5]))
         # v6.43 08-25：HARD-only 触发——没 hard violation 就不调 LLM
         if not per_shot_dict.get("_has_hard", False):
             if _round == 1:
-                _logger.info(
+                _mrt._logger.info(
                     "[REPAIR] 跳过：无 HARD 违例（HARD-only 策略），"
                     "WARN 已由 hard_fix 兜底"
                 )
@@ -8743,7 +8508,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if _excluded_all:
             _skipped = sorted(set(shot_items) & _excluded_all)
             if _skipped:
-                _logger.warn("[REPAIR] 本轮剔除目标（肇事剔除 %s｜联动组暂缓 %s）"
+                _mrt._logger.warn("[REPAIR] 本轮剔除目标（肇事剔除 %s｜联动组暂缓 %s）"
                              % (sorted(set(shot_items) & _rejected_targets),
                                 sorted(set(shot_items) & _defer)))
         if not picked:
@@ -8792,7 +8557,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             if k.startswith("shot_") or k == "hook"
         )
         _audit_before_count = (
-            sum(1 for _i in (audit_issues or []) if is_blocking(_i))
+            sum(1 for _i in (audit_issues or []) if _mrt.is_blocking(_i))
             if _round == 1 else 0
         )
         # 08-15（PR-3）：跨镜告警对镜补选——top-6 按告警数排序时，被选镜告警里的
@@ -8849,7 +8614,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     "（拆组=半条修复、删目标=漏声明，两者都禁止；该镜数是单条问题的"
                     "声明或多条共享镜头合并后的并集）——请检查审计契约或稿件本身"
                     % (sorted(_grp), len(_grp), _REPAIR_MAX_SHOTS_PER_GROUP))
-                _logger.error("[REPAIR] %s" % _reason)
+                _mrt._logger.error("[REPAIR] %s" % _reason)
                 if block_reasons is not None:
                     block_reasons.append(_reason)
             return script
@@ -8867,7 +8632,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             # v6.140：本 run 已暂缓的联动组同理（失败组不重发）。该组的阻塞留待
             # 提交门按 BLOCK 处理，与其他组的修复互不拖累。
             if _grp & _excluded_all:
-                _logger.warn(
+                _mrt._logger.warn(
                     "[REPAIR] 联动组 %s 含剔除/暂缓目标 %s → 整组跳过"
                     "（重发大概率复发；该组问题留待提交门）"
                     % (sorted(_grp), sorted(_grp & _excluded_all)))
@@ -8878,7 +8643,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 # 与本组合并（`_linked_repair_groups` 已按共享镜头合并），所以
                 # 不会留下半组在稿子上。
                 if _exclusive_taken:
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[REPAIR] 联动组 %s 共 %d 镜也超过单轮上限 %d → 本轮已由"
                         "另一组独占，**整组推迟到下一轮**（不拆成半次修复）"
                         % (sorted(_grp), len(_grp), _REPAIR_MAX_SHOTS_PER_ROUND)
@@ -8889,7 +8654,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                    if t != "global" and t not in _grp)
                 for _t in _deferred:
                     picked.pop(_t, None)
-                _logger.info(
+                _mrt._logger.info(
                     "[REPAIR] 联动组 %s 共 %d 镜 > 单轮上限 %d → **独占本轮名额**"
                     "；让出（推迟到下一轮）：%s"
                     % (sorted(_grp), len(_grp), _REPAIR_MAX_SHOTS_PER_ROUND,
@@ -8905,7 +8670,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     _evictable = sorted(t for t in picked
                                         if t != "global" and t not in _grouped_all)
                     if len(_evictable) < _need:
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[REPAIR] 联动组 %s 无法在本轮容量 %d 内成组"
                             "（可腾位 %d < 需 %d）→ 整组推迟到下一轮"
                             "（不拆成可能互相矛盾的半次修复）"
@@ -8914,7 +8679,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         continue
                     for _t in _evictable[:_need]:
                         picked.pop(_t, None)
-                    _logger.info(
+                    _mrt._logger.info(
                         "[REPAIR] 为联动组 %s 让出单镜目标 %s（本轮容量 %d）"
                         % (sorted(_grp), _evictable[:_need], _round_cap)
                     )
@@ -8927,11 +8692,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 picked.setdefault(_g, shot_items.get(_g) or [])
             _active_groups.append(_grp)
         if _active_groups:
-            _logger.info("[REPAIR] 本轮联动组（整组修/整组验收/整组回退）: %s"
+            _mrt._logger.info("[REPAIR] 本轮联动组（整组修/整组验收/整组回退）: %s"
                          % [sorted(g) for g in _active_groups])
         if _pair_rejects:
             # 成对目标校验失败必须显式说清——它直接决定「本轮能不能修这条问题」
-            _logger.warn("[REPAIR] repair_targets 校验未通过 %d 项（这些条目不参与授权）: %s"
+            _mrt._logger.warn("[REPAIR] repair_targets 校验未通过 %d 项（这些条目不参与授权）: %s"
                          % (len(_pair_rejects), _pair_rejects[:8]))
 
         # S03（2026-11-07）：**按最终编码字节装批**，不是只按条数。
@@ -8970,7 +8735,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             if _cap_defer:
                 picked = {t: ws for t, ws in picked.items()
                           if t not in set(_cap_defer)}
-                _logger.warn(
+                _mrt._logger.warn(
                     "[REPAIR] 请求体积超预算（上限 %d B，已装 %d B）——本轮暂缓 %s，"
                     "下一轮/下一次提交尝试继续" % (_REPAIR_MAX_REQUEST_BYTES, _cap_used,
                                                 sorted(_cap_defer)))
@@ -8980,10 +8745,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                         "deferred": sorted(_cap_defer),
                                         "used_bytes": _cap_used,
                                         "cap_bytes": _REPAIR_MAX_REQUEST_BYTES})
-                _metrics_inc("repair.deferred_by_capacity", len(_cap_defer))
+                _mrt._metrics_inc("repair.deferred_by_capacity", len(_cap_defer))
                 _carry_deferred = set(_cap_defer)
 
-        _console(f"  [修复轮{_round}] {len(picked)} 镜待修（{', '.join(picked)}）...")
+        _mrt._console(f"  [修复轮{_round}] {len(picked)} 镜待修（{', '.join(picked)}）...")
         # 08-18 方案 C：先统计全片各 label 的 WARN 总数（按分镜聚合之前算一次），
         # 后面拼 parts 时每条 WARN 末尾追加"（同类全片共 N 处）"——让 LLM 改 shot_4
         # 时知道"ff_desc_anchors 错误全片 25 处"而不是孤例 1 处，全局视图促动认真修。
@@ -9089,7 +8854,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         _char_anchors_str = ""
         if bank:
             try:
-                _ca = _build_character_anchors(bank)
+                _ca = _mrt._build_character_anchors(bank)
                 if _ca and _ca != "无已知角色":
                     _char_anchors_str = (
                         "## INPUT 2：角色锚点（仅供字段查询，不重生成）\n"
@@ -9108,19 +8873,19 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                              "message": getattr(_ai, "message", "")}
                             for _ai in (audit_issues or [])]})
             if _skill_unclassified:
-                _logger.warn(
+                _mrt._logger.warn(
                     "[REPAIR] 本轮问题类型尚未登记技能依赖——保留**完整**技能上下文"
                     "（体积换安全；登记依赖后再裁剪）")
-                _skills_str = _load_knowledge_skills()
+                _skills_str = _mrt._load_knowledge_skills()
             else:
-                _skills_str = _load_knowledge_skills_for(_skill_sections)
-            _logger.info("[REPAIR] 技能段=%s（未分类=%s，%d 字）"
+                _skills_str = _mrt._load_knowledge_skills_for(_skill_sections)
+            _mrt._logger.info("[REPAIR] 技能段=%s（未分类=%s，%d 字）"
                          % (sorted(_skill_sections) or "无", _skill_unclassified,
                             len(_skills_str)))
         except Exception as _skill_err:
-            _logger.warn("[REPAIR] 技能段选择失败，回退完整上下文: %s" % _skill_err)
+            _mrt._logger.warn("[REPAIR] 技能段选择失败，回退完整上下文: %s" % _skill_err)
             try:
-                _skills_str = _load_knowledge_skills()
+                _skills_str = _mrt._load_knowledge_skills()
             except Exception:
                 _skills_str = ""
 
@@ -9157,7 +8922,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         f"{_novel_slice}"
                     )
             except Exception as _e:
-                _logger.warn(f"[WARN] 原文切片构建失败，回退到无原文切片: {_e}")
+                _mrt._logger.warn(f"[WARN] 原文切片构建失败，回退到无原文切片: {_e}")
 
         # Turn 2：REPAIR FEEDBACK + TASK
         # 警告转为结构化 JSON（按 shot_xxx 分组），避免 freeform 文本混排字段
@@ -9206,11 +8971,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 if _k:
                     _audit_by_shot.setdefault(_k, []).append(_detail)
         if _inexec_issue_keys:
-            _logger.warn(
+            _mrt._logger.warn(
                 "[REPAIR] %d 条审计问题**只能改锁定字段**——最终修复不可执行，"
                 "已从本轮修复反馈中摘除（保留 blocking 交上游）：%s"
                 % (len(_inexec_issue_keys), _inexec_issue_keys[:4]))
-            _metrics_inc("repair.inexecutable_locked_issues", len(_inexec_issue_keys))
+            _mrt._metrics_inc("repair.inexecutable_locked_issues", len(_inexec_issue_keys))
         # v6.83（二次审核发现 2）：**按 issue 授权**——每个 target 只允许改它自己的
         # 问题点名的字段。允许集合由 deterministic warning + audit issue 推导
         # （`repair_fields.allowed_repair_fields`）；**推不出字段路径的目标不进本轮
@@ -9289,22 +9054,22 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                           if str(p) not in _declared_paths),
             }
         if _unauthorized_targets:
-            _logger.warn(
+            _mrt._logger.warn(
                 "[REPAIR] %d 个目标的问题未点名字段路径，本轮不走定向修复：%s"
                 "——本实现**没有**自动整镜 regen 路径，这些目标会保留到最终审计，"
                 "仍不通过就由提交点 BLOCK（不放开授权去硬修）"
                 % (len(_unauthorized_targets), _unauthorized_targets[:6])
             )
         if _inexecutable_locked:
-            _logger.warn(
+            _mrt._logger.warn(
                 "[REPAIR] %d 个目标的修复**只能改锁定字段**——最终修复不可执行，"
                 "保留 blocking 交上游阶段（本轮不为它们发起修复，也不放开授权硬修）：%s"
                 % (len(_inexecutable_locked),
                    dict(list(_inexecutable_locked.items())[:4])))
-            _metrics_inc("repair.inexecutable_locked_targets",
+            _mrt._metrics_inc("repair.inexecutable_locked_targets",
                          len(_inexecutable_locked))
         if not _allowed_by_target:
-            _logger.warn("[REPAIR] 无任何目标具备明确字段授权，跳过本轮定向修复")
+            _mrt._logger.warn("[REPAIR] 无任何目标具备明确字段授权，跳过本轮定向修复")
             return script
         # M02：同一份结构化授权记录，驱动两处请求说明、compact 答卷示例与应用校验。
         # 生成的是「当前稿上可实际应用的具体路径」，不是父字段或通配路径。
@@ -9322,15 +9087,15 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # ⇒ 整轮回退 ⇒ BLOCK。白烧一次调用，日志还看起来像「修了但没修好」。
         # 这里在**发起前**判死并如实记原因（与 `_unauthorized_targets` 同一口径：不放开
         # 授权去硬修，只是不再为一个不可能成功的轮次付代价）。
-        _blocking_issues = [_ai for _ai in (audit_issues or []) if is_blocking(_ai)]
+        _blocking_issues = [_ai for _ai in (audit_issues or []) if _mrt.is_blocking(_ai)]
         if _blocking_issues and not _repair_blocking_coverage(
                 _blocking_issues, _det_targets, _allowed_by_target):
-            _logger.warn(
+            _mrt._logger.warn(
                 "[REPAIR] %d 条 blocking 的授权面与本轮入轮目标的授权面**没有交集**"
                 "——本轮任何修复都不可能让它们中的任何一条通过验收，跳过本轮定向修复"
                 "（保留 blocking 交提交点 BLOCK，不放开授权去硬修）"
                 % len(_blocking_issues))
-            _metrics_inc("repair.round_skipped_no_blocking_coverage",
+            _mrt._metrics_inc("repair.round_skipped_no_blocking_coverage",
                          len(_blocking_issues))
             return script
 
@@ -9539,7 +9304,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 旧实现：prompt = build_prompt(novel_text, bank, objects_bank) + repair_prompt
         # 新实现：user_inputs 拆两条；user_prompt 用作"未支持多轮的 provider"的回退
         # v6.68: prompt/system 跟着实际模型走（修复 prompt 本身 provider 中立）
-        _rep_builder, _rep_system = resolve_model_prompt_profile(model)
+        _rep_builder, _rep_system = _mrt.resolve_model_prompt_profile(model)
         prompt = _rep_builder(novel_text, bank, objects_bank)
 
         # 08-21 mode 合并：单一 unified fallback（与 _repair_turn 同源，压缩为单行 + 决策树/正反例/跨镜一致性）
@@ -9595,7 +9360,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             + "\n".join(parts)
         )
 
-        _metrics_inc("calls.repair_round")
+        _mrt._metrics_inc("calls.repair_round")
         # v6.133：上限只在这里取一次——既发给请求，也随调用记录落台账（余量可算）
         _repair_cap = _repair_max_output_tokens()
         # v6.133（2026-09-26 用户复核）：`create_service()` 原先在 try **之外**——
@@ -9610,16 +9375,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 不能被下面「服务初始化失败 → 保留原版」吞成静默降级。
         _rep_channel_provider, _rep_channel_model = resolve_repair_channel()
         try:
-            service = (create_service() if _rep_channel_provider is None
-                       else create_service(_rep_channel_provider))
+            service = (_mrt.create_service() if _rep_channel_provider is None
+                       else _mrt.create_service(_rep_channel_provider))
         except Exception as e:
-            _logger.warn(f"[WARN] 定向修复服务初始化失败（保留原版，未做任何后处理）: {e}")
+            _mrt._logger.warn(f"[WARN] 定向修复服务初始化失败（保留原版，未做任何后处理）: {e}")
             _record_repair_call_failure(repair_diag, _round,
                                         error="服务初始化失败：%s" % e,
                                         max_tokens=_repair_cap)
             return script
         from _text_gen.deepseek_schema import REPAIR_SHOT_REPLACEMENT_SCHEMA
-        req = TextGenerationRequest(
+        req = _mrt.TextGenerationRequest(
             system_prompt=_rep_system,
             user_prompt=prompt,
             user_inputs=_user_inputs,  # v6.37 结构化多轮
@@ -9633,7 +9398,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             # 通道覆盖优先（2026-09-28）：设了修复专用通道就用它的模型；
             # 否则沿用调用方模型（v6.67 接力修复语义不变）。
             model=_rep_channel_model or model,
-            timeout_sec=_repair_timeout_sec(),  # v6.70.3: 修复轮 180s——超时保留原版，不再盲等 600s
+            timeout_sec=_mrt._repair_timeout_sec(),  # v6.70.3: 修复轮 180s——超时保留原版，不再盲等 600s
         )
 
         # S03（复核 P1）：按 provider 的**最终 payload** 计量——messages 只是其中
@@ -9655,13 +9420,13 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                             + list(req.user_inputs or []))})
                 _final_bytes = len(_wb)
             except Exception as _enc_err:
-                _logger.warn("[REPAIR] 最终 payload 编码计量失败（按超限处理，不发送）: %s"
+                _mrt._logger.warn("[REPAIR] 最终 payload 编码计量失败（按超限处理，不发送）: %s"
                              % _enc_err)
             if _final_bytes == 0 or _final_bytes > _REPAIR_MAX_REQUEST_BYTES:
                 _omsg = ("修复请求最终 payload %d 字节 > 上限 %d（目标 %s）——不发送；"
                          "本轮目标整体延后，待装批或人工拆分"
                          % (_final_bytes, _REPAIR_MAX_REQUEST_BYTES, sorted(picked)))
-                _logger.warn("[REPAIR] " + _omsg)
+                _mrt._logger.warn("[REPAIR] " + _omsg)
                 if repair_diag is not None:
                     repair_diag.append({"repair_round": _round,
                                         "kind": "oversize_request_refused",
@@ -9670,7 +9435,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                         "targets": sorted(picked)})
                 if block_reasons is not None:
                     block_reasons.append(_omsg)
-                _metrics_inc("repair.oversize_request_refused")
+                _mrt._metrics_inc("repair.oversize_request_refused")
                 return script
         # v6.84（二次审核发现 3）：模型调用失败/截断**立即返回**，不进提交尾部。
         #
@@ -9682,12 +9447,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         try:
             result = service.generate(req)
         except Exception as e:
-            _logger.warn(f"[WARN] 定向修复失败（保留原版，未做任何后处理）: {e}")
+            _mrt._logger.warn(f"[WARN] 定向修复失败（保留原版，未做任何后处理）: {e}")
             _record_repair_call_failure(repair_diag, _round, error=str(e),
                                         max_tokens=_repair_cap)
             return script
         if not result.success:
-            _logger.warn(f"[WARN] 定向修复失败（保留原版，未做任何后处理）: {result.error}")
+            _mrt._logger.warn(f"[WARN] 定向修复失败（保留原版，未做任何后处理）: {result.error}")
             _record_repair_call_failure(
                 repair_diag, _round, error=str(result.error),
                 truncated=bool(getattr(result, "truncated", False)),
@@ -9708,7 +9473,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         try:
             _patch_data = _patch_json.loads(raw)
         except Exception as e:
-            _logger.warn(f"[WARN] 定向修复补丁 JSON 解析失败（保留原版，未做任何后处理）: {e}")
+            _mrt._logger.warn(f"[WARN] 定向修复补丁 JSON 解析失败（保留原版，未做任何后处理）: {e}")
             _record_repair_unusable(repair_diag, _round,
                                     reason="parse_failed", detail=str(e),
                                     raw_head=result.text)
@@ -9726,7 +9491,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if _repls is None:
             _repls = []
         if not isinstance(_repls, list):
-            _logger.warn("[WARN] 定向修复 shot_replacements 不是数组，保留原版"
+            _mrt._logger.warn("[WARN] 定向修复 shot_replacements 不是数组，保留原版"
                          "（未做任何后处理）")
             _record_repair_unusable(repair_diag, _round, reason="invalid_structure",
                                     detail="shot_replacements 不是数组：%s"
@@ -9734,7 +9499,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                     raw_head=result.text)
             return script
         if not _repls and not isinstance(_hook_repl, dict):
-            _logger.warn("[WARN] 定向修复未返回任何替换镜头"
+            _mrt._logger.warn("[WARN] 定向修复未返回任何替换镜头"
                          "（shot_replacements 与 hook_replacement 皆空），保留原版"
                          "（未做任何后处理）")
             _record_repair_unusable(repair_diag, _round, reason="empty_patch",
@@ -9773,11 +9538,11 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _info_only = [r for r in _rejected if "本轮未返回替换" in r]
             _hard_rej = [r for r in _rejected if "本轮未返回替换" not in r]
             if _hard_rej:
-                _logger.info(f"[REPAIR] 替换被拒 {len(_hard_rej)} 条: {_hard_rej[:3]}")
+                _mrt._logger.info(f"[REPAIR] 替换被拒 {len(_hard_rej)} 条: {_hard_rej[:3]}")
             if _info_only:
-                _logger.info(f"[REPAIR] 部分提交说明: {_info_only[:2]}")
+                _mrt._logger.info(f"[REPAIR] 部分提交说明: {_info_only[:2]}")
         if _n_applied <= 0:
-            _logger.warn("[WARN] 定向修复替换镜头均未通过校验，保留原版（未做任何后处理）")
+            _mrt._logger.warn("[WARN] 定向修复替换镜头均未通过校验，保留原版（未做任何后处理）")
             _rejected_details = [str(x) for x in _rejected]
             _record_repair_unusable(repair_diag, _round, reason="rejected_by_validation",
                                     detail="；".join(_rejected_details[:3]),
@@ -9797,13 +9562,13 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     answer_sig=_answer_sig(_repls))
                 retry_state.clear()
                 retry_state.update(_apply_plan)
-                _logger.warn(
+                _mrt._logger.warn(
                     "[REPAIR] 替换拒收反馈：codes=%s correction=%s terminal=%s"
                     % ([r.get("code") for r in _rej_records],
                        _apply_plan.get("correction_granted"),
                        _apply_plan.get("terminal")))
             return script
-        _logger.info(f"[REPAIR] 应用完整镜头替换 {_n_applied} 镜")
+        _mrt._logger.info(f"[REPAIR] 应用完整镜头替换 {_n_applied} 镜")
         # M02：留一份「合并后、后处理前」的深拷贝——后处理是在**同一个对象**上
         # 就地改写的（`script = merged` 之后各处 writer 直接写 `script`），不拷贝
         # 就没有任何基线能回答「授权改动有没有被后处理抵消」。
@@ -9852,7 +9617,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 效果登记消费同一份映射、同一份基线 revision。
         _frame_mappings_guard = dict(_frame_mappings)
         _frame_mappings_final = dict(_frame_mappings_guard)
-        _layout_struct_after_patch = frame_layout_structural_violations(
+        _layout_struct_after_patch = _mrt.frame_layout_structural_violations(
             _round_before_script, merged, _allowed_by_target, set(picked),
             frame_mappings=_frame_mappings_guard, revision=_effect_revision)
         # §14 P1 节点②：**授权合并后**就是效果的基线——它只含 LLM 的写入。
@@ -9866,7 +9631,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 revision=_effect_revision)
         except Exception as _eff_err:
             _effect_records = []
-            _logger.warn("[REPAIR] 布局效果登记失败（本轮按无效果处理）: %s" % _eff_err)
+            _mrt._logger.warn("[REPAIR] 布局效果登记失败（本轮按无效果处理）: %s" % _eff_err)
         # M01：授权集合在请求构造阶段（本函数前段）才生成，账本构造时它还不存在。
         # 在 merged 节点与第一个 writer 观测之前补上，让此后每个节点都冻结本轮
         # 授权路径的值指纹；缺了它就无法定位「首次把合并后取值改掉」的责任 writer。
@@ -9874,7 +9639,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         _effect_ledger.allowed_by_target = dict(_allowed_by_target or {})
         _effect_ledger.freeze_merged(merged, _effect_records)
         if _effect_records:
-            _logger.info(
+            _mrt._logger.info(
                 "[REPAIR] 本轮已授权布局效果 %d 条: %s"
                 % (len(_effect_records),
                    [(e["shot_id"], e["frame_locator"],
@@ -9909,7 +9674,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         _effect_bindings[RepairEffectView.binding_key(
                             _eff["shot_id"], _eff["frame_locator"], _name)] = _binding
                     except Exception as _bind_err:
-                        _logger.warn("[REPAIR] 人物绑定解析失败（按未解析处理）: %s"
+                        _mrt._logger.warn("[REPAIR] 人物绑定解析失败（按未解析处理）: %s"
                                      % _bind_err)
             # 只读视图：供**同一事务内**的约束按帧消费（本轮已授权删除的条目不得
             # 按类别别名重建）。没有它时约束行为逐字不变。
@@ -9938,7 +9703,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 修复后需重新算时间轴/注入全局渲染参数
         # 08-15 修复：正确函数在 style_prefix（_post_process:186 同款），原 import 自
         # shared.vimax_bridge 不存在 → 修复轮合并后 ImportError 崩溃，修复结果从未落地
-        merged = style_prefix.inject_global_config_into_script(merged)
+        merged = _mrt.style_prefix.inject_global_config_into_script(merged)
         # §14 P1 节点③之一：全局渲染参数注入**也是后处理 writer**（它改写 prompt 等
         # 字段）。只挂 `on_constraint_done` 覆盖不到它——少挂一个，抵消就会被归到
         # 后一个 writer 头上，责任 writer 指错比不指更坏。
@@ -9955,12 +9720,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # 正是修复轮需要的唯一职责。
         # 见 docs/step01-temporal-writers-implementation-review-2026-09-19.md 发现 3。
         try:
-            write_timeline_from_durations(merged)
+            _mrt.write_timeline_from_durations(merged)
         except Exception as _tl_e:
-            _logger.warn(f"[WARN] 修复轮 timeline 序列化失败（保留其自身时间轴）: {_tl_e}")
+            _mrt._logger.warn(f"[WARN] 修复轮 timeline 序列化失败（保留其自身时间轴）: {_tl_e}")
         _effect_ledger.observe_writer(WRITER_TIMELINE, merged)
         script = merged
-        _logger.info(f"[REPAIR] 第 {_round} 轮定向修复完成，重新校验...")
+        _mrt._logger.info(f"[REPAIR] 第 {_round} 轮定向修复完成，重新校验...")
     # 08-15：修复轮合并后强制再跑一遍 post_fix_shot_prompts（幂等）——merge 保留的
     # 旧镜头可能带着改版前就有的机械残留（如「迅速@lf」，parse_response 只修过
     # prompt/motion），确定性清掉；也防修复 LLM 引入新的机械噪音。下一轮
@@ -9976,7 +9741,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         try:
             script = _pfix(script)
         except Exception as _pfx:
-            _logger.warn(f"[WARN] 修复后 post_fix 失败（保留原版）: {_pfx}")
+            _mrt._logger.warn(f"[WARN] 修复后 post_fix 失败（保留原版）: {_pfx}")
         _effect_ledger.observe_writer(WRITER_POST_FIX, script)
         # 08-19：C 模式默认后，修复轮 LLM 可能删掉致命伤锚定（A→C 实测 2 个镜头"
         # 心口暗红洇痕"被删，违反规则 8 最高优先级）。修复完成后跑 hard_fix 致命伤
@@ -10009,7 +9774,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             from step01_script_gen.constraints.engine import ENV_FAULT_TYPES
             if isinstance(_hfx, ENV_FAULT_TYPES):
                 raise
-            _logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
+            _mrt._logger.warn(f"[WARN] 修复后 hard_fix 兜底失败（保留原版）: {_hfx}")
         _effect_ledger.observe_writer(WRITER_HARD_FIX, script)
         # 08-19：hard_fix_injury_continuity 按 location 精确匹配 + victim 提取不准，
         # 会漏判"仰卧但 location 写岸边"这类情况。此处保留**识别**，但不再补写正文
@@ -10045,7 +9810,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     continue  # 已有伤处锚，无需提示
                 _inj_candidates.append(_s.get("index", _i))
         if _inj_candidates:
-            _logger.warn(
+            _mrt._logger.warn(
                 "[REPAIR] 致命伤后疑似缺伤处描述（不自动补写，交终审判定）: 镜 %s"
                 % _inj_candidates)
         # §14 P1 节点③之三：原先此处**直写** `shot["prompt"]`，是后处理 writer。
@@ -10056,7 +9821,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         # v6.84：还原未点名镜头（`_frozen` 快照）——后处理不得改动事务外的镜头。
         _restored_n = _restore_untargeted(script, _frozen)
         if _restored_n:
-            _logger.info(f"[REPAIR] 事务内后处理已限定范围：还原 {_restored_n} 个未点名镜头")
+            _mrt._logger.info(f"[REPAIR] 事务内后处理已限定范围：还原 {_restored_n} 个未点名镜头")
         # §14 P1 节点③之四：还原未点名镜头同样是后处理 writer（它把事务外的镜头
         # 写回基线）。至此四个节点的中间三个全部落地，且**每个 writer 各自一个节点**。
         _effect_ledger.observe_writer(WRITER_RESTORE_UNTARGETED, script)
@@ -10087,7 +9852,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if _frame_locator_issues:
             _layout_struct_after_patch = list(_layout_struct_after_patch) \
                 + _frame_locator_issues
-            _logger.warn("[REPAIR] 帧定位符完整性否决 %d 条（结构变化 %d / "
+            _mrt._logger.warn("[REPAIR] 帧定位符完整性否决 %d 条（结构变化 %d / "
                          "观测错误 %d）: %s"
                          % (len(_frame_locator_issues),
                             len(_ledger_struct_changes),
@@ -10184,7 +9949,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 audit_attempted=audit_attempted,
                 merged_script=_post_merge_snapshot,
                 merged_state=_g7_merged_state(_post_merge_snapshot, novel_text))
-            _logger.info(
+            _mrt._logger.info(
                 "[REPAIR] 接受条件: "
                 f"before={_decision['before']}+audit{_decision['audit_targets']} "
                 f"after={_decision['after']} resolved={_decision['resolved']} "
@@ -10197,8 +9962,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 + (" 触达身份=" + str(_decision.get("audit_touched_ids"))
                    if _decision.get("audit_touched_ids") else "")
             )
-            _metrics_inc("repair.decisions")
-            _metrics_update("repair.last_decision", _decision)
+            _mrt._metrics_inc("repair.decisions")
+            _mrt._metrics_update("repair.last_decision", _decision)
             # v6.139：本轮兜底记账的问题身份先暂存——**轮次最终落定**（未被零改善/
             # 回退路径撤销）后才并入「已尝试」集合；被回退轮次的触达没进稿子，
             # 不消耗该身份的一次兜底记账名额。
@@ -10226,7 +9991,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     _effect_ledger, script,
                     bindings=dict(_effect_bindings))
             except Exception as _eff_cls_err:
-                _logger.warn("[REPAIR] 布局效果归因失败（沿用既有 reason）: %s"
+                _mrt._logger.warn("[REPAIR] 布局效果归因失败（沿用既有 reason）: %s"
                              % _eff_cls_err)
             if _effect_outcome.get("reason"):
                 _decision["effect_conflict"] = _effect_outcome
@@ -10235,7 +10000,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     # 「模型没修」，而账本已经证明模型改了、是后处理抵消的。
                     _decision["reason"] = _effect_outcome["reason"]
                     _decision["origin_reason"] = "no_target_resolved"
-                _logger.warn(
+                _mrt._logger.warn(
                     "[REPAIR] 已授权布局效果被抵消：reason=%s mechanism=%s "
                     "责任writer=%s 目标=%s 首次撤销=%s"
                     % (_effect_outcome["reason"], _effect_outcome.get("mechanism"),
@@ -10243,10 +10008,10 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                        _effect_outcome.get("targets"),
                        (_effect_outcome.get("first_revert") or {})))
             if _decision["accepted"]:
-                _metrics_inc("repair.accepted")
+                _mrt._metrics_inc("repair.accepted")
                 _round_ok = True
             else:
-                _metrics_inc("repair.rejected")
+                _mrt._metrics_inc("repair.rejected")
             # v6.102（第十六次修复项 #1）：**通过验收但零改善**也是空转。
             #
             # 实测（第十五次）：第 2/3 轮的 `before/after/resolved` **完全相同**
@@ -10300,7 +10065,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 _offend_raw = _locate_offending_targets(
                     _decision, set(picked), _locked_diff_round)
                 if _offend_raw:
-                    _logger.info(
+                    _mrt._logger.info(
                         "[REPAIR] 按闸门消息定位到肇事目标 %s（reason=%s）→ 只回退它们，"
                         "同轮其余目标的修复保留"
                         % (sorted(_offend_raw), _decision.get("reason")))
@@ -10314,7 +10079,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
             _rolled_back_groups: list = []
             if not _decision["accepted"] and _offend_raw:
                 if _nb_keys_round:
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[REPAIR] 新增 blocking %d 条（**按目标回退前**记录）: %s%s  "
                         "定位=%s"
                         % (len(_nb_keys_round), _nb_keys_round[:10],
@@ -10379,7 +10144,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                             kf_structural_violations=_kf_structural_violations(
                                 _round_before_script, _merged_try,
                                 _allowed_by_target, set(picked), novel_text),
-                            layout_structural_violations=frame_layout_structural_violations(
+                            layout_structural_violations=_mrt.frame_layout_structural_violations(
                                 _round_before_script, _merged_try,
                                 _allowed_by_target, set(picked),
                                 frame_mappings=_try_mappings,
@@ -10387,7 +10152,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                             merged_script=_merged_try,
                             merged_state=_g7_merged_state(_merged_try, novel_text))
                     except Exception as _try_err:
-                        _logger.warn(f"[REPAIR] 按目标回退尝试失败（退回整轮回退）: {_try_err}")
+                        _mrt._logger.warn(f"[REPAIR] 按目标回退尝试失败（退回整轮回退）: {_try_err}")
                         _dec_try = None
                     if _dec_try and _dec_try.get("accepted") and not _dec_try.get("new_blocking"):
                         script = _try_script
@@ -10412,9 +10177,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                                 bindings=dict(_effect_bindings))
                             _decision["effect_conflict"] = _effect_outcome or {}
                         except Exception as _eff_rb:
-                            _logger.warn("[REPAIR] 回退后效果归因重算失败: %s" % _eff_rb)
+                            _mrt._logger.warn("[REPAIR] 回退后效果归因重算失败: %s" % _eff_rb)
                         if _dropped:
-                            _logger.info("[REPAIR] 按目标回退同步撤销 %d 条已登记效果"
+                            _mrt._logger.info("[REPAIR] 按目标回退同步撤销 %d 条已登记效果"
                                          % _dropped)
                         # v6.139：决策换成了按目标回退后的版本，兜底记账身份同步
                         _touched_ids_round = list(_dec_try.get("audit_touched_ids") or [])
@@ -10423,16 +10188,16 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         _no_gain = (bool(_dec_try.get("accepted"))
                                     and not int(_dec_try.get("resolved") or 0)
                                     and not int(_dec_try.get("audit_field_touched") or 0))
-                        _metrics_inc("repair.accepted_after_target_rollback")
-                        _metrics_update("repair.last_decision", _dec_try)
-                        _logger.info(
+                        _mrt._metrics_inc("repair.accepted_after_target_rollback")
+                        _mrt._metrics_update("repair.last_decision", _dec_try)
+                        _mrt._logger.info(
                             "[REPAIR] 按目标回退 %s（origin_reason=%s）后通过验收："
                             "resolved=%d new=0（同轮其余目标的修复保留）"
                             % (sorted(_offend), _origin_reason,
                                _dec_try.get("resolved") or 0)
                         )
                         if _evidence_removed_round:
-                            _logger.warn(
+                            _mrt._logger.warn(
                                 "[REPAIR] 回退前判定（origin,%s）%s"
                                 % (_origin_reason, str(_evidence_removed_round[:2])[:300]))
                         for _t_rb in sorted(_rb_texts):
@@ -10440,12 +10205,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                             for _f, _bv in _rb_texts[_t_rb].items():
                                 _av = str(_s_after.get(_f) or "")
                                 if _bv != _av:
-                                    _logger.warn(
+                                    _mrt._logger.warn(
                                         "[REPAIR] 回退目标 %s.%s 修复稿⇒回退后：%s ⇒ %s"
                                         % (_t_rb, _f, _bv[:110], _av[:110]))
                     elif _dec_try:
                         # v6.137：回退重试失败必须可见（本 run 的盲区——重试为何没过无从归因）
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[REPAIR] 按目标回退 %s 后仍未通过验收"
                             "（reason=%s resolved=%s 字段触达=%s new=%s）→ 整轮回退"
                             % (sorted(_offend), _dec_try.get("reason"),
@@ -10460,7 +10225,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                             for _f, _rep in _rb_texts[_t_rb].items():
                                 _bs = str(_rb_base.get(_f) or "")
                                 if _bs != _rep:
-                                    _logger.warn(
+                                    _mrt._logger.warn(
                                         "[REPAIR] 回退未过 目标 %s.%s 基线⇒修复稿：%s ⇒ %s"
                                         % (_t_rb, _f, _bs[:110], _rep[:110]))
             if not _decision["accepted"] or not _round_ok:
@@ -10475,7 +10240,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 # v6.87：**必须打出到底什么变了**——`non_target_changed` 连续三次成为
                 # 回退原因，而日志从不说明是哪个镜头/哪个字段，只能靠事后复现才能定位。
                 if _decision.get("non_target_changed"):
-                    _logger.warn(
+                    _mrt._logger.warn(
                         f"[REPAIR] 非目标镜头被改动 {len(_decision['non_target_changed'])} 处: "
                         f"{_decision['non_target_changed'][:5]}"
                     )
@@ -10485,12 +10250,12 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     except Exception:
                         _fld = []
                     if _fld:
-                        _logger.warn(f"[REPAIR] 变化字段: {_fld}")
+                        _mrt._logger.warn(f"[REPAIR] 变化字段: {_fld}")
                     else:
                         # 自相矛盾要**说出来**，不能静默：`changed_shot_keys` 说这些镜头变了，
                         # 而语义字段逐个比对却无差异 → 说明两者口径不一致（或诊断调用点写错）。
                         # 这是把「诊断失效」本身变成可见信号——v6.93 就吃过一次静默失效。
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[REPAIR] ⚠️ 非目标改动不在语义字段内（诊断与逐镜 revision 口径不一致，"
                             "请查 `_shot_field_diff` 的调用点是否在回退之后）"
                         )
@@ -10501,28 +10266,28 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     except Exception:
                         _lsd = []
                     if _lsd:
-                        _logger.warn("[REPAIR] 锁定字段变化: %s" % _lsd)
+                        _mrt._logger.warn("[REPAIR] 锁定字段变化: %s" % _lsd)
                 if _decision.get("locked_by_llm_changed"):
-                    _logger.warn(
+                    _mrt._logger.warn(
                         f"[REPAIR] LLM 改动了锁定字段 "
                         f"{len(_decision['locked_by_llm_changed'])} 处: "
                         f"{_decision['locked_by_llm_changed'][:5]}"
                     )
                 if _decision.get("evidence_removed"):
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[REPAIR] 跨字段判据证据被删除 "
                         f"{len(_decision['evidence_removed'])} 处（删证据能让检测器闭嘴，"
                         "但那不是修复）："
                         f"{_decision['evidence_removed'][:3]}"
                     )
                 if _decision.get("postprocess_target_lost"):
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[REPAIR] 后处理丢失已达成的目标（target-loss）"
                         f"{len(_decision['postprocess_target_lost'])} 条，拒绝本轮: "
                         f"{_decision['postprocess_target_lost'][:3]}")
                 if _decision.get("new_blocking_keys"):
                     _nb_all = list(_decision["new_blocking_keys"])
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[REPAIR] 本轮新增 blocking "
                         f"{_decision['new_blocking']} 条: {_nb_all[:10]}"
                         + (f"（另 {len(_nb_all) - 10} 条见 step01_repair_rounds.json）"
@@ -10532,7 +10297,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                            if _decision.get("reindexed_kf_shots") else "")
                     )
                 if _decision.get("kf_structural_violations"):
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[REPAIR] KF 结构验收未过 "
                         f"{len(_decision['kf_structural_violations'])} 处（授权增删 KF 的"
                         "配套闸门，**只计本轮新引入/恶化的**：KF 须落在镜内且按时段单调，"
@@ -10540,7 +10305,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                         "绝对判定）："
                         f"{_decision['kf_structural_violations'][:3]}"
                     )
-                _logger.warn(
+                _mrt._logger.warn(
                     "[REPAIR] 修复未满足接受条件"
                     f"（reason={_decision['reason']}, resolved={_decision['resolved']}, "
                     f"字段触达={_decision.get('audit_field_touched', 0)}, "
@@ -10550,9 +10315,9 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 )
         except Exception as _acc_err:
             script = _round_before_script
-            _metrics_inc("repair.check_failed")
-            _metrics_set("repair.last_error", str(_acc_err))
-            _logger.warn(f"[REPAIR] 接受条件检查失败，回退本轮修复: {_acc_err}")
+            _mrt._metrics_inc("repair.check_failed")
+            _mrt._metrics_set("repair.last_error", str(_acc_err))
+            _mrt._logger.warn(f"[REPAIR] 接受条件检查失败，回退本轮修复: {_acc_err}")
         # ---- v6.119：本轮修复事务的诊断记录（含**回退前**捕获的 new_blocking_keys）----
         # 记录点在「决策已落地」之后、早退之前——下面两个 `return` 不会把诊断带走。
         # 台账消费方据此回答：这一轮引入了哪几条新阻塞、落在哪些镜头、回退了哪些
@@ -10685,7 +10450,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                     "effects_rolled_back": int(_decision.get("effects_rolled_back") or 0),
                 })
             except Exception as _diag_err:
-                _logger.warn(f"[REPAIR] 修复轮诊断记录失败（不影响结论）: {_diag_err}")
+                _mrt._logger.warn(f"[REPAIR] 修复轮诊断记录失败（不影响结论）: {_diag_err}")
         # §14 P3：**冲突进下一请求**，以及**相同冲突 + 请求信息无变化 ⇒ 停止盲修**.
         #
         # 判据只看「会改变下一轮请求内容」的那几项（原因/责任 writer/目标/被抵消的
@@ -10707,7 +10472,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                        _effect_outcome.get("targets"),
                        (_effect_outcome.get("first_revert") or {}).get("restored_names"))
                 )
-                _logger.error("[REPAIR] %s" % _seal)
+                _mrt._logger.error("[REPAIR] %s" % _seal)
                 if block_reasons is not None:
                     block_reasons.append(_seal)
                 if repair_diag is not None:
@@ -10817,7 +10582,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 retry_state.update(_tx_plan)
                 if _conflict_carry:
                     retry_state["layout_conflict"] = _conflict_carry
-            _logger.warn(
+            _mrt._logger.warn(
                 "[REPAIR] 事务拒收反馈：reason=%s codes=%s correction=%s terminal=%s"
                 % (_origin_reason,
                    [r.get("code") for r in _tx_recs],
@@ -10828,7 +10593,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 _retry_used = True
                 _rejected_targets |= set(_offend_raw)
                 _retry_feedback = _tx_plan.get("feedback") or ""
-                _logger.warn(
+                _mrt._logger.warn(
                     "[REPAIR] 带反馈重试（结构化）：剔除 %s，其余 %s 重新修复（仅一次）"
                     % (sorted(_offend_round), sorted(_remaining)))
                 continue
@@ -10837,8 +10602,8 @@ def _repair_shot_warnings(script: dict, novel_text: str,
         if _no_gain:
             # v6.102：通过验收但零改善 → 回退本轮（不留无收益的改写）并停止后续轮次
             script = _round_before_script
-            _metrics_inc("repair.no_gain_rolled_back")
-            _logger.warn(
+            _mrt._metrics_inc("repair.no_gain_rolled_back")
+            _mrt._logger.warn(
                 "[REPAIR] 本轮无任何可测量改善（resolved=0 / 字段触达=0）→ "
                 "回退本轮并停止后续轮次（继续发只会重复同一批目标）"
             )
@@ -10872,7 +10637,7 @@ def _repair_shot_warnings(script: dict, novel_text: str,
                 if _conflict_carry:
                     retry_state["layout_conflict"] = _conflict_carry
             return script
-        _metrics_inc("repair.rounds_accepted")
+        _mrt._metrics_inc("repair.rounds_accepted")
         # §14 P3：**通过验收的轮次**才把效果交出去（`effect_state`）。
         #
         # 为什么必须交出去：提交路径在 `_repair_shot_warnings` 之后还会跑一次
@@ -10923,38 +10688,38 @@ def _extract_assets_and_update_script(script: dict) -> None:
         script: script_result.json dict（原地修改，写入 scene_assets/prop_assets）
     """
     # -- 场景/道具资产提取（v6.43 08-25 改为并发跑）--
-    scene_assets_bank = SceneAssetsBank()
+    scene_assets_bank = _mrt.SceneAssetsBank()
     scene_assets_bank.load()
-    prop_assets_bank = PropAssetsBank()
+    prop_assets_bank = _mrt.PropAssetsBank()
     prop_assets_bank.load()
 
     _scene_assets: list = []
     _prop_assets: list = []
-    if SCENE_ASSET_EXTRACTION_ENABLED or PROP_ASSET_EXTRACTION_ENABLED:
-        _logger.info("[INFO] 并发提取 场景资产/道具资产（2 路并发）...")
+    if _mrt.SCENE_ASSET_EXTRACTION_ENABLED or _mrt.PROP_ASSET_EXTRACTION_ENABLED:
+        _mrt._logger.info("[INFO] 并发提取 场景资产/道具资产（2 路并发）...")
         from step01_script_gen.concurrent_extract import extract_assets_concurrent
         _asset_results = extract_assets_concurrent(
             script,
             scene_assets_bank,
             prop_assets_bank,
-            enable_scene_assets=SCENE_ASSET_EXTRACTION_ENABLED,
-            enable_props=PROP_ASSET_EXTRACTION_ENABLED,
-            log_func=_logger.info,
+            enable_scene_assets=_mrt.SCENE_ASSET_EXTRACTION_ENABLED,
+            enable_props=_mrt.PROP_ASSET_EXTRACTION_ENABLED,
+            log_func=_mrt._logger.info,
         )
 
         if _asset_results.get("scene_assets") is not None:
             _scene_assets = _asset_results["scene_assets"]
             for _sa in _scene_assets:
-                scene_assets_bank.register_scene(_sa, NOVEL_CHAPTER)
+                scene_assets_bank.register_scene(_sa, _mrt.NOVEL_CHAPTER)
             scene_assets_bank.save()
-            _logger.info(f"[INFO] 已提取 {len(_scene_assets)} 个场景资产（已保存到场景资产库）")
+            _mrt._logger.info(f"[INFO] 已提取 {len(_scene_assets)} 个场景资产（已保存到场景资产库）")
 
         if _asset_results.get("prop_assets") is not None:
             _prop_assets = _asset_results["prop_assets"]
             for _pa in _prop_assets:
-                prop_assets_bank.register_prop(_pa, NOVEL_CHAPTER)
+                prop_assets_bank.register_prop(_pa, _mrt.NOVEL_CHAPTER)
             prop_assets_bank.save()
-            _logger.info(f"[INFO] 已提取 {len(_prop_assets)} 个道具资产（已保存到道具资产库）")
+            _mrt._logger.info(f"[INFO] 已提取 {len(_prop_assets)} 个道具资产（已保存到道具资产库）")
 
     # 场景/道具资产描述写回 script，供 step02a 资产生成与 step02b r2v 参考引用
     _scene_assets_out = {}
@@ -10995,7 +10760,7 @@ def _extract_assets_and_update_script(script: dict) -> None:
         for _s in list(script.get("shots") or []) + ([script.get("hook")] if isinstance(script.get("hook"), dict) else []):
             if isinstance(_s, dict) and _s.get("scene") in _scene_alias_map:
                 _s["scene"] = _scene_alias_map[_s["scene"]]
-        _logger.info(f"[ASSET] 场景别名合并：{len(_scene_alias_map)} → {len(_scene_canonical)}")
+        _mrt._logger.info(f"[ASSET] 场景别名合并：{len(_scene_alias_map)} → {len(_scene_canonical)}")
     script["scene_assets"] = _scene_assets_out
 
     _prop_assets_out = {}
@@ -11009,12 +10774,12 @@ def _extract_assets_and_update_script(script: dict) -> None:
     # 真用 vs 幻觉"的盲区。
     from step01_script_gen.asset_extractor import audit_orphan_props
     _audit = audit_orphan_props(
-        prop_assets_bank, current_chapter=NOVEL_CHAPTER, current_script=script,
+        prop_assets_bank, current_chapter=_mrt.NOVEL_CHAPTER, current_script=script,
         orphan_window=3,
     )
     _hallucinated = set(_audit.get("hallucinated_now", []))
     if _hallucinated:
-        _logger.info(
+        _mrt._logger.info(
             f"[INFO] audit 拦截 bank 幻觉 prop: {len(_hallucinated)} 个 → {sorted(_hallucinated)}"
         )
     # 1) 本次 LLM 提的（优先，含新提的真用道具）
@@ -11027,7 +10792,7 @@ def _extract_assets_and_update_script(script: dict) -> None:
             if k in _pa
         }
     # 2) bank 中本章或上章用到且非幻觉的（LLM 漏提兜底）
-    _cutoff = NOVEL_CHAPTER - 1
+    _cutoff = _mrt.NOVEL_CHAPTER - 1
     for _pid in prop_assets_bank.get_all_identifiers():
         if _pid in _prop_assets_out or _pid in _hallucinated:
             continue
@@ -11081,11 +10846,11 @@ def _extract_assets_and_update_script(script: dict) -> None:
             _unused.append(_pid)
             _prop_assets_out.pop(_pid)
     if _unused:
-        _logger.info(
+        _mrt._logger.info(
             f"[INFO] 分镜未引用的道具已从 prop_assets 剔除（不生成资产图）: {sorted(_unused)}"
         )
     if _scene_assets_out or _prop_assets_out:
-        _logger.info(
+        _mrt._logger.info(
             f"[INFO] 场景资产 {len(_scene_assets_out)} 个 / 道具资产 {len(_prop_assets_out)} 个 已写入 script_result.json"
         )
 
@@ -11143,7 +10908,7 @@ def _snapshot_run_artifacts(script: dict | None = None, *, audit: dict | None = 
     try:
         import shutil
         import time as _time
-        snap_dir = OUTPUT_FILE.parent / "snapshots"
+        snap_dir = _mrt.OUTPUT_FILE.parent / "snapshots"
         snap_dir.mkdir(parents=True, exist_ok=True)
         ts = _time.strftime("%Y%m%d_%H%M%S")
         _snap_path = None
@@ -11158,11 +10923,11 @@ def _snapshot_run_artifacts(script: dict | None = None, *, audit: dict | None = 
                 from step01_script_gen import resume as _resume
                 _audit_copy = snap_dir / f"step01_audit_{ts}.json"
                 _adj(_audit_copy, audit, ensure_ascii=False, indent=2)
-                _novel_p, _novel_sha = _resume.freeze_text(OUTPUT_FILE.parent, novel_text)
+                _novel_p, _novel_sha = _resume.freeze_text(_mrt.OUTPUT_FILE.parent, novel_text)
                 _man = _resume.build_manifest(
-                    OUTPUT_FILE.parent, snapshot_path=_snap_path,
+                    _mrt.OUTPUT_FILE.parent, snapshot_path=_snap_path,
                     audit_path=_audit_copy, novel_text_path=_novel_p,
-                    run_id=_step01_run_id(), stage="block")
+                    run_id=_mrt._step01_run_id(), stage="block")
                 _man_p = snap_dir / f"step01_resume_{ts}.json"
                 _adj(_man_p, _man, ensure_ascii=False, indent=2)
                 # 写入后**读回核验**：路径与 revision 必须一致，否则恢复清单不可用
@@ -11171,12 +10936,12 @@ def _snapshot_run_artifacts(script: dict | None = None, *, audit: dict | None = 
                 from shared.quality_gate import compute_script_revision as _csr
                 if str(_back.get("script_revision")) != _csr(_rev_now):
                     raise RuntimeError("恢复清单 revision 与快照不一致")
-                _logger.info("[SNAPSHOT] 修后稿+审计+恢复清单已按 revision 关联: %s"
+                _mrt._logger.info("[SNAPSHOT] 修后稿+审计+恢复清单已按 revision 关联: %s"
                              % _man_p.name)
             except Exception as _pair_e:
-                _logger.warn("[SNAPSHOT] 配对审计/恢复清单写入失败（恢复将不可用）: %s"
+                _mrt._logger.warn("[SNAPSHOT] 配对审计/恢复清单写入失败（恢复将不可用）: %s"
                              % _pair_e)
-        log_file = OUTPUT_FILE.parent / "step01.log"
+        log_file = _mrt.OUTPUT_FILE.parent / "step01.log"
         if log_file.exists():
             _snapshot_log_delta(log_file, snap_dir / f"step01_{ts}.log", snap_dir)
         snaps = sorted(snap_dir.glob("script_result_*.json"))
@@ -11193,7 +10958,7 @@ def _snapshot_run_artifacts(script: dict | None = None, *, audit: dict | None = 
             old.unlink(missing_ok=True)
     except Exception as _snap_e:
         try:
-            _logger.warn(f"[SNAPSHOT] 快照失败（不影响主流程）: {_snap_e}")
+            _mrt._logger.warn(f"[SNAPSHOT] 快照失败（不影响主流程）: {_snap_e}")
         except Exception:
             pass
 
@@ -11229,7 +10994,7 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
         from shared.json_io import atomic_dump_json as _adj
         from shared.quality_gate import compute_script_revision as _csr
         import hashlib
-        snap_dir = OUTPUT_FILE.parent / "snapshots"
+        snap_dir = _mrt.OUTPUT_FILE.parent / "snapshots"
         snap_dir.mkdir(parents=True, exist_ok=True)
         path = snap_dir / ("%s%02d.json" % (REPAIR_ROUND_PREFIX, int(round_no)))
         _adj(path, script, ensure_ascii=False, indent=2)
@@ -11254,9 +11019,9 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
         from shared import step01_checkpoint as _ckpt
         try:
             rec["checkpoint"] = _ckpt.write(
-                OUTPUT_FILE.parent, _ckpt.CP4_REPAIR_ROUND_K_DONE, script=script,
+                _mrt.OUTPUT_FILE.parent, _ckpt.CP4_REPAIR_ROUND_K_DONE, script=script,
                 audit=audit, round_no=int(round_no),
-                extra={"run_id": _step01_run_id()}, log=_logger)
+                extra={"run_id": _mrt._step01_run_id()}, log=_mrt._logger)
         except Exception as _degrade_exc:  # noqa: BLE001
             from shared.degrade import note_degraded as _note_degraded
             _note_degraded("step01_script_gen/main.py:_persist_repair_round", _degrade_exc)
@@ -11281,13 +11046,13 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
             _audit_path = str(os.getenv("STEP01_AUDIT_SOURCE") or "").strip()
             if not _audit_path:
                 for _n in ("step01_audit.json", "step01_audit.blocked.json"):
-                    _p = OUTPUT_FILE.parent / _n
+                    _p = _mrt.OUTPUT_FILE.parent / _n
                     if _p.is_file():
                         _audit_path = str(_p)
                         break
             _novel_src = ""
             if novel_text:
-                _nd = OUTPUT_FILE.parent / "_resume"
+                _nd = _mrt.OUTPUT_FILE.parent / "_resume"
                 _nd.mkdir(parents=True, exist_ok=True)
                 _ndig = hashlib.sha256(novel_text.encode("utf-8")).hexdigest()
                 _np = _nd / ("novel_%s.txt" % _ndig[:12])
@@ -11296,10 +11061,10 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
                 _novel_src = str(_np)
             if _audited and _audit_path and _novel_src:
                 _man = _resume.build_pending_manifest(
-                    OUTPUT_FILE.parent, audited_snapshot_path=_audited,
+                    _mrt.OUTPUT_FILE.parent, audited_snapshot_path=_audited,
                     audit_path=_audit_path, pending_path=path,
                     round_no=int(round_no), novel_text_path=_novel_src)
-                _mp = OUTPUT_FILE.parent / _resume.MANIFEST_NAME
+                _mp = _mrt.OUTPUT_FILE.parent / _resume.MANIFEST_NAME
                 _adj(_mp, _man, ensure_ascii=False, indent=2)
                 rec["resume_manifest"] = {"path": str(_mp), "written": True,
                                           "next_action": _man.get("next_action")}
@@ -11315,12 +11080,12 @@ def _persist_repair_round(script: dict, *, round_no: int, audit: "dict | None" =
             _adj(snap_dir / REPAIR_ROUND_POINTER, rec, ensure_ascii=False, indent=2)
         except Exception:                          # noqa: BLE001
             pass
-        _logger.info("[SNAPSHOT] 修复轮 %d 采纳稿已落盘（%s，revision=%s）——复审前即持久化"
+        _mrt._logger.info("[SNAPSHOT] 修复轮 %d 采纳稿已落盘（%s，revision=%s）——复审前即持久化"
                      % (int(round_no), path.name, rev[:12]))
     except Exception as _e:                       # noqa: BLE001
         rec["error"] = "%s: %s" % (type(_e).__name__, _e)
         try:
-            _logger.warn("[SNAPSHOT] 修复轮 %d 采纳稿落盘失败（复审仍继续，但本次成果"
+            _mrt._logger.warn("[SNAPSHOT] 修复轮 %d 采纳稿落盘失败（复审仍继续，但本次成果"
                          "不可恢复）: %s" % (int(round_no), _e))
         except Exception:
             pass
@@ -11331,579 +11096,6 @@ def _paired_repair_budget() -> dict:
     """兼容壳：实现已迁到 ``repair_loop.paired_repair_budget``（M1，2026-11-18）."""
     from step01_script_gen.repair_loop import paired_repair_budget
     return paired_repair_budget()
-
-
-def _pid_is_alive(pid: int) -> bool:
-    """安全查询 PID 是否存活（Windows 不使用 os.kill(pid, 0)）.
-
-    Windows 的 os.kill(pid, 0) 会调用 TerminateProcess，而不是 POSIX 的
-    「只探测不发送信号」。因此 Windows 必须走 OpenProcess；无权查询时保守
-    当作存活，避免误删其他进程持有的 chapter 锁。
-    """
-    if pid <= 0:
-        return False
-    import os as _os
-    if _os.name != "nt":
-        try:
-            _os.kill(pid, 0)
-            return True
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-
-    import ctypes
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _process_query_limited_information = 0x1000
-    _synchronize = 0x00100000
-    _handle = _kernel32.OpenProcess(
-        _process_query_limited_information | _synchronize,
-        False,
-        pid,
-    )
-    if _handle:
-        _kernel32.CloseHandle(_handle)
-        return True
-    # ERROR_ACCESS_DENIED：进程存在但当前用户无权打开。
-    return ctypes.get_last_error() == 5
-
-
-def _acquire_step01_lock() -> bool:
-    """章节级 single-flight 锁：禁止两个 step01 并发写同一章.
-
-    O_EXCL 创建 .step01.lock；创建者 PID 已退出才允许接管 stale 锁。
-    """
-    import os as _os
-    import time as _time
-    CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
-    lock_path = CHAPTER_DIR / ".step01.lock"
-    try:
-        fd = _os.open(lock_path, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL)
-        with _os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"pid": _os.getpid(), "started_at": _time.strftime("%Y-%m-%d %H:%M:%S")}, f)
-        return True
-    except FileExistsError:
-        try:
-            with open(lock_path, "r", encoding="utf-8") as f:
-                info = json.load(f)
-            pid = int(info.get("pid", 0))
-        except Exception:
-            pid = 0
-        if pid <= 0:
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
-            return _acquire_step01_lock()
-        if _pid_is_alive(pid):
-            _logger.warn(f"[LOCK] 已有 step01 运行中（PID={pid}），本次跳过")
-            _console(f"[LOCK] 已有 step01 运行中（PID={pid}），本次跳过")
-            return False
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
-        return _acquire_step01_lock()
-
-
-def _release_step01_lock() -> None:
-    """仅删除本进程创建的锁，避免释放他人锁."""
-    import os as _os
-    lock_path = CHAPTER_DIR / ".step01.lock"
-    try:
-        if not lock_path.exists():
-            return
-        with open(lock_path, "r", encoding="utf-8") as f:
-            info = json.load(f)
-        if int(info.get("pid", 0)) == _os.getpid():
-            lock_path.unlink()
-    except Exception as _e:
-        _logger.warn(f"[LOCK] 释放 step01 锁失败: {_e}")
-
-
-def _candidate_early_stop_enabled() -> bool:
-    """候选早停开关，默认开启；=0 时保持 v6.65「凑满 TOPK」旧行为."""
-    import os as _os
-    return _os.getenv("CANDIDATE_EARLY_STOP", "1").strip() != "0"
-
-
-def _candidate_gen_timeout_sec() -> int | None:
-    """候选生成请求级超时（v6.70.3，默认 300s；env 设 0 = 回退 provider 默认 600s）.
-
-    09-14 实测：候选 3 耗 12 分钟把「100 分候选 64s 到手」的 run 拖成 17m38s；
-    超时判 success=False → 走既有「失败重试/凑不够就用手头候选」路径，不再盲等。
-    """
-    import os as _os
-    try:
-        _v = int(_os.getenv("CANDIDATE_GEN_TIMEOUT_SEC", "300"))
-    except ValueError:
-        _v = 300
-    return _v if _v > 0 else None
-
-
-def _full_script_timeout_sec() -> int | None:
-    """全脚本级 LLM 调用超时（GAP 重生 / 结构收敛，v6.70.3 默认 300s）.
-
-    v6.101：结构收敛轮从 `_repair_timeout_sec()`（180s）改到本档——它也是
-    「整章输入 + 整脚本输出（~26k token）」，与 GAP 重生同量级；
-    第十四次重跑实测 180s 不够（客户端超时 → 候选拿不到）。
-    """
-    import os as _os
-    try:
-        _v = int(_os.getenv("FULL_SCRIPT_TIMEOUT_SEC", "300"))
-    except ValueError:
-        _v = 300
-    return _v if _v > 0 else None
-
-
-def _repair_timeout_sec() -> int | None:
-    """定向修复/超限收敛/hook 超时（v6.70.3 默认 180s）.
-
-    这些站点失败语义都是「保留原版继续」，600s 盲等只会把整轮拖死（09-13/14
-    两晚修复轮 + hook 重生各白等一次 600s）。
-    """
-    import os as _os
-    try:
-        _v = int(_os.getenv("REPAIR_TIMEOUT_SEC", "180"))
-    except ValueError:
-        _v = 180
-    return _v if _v > 0 else None
-
-
-# ============================================================================
-# v6.70.3（09-14）：阶段计时 + 总预算
-# 09-14 监控审计发现 17m38s 的 run 无任何结构化耗时数据，事后只能靠日志时间戳
-# 人工拼时间线。timing 落盘 step01_timing.json；预算超时跳过「失败即保留原版」
-# 语义的可选修复轮（regen_over_limit / repair rounds），核心链路（候选/GAP/hook）不受影响。
-# ============================================================================
-_STEP_TIMING: list = []
-_STEP_TIMING_T0 = None
-#: run 级计时起点的 monotonic 孪生（`_timing_start()` 一起设；墙上时钟会被系统时间调整
-#: 污染，**截止时刻只认 monotonic**——工作包 §4 B）
-_STEP_TIMING_T0_MONO = None
-_STEP_LAST_MARK_T = None
-_RUN_METRICS: dict = {}
-_METRICS_LOCK = None
-#: **本轮终局**（落进 metrics/timing）：`{"status": "ok"|"failed", "code": "", "detail": ""}`。
-#: 由 `_run_finish()` 设置；`_timing_dump` / `_metrics_dump` 只读它，
-#: 不再各自硬编码 "ok"（2026-10-02 复核：失败运行被报成 ok）。
-_RUN_OUTCOME: dict = {"status": "ok", "code": "", "detail": ""}
-
-
-def _run_outcome_reset() -> None:
-    _RUN_OUTCOME.update({"status": "ok", "code": "", "detail": ""})
-
-
-def _run_finish(status: str, code: str = "", detail: str = "") -> None:
-    """记录本轮终局（幂等：**失败优先**，失败后再写 ok 不覆盖）."""
-    _s = str(status or "").strip() or "ok"
-    if _RUN_OUTCOME["status"] == "failed" and _s == "ok":
-        return
-    _RUN_OUTCOME.update({"status": _s, "code": str(code or ""), "detail": str(detail or "")[:300]})
-
-
-def _metrics_lock():
-    global _METRICS_LOCK
-    if _METRICS_LOCK is None:
-        import threading as _threading
-        _METRICS_LOCK = _threading.Lock()
-    return _METRICS_LOCK
-
-
-def _metrics_bucket(path: str) -> dict:
-    """Create/return a nested metrics bucket for dotted path."""
-    cur = _RUN_METRICS
-    for part in path.split("."):
-        if not part:
-            continue
-        nxt = cur.get(part)
-        if not isinstance(nxt, dict):
-            nxt = {}
-            cur[part] = nxt
-        cur = nxt
-    return cur
-
-
-def _metrics_inc(path: str, n: int = 1) -> None:
-    try:
-        with _metrics_lock():
-            parts = path.split(".")
-            cur = _RUN_METRICS
-            for part in parts[:-1]:
-                nxt = cur.get(part)
-                if not isinstance(nxt, dict):
-                    nxt = {}
-                    cur[part] = nxt
-                cur = nxt
-            key = parts[-1]
-            cur[key] = int(cur.get(key, 0) or 0) + int(n)
-    except Exception:
-        pass
-
-
-def _metrics_set(path: str, value) -> None:
-    try:
-        with _metrics_lock():
-            parts = path.split(".")
-            cur = _RUN_METRICS
-            for part in parts[:-1]:
-                nxt = cur.get(part)
-                if not isinstance(nxt, dict):
-                    nxt = {}
-                    cur[part] = nxt
-                cur = nxt
-            cur[parts[-1]] = value
-    except Exception:
-        pass
-
-
-def _metrics_update(path: str, values: dict) -> None:
-    try:
-        with _metrics_lock():
-            bucket = _metrics_bucket(path)
-            bucket.update(values or {})
-    except Exception:
-        pass
-
-
-def _metrics_dump(path) -> None:
-    """Persist structured call/time/repair metrics without affecting the run.
-
-    2026-10-02 复核：载荷里**必须**有 `run_id` 与**真实终局**——旧版两章都以
-    `PlanInfeasibleError` 收场，metrics 却写 `_total status=ok` 且 `calls={}`，
-    等于把失败运行报成成功、且无任何调用读数可对账。
-    """
-    try:
-        import time as _t
-        from shared.json_io import atomic_dump_json as _adj
-
-        payload = dict(_RUN_METRICS)
-        payload["run_id"] = _step01_run_id()
-        payload["status"] = _RUN_OUTCOME["status"]
-        payload["outcome_code"] = _RUN_OUTCOME["code"]
-        payload["phases"] = list(_STEP_TIMING)
-        if _STEP_TIMING_T0 is not None:
-            payload["total_elapsed_sec"] = round(_t.time() - _STEP_TIMING_T0, 1)
-        _adj(path, payload, ensure_ascii=False, indent=2)
-    except Exception as _e:
-        try:
-            _logger.warn(f"[METRICS] metrics 落盘失败（不阻断）: {_e}")
-        except Exception:
-            pass
-
-
-def _timing_start() -> None:
-    """run 级计时起点（main() 拿锁后调用）."""
-    global _STEP_TIMING_T0, _STEP_LAST_MARK_T, _STEP_TIMING_T0_MONO
-    import time as _t
-    _STEP_TIMING_T0 = _t.time()
-    _STEP_TIMING_T0_MONO = _t.monotonic()          # 截止时刻只用 monotonic（工作包 §4 B）
-    _STEP_LAST_MARK_T = _STEP_TIMING_T0
-    _STEP_TIMING.clear()
-    _run_outcome_reset()
-    _RUN_METRICS.clear()
-    _RUN_METRICS.update({
-        "run_started": _STEP_TIMING_T0,
-        "calls": {},
-        "repair": {},
-        "audit": {},
-        "hook": {},
-        "duration": {},
-        "quality": {},
-    })
-
-
-def _project_commit_outcome(commit_summary: dict | None) -> None:
-    """提交结果 → **运行终局**（两处提交返回共用的唯一投影）.
-
-    复核 2026-10-04 C1：章 2 那次 `step01_commit.json` = BLOCK（5 条 blocking、修复轮零改善），
-    而 `step01_metrics.json` / `step01_timing.json` 记的是 `status=ok`、`outcome_code=""`
-    ——提交点是**唯一的正式产物出口**，它 BLOCK 就是这一轮失败，运行终局不能报 ok。
-    审计自己的 `audit_status=ok` 留在提交清单里（那是"审计调用成功"的事实，不冲突）。
-
-    失败优先：`_run_finish` 本身幂等，早期已记的失败不会被这里的 `ok` 覆盖。
-    """
-    _s = (commit_summary or {}).get("status")
-    if _s == "COMMITTED":
-        _run_finish("ok")
-        return
-    _detail = str((commit_summary or {}).get("detail") or "")
-    _code = str((commit_summary or {}).get("blocking_code") or "") or "commit_blocked"
-    _run_finish("failed", _code, _detail or "提交点未产出 COMMITTED 清单")
-
-
-def _timing_mark(phase: str, status: str = "ok", **fields) -> None:
-    """记录一个阶段完成点（毫秒级开销，失败静默）.
-
-    ``elapsed_sec`` is cumulative since run start and is retained for backward
-    compatibility.  ``phase_duration_sec`` is the independent duration since
-    the previous mark, which is the field optimization work should consume.
-    """
-    global _STEP_LAST_MARK_T
-    import time as _t
-    try:
-        if _STEP_TIMING_T0 is None:
-            return
-        now = _t.time()
-        last = _STEP_LAST_MARK_T if _STEP_LAST_MARK_T is not None else _STEP_TIMING_T0
-        _rec = {
-            "phase": phase,
-            "status": status,
-            "phase_duration_sec": round(max(0.0, now - last), 1),
-            "elapsed_since_start_sec": round(now - _STEP_TIMING_T0, 1),
-            # Backward-compatible alias; treat as cumulative, not phase cost.
-            "elapsed_sec": round(now - _STEP_TIMING_T0, 1),
-        }
-        _STEP_LAST_MARK_T = now
-        _rec.update(fields)
-        _STEP_TIMING.append(_rec)
-    except Exception:
-        pass
-
-
-def _timing_dump(path) -> None:
-    """落盘 timing JSON（失败只告警，绝不影响主流程）."""
-    try:
-        import time as _t
-        if _STEP_TIMING_T0 is not None:
-            now = _t.time()
-            last = _STEP_LAST_MARK_T if _STEP_LAST_MARK_T is not None else _STEP_TIMING_T0
-            _STEP_TIMING.append({
-                "phase": "_total", "status": _RUN_OUTCOME["status"],
-                "phase_duration_sec": round(max(0.0, now - last), 1),
-                "elapsed_since_start_sec": round(now - _STEP_TIMING_T0, 1),
-                # Backward-compatible alias; cumulative, not phase cost.
-                "elapsed_sec": round(now - _STEP_TIMING_T0, 1),
-            })
-        _payload = {"run_started": _STEP_TIMING_T0, "run_id": _step01_run_id(),
-                    "status": _RUN_OUTCOME["status"],
-                    "outcome_code": _RUN_OUTCOME["code"],
-                    "phases": _STEP_TIMING}
-        import json as _json
-        from shared.json_io import atomic_dump_json as _adj
-        _adj(path, _payload, ensure_ascii=False, indent=2)
-    except Exception as _e:
-        try:
-            _logger.warn(f"[TIMING] timing 落盘失败（不阻断）: {_e}")
-        except Exception:
-            pass
-
-
-def _total_budget_sec() -> float:
-    """run 总预算（v6.70.3 起默认 900s；2026-11-15 提到 1200s；0 = 不限时）.
-
-    2026-11-15（run 20261115T140440g 实测）：900s 下 plan/修复阶段方差一大，
-    最终语义审计只剩 186s 墙钟（审计实际耗时 274–420s）→ SSE 未收完按调用失败
-    BLOCK——内容全对、纯粹时间不够。1200s 给审计留足 480s 余量。
-    """
-    import os as _os
-    try:
-        _v = float(_os.getenv("STEP01_TOTAL_BUDGET_SEC", "1200"))
-    except ValueError:
-        _v = 1200.0
-    return _v
-
-
-def _budget_exceeded() -> bool:
-    """超预算判定（未 start 或预算 0 = False）."""
-    import time as _t
-    if _STEP_TIMING_T0 is None or _total_budget_sec() <= 0:
-        return False
-    return (_t.time() - _STEP_TIMING_T0) > _total_budget_sec()
-
-
-def _paused_checkpoint_enabled() -> bool:
-    """PAUSED 落盘开关（T1，默认关闭 = 入口行为与改造前逐字一致）.
-
-    只控制「超时是否把最新 CP 记成 PAUSED」这一保护性副作用；不控制
-    `STEP01_TOTAL_BUDGET_SEC` 的判定与默认值（仍默认 1200s，0=不限时）。
-    """
-    return str(os.getenv("STEP01_PAUSED_CHECKPOINT", "")).strip().lower() in (
-        "1", "true", "yes", "on")
-
-
-def _record_budget_pause(reason: str, *, run_id: str = "") -> dict:
-    """超时/预算不足时把**最近完成的 CP** 记为 PAUSED；失败只告警，不抛.
-
-    记录字段：`stage`（暂停态）、`checkpoint_stage`（四态）、`resume_from`
-    （CP1–CP4）、`run_id`、`revision`、`written_at`、`reason`。写入落在
-    `snapshots/_paused.json`，不碰四态索引——`latest()` 的正常语义保持不变。
-    """
-    rec: dict = {"written": False, "skipped": False, "reason": reason, "error": ""}
-    if not _paused_checkpoint_enabled():
-        rec["skipped"] = True
-        rec["detail"] = "STEP01_PAUSED_CHECKPOINT 未启用（默认行为不变）"
-        return rec
-    try:
-        from shared import step01_checkpoint as _ckpt
-        _latest = _ckpt.latest(CHAPTER_DIR)
-        if not _latest:
-            rec["detail"] = "没有已完成阶段检查点，无法记录 PAUSED"
-            return rec
-        _key = str(_latest.get("key") or "")
-        _cp = _key
-        if _key.startswith(_ckpt.CP4_REPAIR_ROUND_K_DONE + "_r"):
-            _cp = _ckpt.CP4_REPAIR_ROUND_K_DONE
-        _elapsed = None
-        if _STEP_TIMING_T0 is not None:
-            import time as _t
-            _elapsed = round(max(0.0, _t.time() - _STEP_TIMING_T0), 1)
-        rec.update(_ckpt.write_paused(
-            CHAPTER_DIR, _cp,
-            run_id=str(run_id or _step01_run_id()),
-            revision=str(_latest.get("revision") or ""),
-            reason=reason,
-            extra={"checkpoint_key": _key,
-                   "budget_sec": _total_budget_sec(),
-                   "elapsed_sec": _elapsed},
-            log=_logger))
-        rec["reason"] = reason
-        if rec.get("written"):
-            _logger.warn("[BUDGET] 已记录 PAUSED 检查点（%s，续跑起点 %s）"
-                         % (rec.get("stage"), rec.get("resume_from")))
-    except Exception as _e:                       # noqa: BLE001
-        rec["error"] = "%s: %s" % (type(_e).__name__, _e)
-        try:
-            _logger.warn("[BUDGET] PAUSED 检查点写入失败（不改变超时结论）: %s" % _e)
-        except Exception:
-            pass
-    return rec
-
-
-def _budget_exceeded_with_pause(reason: str) -> bool:
-    """`_budget_exceeded()` 的接线壳：超时先落 PAUSED，再返回同一结论.
-
-    未超时零副作用；`STEP01_PAUSED_CHECKPOINT` 未启用时与 `_budget_exceeded()`
-    逐字等价（只多一次不写盘的开关判断）。
-    """
-    if not _budget_exceeded():
-        return False
-    _record_budget_pause(reason)
-    return True
-
-
-def _planning_deadline_at(cap_sec=None):
-    """整次 Step 01 的**规划截止时刻**（monotonic 绝对时刻；工作包 §4 B）.
-
-    `deadline = min(整次剩余预算换算出的截止点, 现在 + cap_sec)`；两者都没有 ⇒ `None`
-    （不设截止 ⇒ 通道行为同改造前）。换算只做**一次**，此后所有环节按它重算余量。
-    """
-    from _text_gen.deadline import planning_deadline_at
-    return planning_deadline_at(_budget_left_sec(), cap_sec)
-
-
-def _budget_left_sec():
-    """run 总预算**剩余秒数**（未 start 或预算 0 → None）."""
-    import time as _t
-    if _STEP_TIMING_T0 is None:
-        return None
-    _total = _total_budget_sec()
-    if _total <= 0:
-        return None
-    return round(_total - (_t.time() - _STEP_TIMING_T0), 1)
-
-
-#: 审计请求超时上限（v6.152 / A1）：对齐通道自身的 `AGENT_PLAN_TEXT_TIMEOUT_SEC` = 300
-AUDIT_TIMEOUT_CAP_SEC = 300
-#: 给提交收尾（写盘 / 自检 / BLOCK 记账）留的余量秒数
-AUDIT_COMMIT_RESERVE_SEC = 60
-
-
-def _audit_budget_allowance() -> tuple:
-    """**整次审计**的可用时长与截止时刻：`(allowance_sec, deadline_ts | None, info)`.
-
-    v6.152（A1，2026-09-29 复核两轮）：上限 180 → 300（对齐通道自身），且**必须受本跑
-    剩余总预算约束**——实测单跑已到 950–995s，只抬上限等于把「审计超时 BLOCK」换成
-    「总预算耗尽 BLOCK」。
-
-    这里给的是**整次审计**（含截断/解析重采样）的额度，不是单次请求的超时：调用方把它
-    换成 `deadline_ts` 传进审计，由审计在**每次实际发起前**重算单次超时；剩余不足以
-    发起一次有意义的调用时，审计**不发请求**、直接记 `budget_exhausted`。
-    旧实现给单次请求截一个 5s 下限，既注定超时、又照样挤占收尾余量。
-
-    无总预算约束（未 start / 预算 0）→ `deadline_ts=None`，行为与旧版一致。
-    """
-    import os as _os
-    try:
-        cap = int(float(_os.getenv("AUDIT_TIMEOUT_SEC",
-                                   str(AUDIT_TIMEOUT_CAP_SEC)) or AUDIT_TIMEOUT_CAP_SEC))
-    except (TypeError, ValueError):
-        cap = AUDIT_TIMEOUT_CAP_SEC
-    left = _budget_left_sec()
-    if left is None:
-        return cap, None, {"cap": cap, "left": None, "reserve": None,
-                           "why": "无总预算约束（未 start 或预算 0），用上限 %ss" % cap}
-    allowance = int(max(0, min(cap, left - AUDIT_COMMIT_RESERVE_SEC)))
-    import time as _t
-    if allowance >= cap:
-        return cap, _t.time() + cap, {
-            "cap": cap, "left": left, "reserve": AUDIT_COMMIT_RESERVE_SEC,
-            "why": "余量充足，用上限 %ss" % cap}
-    return allowance, _t.time() + allowance, {
-        "cap": cap, "left": left, "reserve": AUDIT_COMMIT_RESERVE_SEC,
-        "why": ("上限 %ss 受剩余总预算约束（剩余 %.1fs - 收尾预留 %ss）"
-                % (cap, left, AUDIT_COMMIT_RESERVE_SEC)),
-    }
-
-
-# ---------------------------------------------------------------------------
-# M04（2026-11-15）：审计预算准入 / 冻结候选 / 四项计时
-#
-# 缺口：`_audit_budget_allowance()` 只在审计**即将开始时**截短额度，前序的
-# 额外生成 / 再生成 / 修复可以把时间烧到只剩 126s（run i），再抬总预算也补不回
-# 完整审计。这里在**每个额外动作启动之前**先按「本次动作 + 最终生效审计上限 +
-# 提交收尾」判定；不足即保存冻结候选与 `budget_exhausted` 明确终局。
-# ---------------------------------------------------------------------------
-def _final_audit_reserve_config(*, include_runtime: bool = False) -> dict:
-    """最终生效的审计配置身份。
-
-    默认**只含稳定项**，供冻结候选与续验比对；`include_runtime=True` 另带
-    随时刻变化的读数（剩余预算 / 本次审计允许时长），**不得**进配置指纹。
-    """
-    _allow, _deadline, _to_info = _audit_budget_allowance()
-    cfg = {
-        "audit_timeout_cap_sec": int(_to_info.get("cap") or AUDIT_TIMEOUT_CAP_SEC),
-        "commit_reserve_sec": AUDIT_COMMIT_RESERVE_SEC,
-        "total_budget_sec": _total_budget_sec(),
-        "audit_scope": STEP01_AUDIT_SCOPE,
-        "rule_source_fingerprint": RULE_SOURCE_FINGERPRINT,
-    }
-    if include_runtime:
-        cfg["audit_allowance_sec"] = int(_allow)
-        cfg["left_sec"] = _budget_left_sec()
-    return cfg
-
-
-def _action_cost_sec(kind: str) -> float:
-    """「本次动作」的保守耗时 = 该动作**最终生效的超时上限**（最坏情况）。
-
-    取的是配置上限，不是猜出来的预估：regen 走通道超时，修复轮走
-    `_repair_timeout_sec()`。任何取不到的情形回退到通道默认 300s。
-    """
-    if str(kind) == "repair":
-        try:
-            return float(_repair_timeout_sec() or 300)
-        except Exception:
-            return 300.0
-    try:
-        return float(os.getenv("AGENT_PLAN_TEXT_TIMEOUT_SEC", "300") or 300)
-    except (TypeError, ValueError):
-        return 300.0
-
-
-def _action_budget_admission(action: str, action_cost_sec: float) -> dict:
-    """用**既有预算函数**的读数跑纯函数准入，不另造一套剩余预算计算."""
-    from step01_script_gen.repair_budget import admit_action
-    cfg = _final_audit_reserve_config()
-    adm = admit_action(
-        remaining_budget_sec=_budget_left_sec(),
-        action_cost_sec=action_cost_sec,
-        audit_cap_sec=cfg["audit_timeout_cap_sec"],
-        commit_reserve_sec=cfg["commit_reserve_sec"])
-    rec = adm.as_record()
-    rec["action"] = str(action or "")
-    rec["audit_config"] = cfg
-    return rec
 
 
 def _budget_freeze_root(run_id: str = "") -> str:
@@ -11922,7 +11114,7 @@ def _freeze_budget_exhausted(script: dict, *, action: str, admission: dict,
     """
     from step01_script_gen.repair_budget import freeze_candidate
     from shared.json_io import atomic_dump_json as _dump
-    _run = str(run_id or "").strip() or _step01_run_id()
+    _run = str(run_id or "").strip() or _mrt._step01_run_id()
     _root = _budget_freeze_root(_run)
     _meta = _final_audit_metadata(script, run_id=_run)
     rec = freeze_candidate(
@@ -11939,8 +11131,8 @@ def _freeze_budget_exhausted(script: dict, *, action: str, admission: dict,
     except Exception as _e:
         rec["written"] = False
         rec["write_error"] = "%s: %s" % (type(_e).__name__, _e)
-        _logger.warn("[BUDGET] 冻结候选落盘失败（终局不变）: %s" % _e)
-    _logger.error("[BUDGET] %s 准入失败（剩余 %.1fs < 需要 %.1fs）→ "
+        _mrt._logger.warn("[BUDGET] 冻结候选落盘失败（终局不变）: %s" % _e)
+    _mrt._logger.error("[BUDGET] %s 准入失败（剩余 %.1fs < 需要 %.1fs）→ "
                   "budget_exhausted；冻结候选=%s"
                   % (action, float(admission.get("remaining_budget_sec") or 0),
                      float(admission.get("required_sec") or 0), _root))
@@ -11955,88 +11147,9 @@ def _verify_budget_resume(record: dict, script: dict, *,
     return verify_frozen_candidate(
         record, script=script,
         input_revision=str(_meta.get("input_revision") or ""),
-        audit_config=_final_audit_reserve_config(),
+        audit_config=_mrt._final_audit_reserve_config(),
         rule_fingerprint=str(_meta.get("rule_source_fingerprint") or ""),
         budget_admission=admission)
-
-
-def _audit_budget_timing(result, *, allowance_sec, left_sec,
-                         phase: str = "final_audit") -> dict:
-    """把四项读数**分别**记成结构化台账项；不可得为 None 且标来源."""
-    from step01_script_gen.repair_budget import budget_timing_record
-    _t = dict(getattr(result, "timing", None) or {})
-    rec = budget_timing_record(
-        remaining_budget_sec=left_sec,
-        audit_allowance_sec=allowance_sec,
-        server_wait_sec=_t.get("server_wait_sec"),
-        stream_elapsed_sec=_t.get("stream_elapsed_sec"),
-        stream_timing_source=_t.get("stream_timing_source")
-        or "provider_not_instrumented",
-        phase=phase)
-    rec["provider_timing"] = _t.get("provider_timing")
-    rec["attempts"] = int(getattr(result, "attempts", 1) or 1)
-    return rec
-
-
-def _early_stop_score() -> float:
-    """早停阈值；默认 95，可用 env 调整（非法值回退 95）."""
-    import os as _os
-    try:
-        return float(_os.getenv("CANDIDATE_EARLY_STOP_SCORE", "95"))
-    except ValueError:
-        return 95.0
-
-
-def _candidate_early_stop_max_shots() -> int:
-    """早停镜头上限；默认 20，0 = 不限制.
-
-    09-15 实测：100 分、20 镜、90s、高潮完整的候选已经拿到，却因旧的
-    `len(shots) > 18` 不放行，继续等同一模型两次 300s 超时，候选阶段
-    861.7s。20 镜仍是下游可生成规模，且分数已包含高潮完整性，因此把
-    上限做成配置，默认 20。
-    """
-    import os as _os
-    try:
-        _v = int(_os.getenv("CANDIDATE_EARLY_STOP_MAX_SHOTS", "20"))
-    except ValueError:
-        _v = 20
-    return _v if _v > 0 else 0
-
-
-def _candidate_is_early_stop(score: dict, script: dict) -> bool:
-    """高分候选 + 基础结构健康 → 允许放弃等待慢候选.
-
-    只做确定性结构护栏（shot 数 / 时长 / 钩子），避免把「剧情高分但不可生成」
-    的候选误判为终稿；下游 hard gate 仍照常执行。
-    """
-    if not _candidate_early_stop_enabled():
-        return False
-    if score.get("gate_status") == "BLOCK":
-        return False
-    if float(score.get("final_score", score.get("total", 0)) or 0) < _early_stop_score():
-        return False
-    if score.get("climax_complete") is not True:
-        return False
-    # Quality-aware gate: a raw 100 with blocking visual risks or corrupted
-    # text must not win early-stop and lock the run into an unsafe candidate.
-    if score.get("quality_checked") is False:
-        return False
-    if int(score.get("blocking_risk_count", 0) or 0) > 0:
-        return False
-    if score.get("quality_checked") and score.get("integrity_ok") is not True:
-        return False
-    shots = script.get("shots", [])
-    if not shots:
-        return False
-    _max_shots = _candidate_early_stop_max_shots()
-    if _max_shots and len(shots) > _max_shots:
-        return False
-    duration = sum(float(shot.get("duration_sec", 0) or 0) for shot in shots)
-    if not DURATION_MIN_SEC <= duration <= DURATION_MAX_SEC:
-        return False
-    if not script.get("hook"):
-        return False
-    return True
 
 
 class _CandidateDialogueBroken(Exception):
@@ -12103,7 +11216,7 @@ def _stop_if_outline_unavailable(res, novel_text: str, deadline_monotonic) -> No
     _code = str(_f.get("code") or "unknown")
     _detail = str(_f.get("detail") or "")
     _plan = res.get("plan")
-    _logger.error("[PLAN] 大纲未产出可执行计划（%s）⇒ 停在计划层，不生成候选：%s"
+    _mrt._logger.error("[PLAN] 大纲未产出可执行计划（%s）⇒ 停在计划层，不生成候选：%s"
                   % (_code, rejection_display(_detail, limit=200)))
     if _code in OUTLINE_CALL_FAILURE_CODES:
         # 基线的内容问题**由生产者给**（`acceptance.problems`——大纲侧已算过同一份验收链）：
@@ -12123,7 +11236,7 @@ def _stop_if_outline_unavailable(res, novel_text: str, deadline_monotonic) -> No
                           "detail": "基线内容问题无法列出：%s: %s" % (type(_e).__name__, _e)}]
         if _base:
             _rest = max(0, len(_base) - 3)
-            _logger.error(
+            _mrt._logger.error(
                 "[PLAN] 基线计划仍有 %d 条内容问题（**另列**，不改本轮终局）：%s%s"
                 % (len(_base), "；".join(record_text(x) for x in _base[:3]),
                    "（另有 %d 条未显示，完整清单见 step01_plan_infeasible.json）" % _rest
@@ -12132,26 +11245,26 @@ def _stop_if_outline_unavailable(res, novel_text: str, deadline_monotonic) -> No
         # "关键字段缺失/类型错误"时，人看不出违反哪条规则、也回灌不了下一轮。
         _fprobs = problem_records(_f.get("problems"))
         if _fprobs:
-            _logger.error("[PLAN] 首版被拒的具体原因（%d 条）：%s"
+            _mrt._logger.error("[PLAN] 首版被拒的具体原因（%d 条）：%s"
                           % (len(_fprobs), "；".join(record_text(x) for x in _fprobs[:3])))
         # **逐轮**拒收记录（复核 2026-10-02 之五）：`failure.detail` 只留最后一条，
         # 三轮各自为什么被拒收是收敛分析的输入（"留档要宽"）。
         _rev = res.get("revision")
         _rej = problem_records(_rev.get("rejections") if isinstance(_rev, dict) else None)
-        dump_plan_unavailable(CHAPTER_DIR, code=_code, detail=_detail, plan=_plan,
+        dump_plan_unavailable(_mrt.CHAPTER_DIR, code=_code, detail=_detail, plan=_plan,
                               baseline_problems=_base, failure_problems=_fprobs or None,
                               replan_rejections=_rej or None)
         raise PlanInfeasibleError(
             "大纲未产出可执行计划（%s）⇒ 停在计划层，不生成完整稿：%s"
             % (_code, rejection_display(_detail, limit=200)))
     if isinstance(_plan, dict) and _plan:
-        check_plan_before_generation(_plan, chapter_dir=CHAPTER_DIR, novel_text=novel_text,
+        check_plan_before_generation(_plan, chapter_dir=_mrt.CHAPTER_DIR, novel_text=novel_text,
                                      deadline_monotonic=deadline_monotonic)
         # 走到这里说明基线通过了生成前门——与 `executable=False` 自相矛盾（两处判据不一致）
         raise PlanInfeasibleError(
             "大纲判定为不可执行，但基线计划通过了生成前统一入口——两处判据不一致，"
             "按 fail-closed 停在计划层")
-    dump_plan_unavailable(CHAPTER_DIR, code=_code, detail=_detail)
+    dump_plan_unavailable(_mrt.CHAPTER_DIR, code=_code, detail=_detail)
     raise PlanInfeasibleError(
         "大纲未产出可执行计划（%s）⇒ 停在计划层，不生成完整稿：%s" % (_code, _detail[:200]))
 
@@ -12188,7 +11301,7 @@ def _generate_script_candidates(
                                                     plan_dialogue_lines)
     # 工作包 §4 D：生成前门接**同一个**绝对截止时刻（默认 None 保持旧行为）——
     # 截止已到时它先写 `deadline_exhausted` 诊断再停，不把"时间用尽"写成"故事不可行"。
-    check_plan_before_generation(outline, chapter_dir=CHAPTER_DIR, novel_text=novel_text,
+    check_plan_before_generation(outline, chapter_dir=_mrt.CHAPTER_DIR, novel_text=novel_text,
                                  deadline_monotonic=deadline_monotonic)
 
     from shared.config import SCRIPT_CANDIDATE_TOPK, SCRIPT_CANDIDATE_MODELS
@@ -12201,7 +11314,7 @@ def _generate_script_candidates(
     # v6.138：事件履约契约的违规明细（每元素 = 一个违规候选的 violations 列表）
     _contract_broken: list = []
     _dlg_total = len(plan_dialogue_lines(outline))
-    _max_attempts = SCRIPT_PARSE_RETRIES * max(1, SCRIPT_CANDIDATE_TOPK)
+    _max_attempts = _mrt.SCRIPT_PARSE_RETRIES * max(1, SCRIPT_CANDIDATE_TOPK)
     _attempt = 0
     _task_idx = 0  # 候选序号（温度梯度 0.2 + 0.15*idx）
     _model_list = list(SCRIPT_CANDIDATE_MODELS or [])
@@ -12229,7 +11342,7 @@ def _generate_script_candidates(
             if _model in _model_cooldowns:
                 return
             _model_cooldowns.add(_model)
-        _logger.warn(
+        _mrt._logger.warn(
             f"[CANDIDATE] 模型 {_model} 候选超时，本 run 冷却，"
             f"后续候选改用其他模型"
         )
@@ -12245,7 +11358,7 @@ def _generate_script_candidates(
                 outline=outline,
                 temperature=_temp,
                 model=_model,
-                timeout_sec=_candidate_gen_timeout_sec(),  # v6.70.3: 300s——慢候选由早停+超时双通道兜住
+                timeout_sec=_mrt._candidate_gen_timeout_sec(),  # v6.70.3: 300s——慢候选由早停+超时双通道兜住
             )
         except RuntimeError as _e:
             _e.candidate_model = _model
@@ -12253,7 +11366,7 @@ def _generate_script_candidates(
                 "超时" in str(_e) or "timeout" in str(_e).lower()
             )
             raise
-        _cand = parse_response(raw, novel_text=novel_text)
+        _cand = _mrt.parse_response(raw, novel_text=novel_text)
 
         # v6.135（工作包 sunny-kindling-wilkinson；预算语义 2026-09-26 二审 C1 定稿）：
         # 候选层**台词完整性硬门**——破损候选直接判无效、不占合格名额；**差额在既有
@@ -12322,20 +11435,20 @@ def _generate_script_candidates(
             f"，plan {_tps.get('present', 0)}/{_tps.get('shots', 0)}"
             f"（valid {_tps.get('valid', 0)}, grounded {_tps.get('grounded', 0)}）"
         )
-        _metrics_update("candidate.temporal_plan", _tps)
+        _mrt._metrics_update("candidate.temporal_plan", _tps)
         # v6.67 接力修复：把生成本候选的模型挂在分数上，main() 据此选互补修复模型
         _scr["_model"] = _model
         return _scr, _cand
 
     if SCRIPT_CANDIDATE_TOPK <= 1:
         # TOPK=1：原串行路径零变化（deepseek 默认，含重试 sleep 语义）
-        while _attempt < SCRIPT_PARSE_RETRIES:
+        while _attempt < _mrt.SCRIPT_PARSE_RETRIES:
             _attempt += 1
             try:
                 _scr, _cand = _gen_one_candidate(_task_idx)
                 _candidates.append((_scr, _cand))
-                _logger.info(f"[CANDIDATE] 候选 1/1: {_scr.get('detail', '')}")
-                _console(f"  [候选] 1/1: {_scr.get('detail', '')}")
+                _mrt._logger.info(f"[CANDIDATE] 候选 1/1: {_scr.get('detail', '')}")
+                _mrt._console(f"  [候选] 1/1: {_scr.get('detail', '')}")
                 # v6.84（二次审核发现 1）：**结构不合法的候选要拒收**，不是「先收下
                 # 再在末尾抱怨」。候选在结构上不合法（内容需求超 cap / 时长低于
                 # 下限）时，只要还有生成预算就继续取下一个候选；预算用尽则明确
@@ -12352,72 +11465,72 @@ def _generate_script_candidates(
                 # 只放行这一类：`shot_duration_below_min`（过短）**没有**确定性路径
                 # （要靠整脚本 regen 合并），所以仍然拒收重取。
                 if _candidate_only_splittable(_scr):
-                    _logger.info(
+                    _mrt._logger.info(
                         "[CANDIDATE] 候选只有「内容超载」（可被定向拆分确定性修掉）→ "
                         f"提前采纳，不再耗费候选：{(_scr.get('structural_issues') or [])[:2]}"
                     )
-                    _console("  [候选] 仅超载（定向拆分可修），提前采纳")
+                    _mrt._console("  [候选] 仅超载（定向拆分可修），提前采纳")
                     break
-                if _scr.get("structural_ok") is not True and _attempt < SCRIPT_PARSE_RETRIES:
-                    _logger.warn(
+                if _scr.get("structural_ok") is not True and _attempt < _mrt.SCRIPT_PARSE_RETRIES:
+                    _mrt._logger.warn(
                         "[CANDIDATE] 候选结构不合法（内容超 cap / 低于下限），"
-                        f"拒收并重取（{_attempt}/{SCRIPT_PARSE_RETRIES}）："
+                        f"拒收并重取（{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）："
                         f"{(_scr.get('structural_issues') or [])[:2]}"
                     )
-                    _console(
+                    _mrt._console(
                         f"  [候选] 结构不合法（超载/过短），重新生成"
-                        f"（{_attempt}/{SCRIPT_PARSE_RETRIES}）..."
+                        f"（{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）..."
                     )
                     _task_idx += 1
                     continue
                 if _scr.get("structural_ok") is not True:
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[CANDIDATE] 生成预算用尽，结构仍不合法——明确结束为 BLOCK："
                         f"{(_scr.get('structural_issues') or [])[:3]}"
                     )
-                    _console("  [候选] 预算用尽，结构仍不合法（结果将判 BLOCK）")
+                    _mrt._console("  [候选] 预算用尽，结构仍不合法（结果将判 BLOCK）")
                 break
             except RuntimeError as e:
                 _last_err = e
-                _logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
-                _console(f"  [重试] LLM 生成失败，重新调用（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+                _mrt._logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）: {e}")
+                _mrt._console(f"  [重试] LLM 生成失败，重新调用（{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）...")
                 import time as _t
-                _t.sleep(SCRIPT_PARSE_RETRY_SLEEP_SEC)
+                _t.sleep(_mrt.SCRIPT_PARSE_RETRY_SLEEP_SEC)
             except _CandidateDialogueBroken as _e:
                 # v6.135：台词破损 = 内容结论，与"生成失败"分开计数分开报告；
                 # 尝试名额照常消耗（预算语义见 _gen_one_candidate 注释）
                 _dialogue_broken.append(_e.broken)
-                _logger.warn(
+                _mrt._logger.warn(
                     "[CANDIDATE] dialogue integrity failed（台词完整性硬门，判无效不进池，"
                     f"{len(_e.broken)}/{_dlg_total} 句破损）："
                     + "；".join("%s（%s）" % (b.get("line", "")[:40], b.get("reason"))
                                 for b in _e.broken[:3]))
-                _console(f"  [候选] 台词破损（{len(_e.broken)}/{_dlg_total} 句），判无效"
-                         f"（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+                _mrt._console(f"  [候选] 台词破损（{len(_e.broken)}/{_dlg_total} 句），判无效"
+                         f"（{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）...")
             except _CandidateGateError as _e:
                 # v6.135 四审 P1：门自身异常 fail-closed——判无效不进池、名额消耗，
                 # 与"台词破损"分账（attempt_stats.gate_errors），不裸崩不放行
                 _dialogue_gate_errs.append(str(_e))
-                _logger.error(
+                _mrt._logger.error(
                     "[CANDIDATE] dialogue gate error（台词门自身异常，fail-closed 判无效"
-                    f"不进池，{_attempt}/{SCRIPT_PARSE_RETRIES}）：{_e}")
-                _console(f"  [候选] 台词门异常（fail-closed，"
-                         f"{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+                    f"不进池，{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）：{_e}")
+                _mrt._console(f"  [候选] 台词门异常（fail-closed，"
+                         f"{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）...")
             except _CandidateContractBroken as _e:
                 # v6.138：事件契约破损 = 内容结论，独立分账（attempt_stats.contract_broken）
                 _contract_broken.append(_e.violations)
-                _logger.warn(
+                _mrt._logger.warn(
                     "[CANDIDATE] event contract failed（事件履约契约，判无效不进池，"
-                    f"{_attempt}/{SCRIPT_PARSE_RETRIES}）："
+                    f"{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）："
                     + "；".join("%s@%s:%s" % (v.get("code"), v.get("shot"),
                                              str(v.get("detail"))[:60])
                                 for v in _e.violations[:3]))
-                _console(f"  [候选] 事件契约破损（{len(_e.violations)} 条），判无效"
-                         f"（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+                _mrt._console(f"  [候选] 事件契约破损（{len(_e.violations)} 条），判无效"
+                         f"（{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）...")
             except (ValueError, json.JSONDecodeError) as e:
                 _last_err = e
-                _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{SCRIPT_PARSE_RETRIES}）: {e}")
-                _console(f"  [重试] JSON 解析失败，重新调用 LLM（{_attempt}/{SCRIPT_PARSE_RETRIES}）...")
+                _mrt._logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）: {e}")
+                _mrt._console(f"  [重试] JSON 解析失败，重新调用 LLM（{_attempt}/{_mrt.SCRIPT_PARSE_RETRIES}）...")
     else:
         import concurrent.futures as _fut
         _early_stop_hit = False
@@ -12440,18 +11553,18 @@ def _generate_script_candidates(
                     try:
                         _scr, _cand = _f.result()
                         _candidates.append((_scr, _cand))
-                        _logger.info(
+                        _mrt._logger.info(
                             f"[CANDIDATE] 候选 {len(_candidates)}/{SCRIPT_CANDIDATE_TOPK}: "
                             f"{_scr['detail']}"
                         )
                         # v6.68：高分早停。批量提交仍保留（不额外发请求），当前批剩余
                         # 未完成候选不再阻塞等待；provider 请求无法可靠取消，已发出的
                         # 调用会自然结束。
-                        if _candidate_is_early_stop(_scr, _cand):
+                        if _mrt._candidate_is_early_stop(_scr, _cand):
                             _remaining = len(_futs) - _batch_done
-                            _logger.info(
+                            _mrt._logger.info(
                                 f"[CANDIDATE] 早停：候选分 {_scr['total']} ≥ "
-                                f"CANDIDATE_EARLY_STOP_SCORE={_early_stop_score()}，"
+                                f"CANDIDATE_EARLY_STOP_SCORE={_mrt._early_stop_score()}，"
                                 f"放弃等待 {_remaining} 个慢候选"
                             )
                             _early_stop_hit = True
@@ -12459,7 +11572,7 @@ def _generate_script_candidates(
                     except _CandidateDialogueBroken as _e:
                         # v6.135：同串行路径——破损候选不进池，尝试名额照常消耗
                         _dialogue_broken.append(_e.broken)
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[CANDIDATE] dialogue integrity failed（台词完整性硬门，"
                             f"判无效不进池，{len(_e.broken)}/{_dlg_total} 句破损）："
                             + "；".join("%s（%s）" % (b.get("line", "")[:40], b.get("reason"))
@@ -12467,31 +11580,31 @@ def _generate_script_candidates(
                     except _CandidateGateError as _e:
                         # v6.135 四审 P1：同串行路径——门自身异常 fail-closed 分账
                         _dialogue_gate_errs.append(str(_e))
-                        _logger.error(
+                        _mrt._logger.error(
                             "[CANDIDATE] dialogue gate error（台词门自身异常，"
                             f"fail-closed 判无效不进池，{_attempt}/{_max_attempts}）：{_e}")
-                        _console(f"  [候选] 台词门异常（fail-closed，"
+                        _mrt._console(f"  [候选] 台词门异常（fail-closed，"
                                  f"{_attempt}/{_max_attempts}）...")
                     except _CandidateContractBroken as _e:
                         # v6.138：同串行路径——事件契约破损独立分账
                         _contract_broken.append(_e.violations)
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[CANDIDATE] event contract failed（事件履约契约，判无效不进池，"
                             f"{_attempt}/{_max_attempts}）："
                             + "；".join("%s@%s:%s" % (v.get("code"), v.get("shot"),
                                                      str(v.get("detail"))[:60])
                                         for v in _e.violations[:3]))
-                        _console(f"  [候选] 事件契约破损（{len(_e.violations)} 条），判无效"
+                        _mrt._console(f"  [候选] 事件契约破损（{len(_e.violations)} 条），判无效"
                                  f"（{_attempt}/{_max_attempts}）...")
                     except RuntimeError as e:
                         _cool_model_after_timeout(e)
                         _last_err = e
-                        _logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{_max_attempts}）: {e}")
-                        _console(f"  [重试] LLM 生成失败（{_attempt}/{_max_attempts}）...")
+                        _mrt._logger.warn(f"[WARN] LLM 生成失败（尝试 {_attempt}/{_max_attempts}）: {e}")
+                        _mrt._console(f"  [重试] LLM 生成失败（{_attempt}/{_max_attempts}）...")
                     except (ValueError, json.JSONDecodeError) as e:
                         _last_err = e
-                        _logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{_max_attempts}）: {e}")
-                        _console(f"  [重试] JSON 解析失败（{_attempt}/{_max_attempts}）...")
+                        _mrt._logger.warn(f"[WARN] 分镜 JSON 解析失败（尝试 {_attempt}/{_max_attempts}）: {e}")
+                        _mrt._console(f"  [重试] JSON 解析失败（{_attempt}/{_max_attempts}）...")
             finally:
                 # v6.70.3（09-14）：早停必须真正不等慢线程——with 块退出会
                 # shutdown(wait=True)，09-14 实测 break 后仍被 600s 慢候选拖住
@@ -12548,7 +11661,7 @@ def _generate_script_candidates(
                 _exc_cls = DialogueGateError
                 _head = "候选层台词完整性门自身异常"
                 _tail = "（fail-closed 不进入选稿/提交）"
-            dump_dialogue_incomplete(CHAPTER_DIR, _dump_batches,
+            dump_dialogue_incomplete(_mrt.CHAPTER_DIR, _dump_batches,
                                      total_lines=_dlg_total, attempt_stats=_stats,
                                      plan=outline,
                                      conclusion=("event_contract_broken"
@@ -12570,7 +11683,7 @@ _BLOCKED_LEDGER_NAME = "_blocked_revisions.json"
 
 
 def _blocked_ledger_path():
-    return OUTPUT_FILE.parent / "snapshots" / _BLOCKED_LEDGER_NAME
+    return _mrt.OUTPUT_FILE.parent / "snapshots" / _BLOCKED_LEDGER_NAME
 
 
 def _revision_aliases_or_empty(script) -> dict:
@@ -12585,14 +11698,14 @@ def _revision_aliases_or_empty(script) -> dict:
         from shared.quality_gate import script_revision_aliases
         return {int(k): str(v) for k, v in dict(script_revision_aliases(script)).items()}
     except Exception as exc:
-        _logger.warn(f"[BEST-GUARD] revision 别名计算失败（台账少记兼容身份）: {exc}")
+        _mrt._logger.warn(f"[BEST-GUARD] revision 别名计算失败（台账少记兼容身份）: {exc}")
         return {}
 
 
 def _current_criteria() -> dict:
     """当前判据指纹（规则源 + 提示源）——台账按它判断「欠账是否仍然成立」."""
-    return {"rules": str(RULE_SOURCE_FINGERPRINT or ""),
-            "prompts": str(PROMPT_SOURCE_FINGERPRINT or "")}
+    return {"rules": str(_mrt.RULE_SOURCE_FINGERPRINT or ""),
+            "prompts": str(_mrt.PROMPT_SOURCE_FINGERPRINT or "")}
 
 
 def _load_blocked_ledger() -> dict:
@@ -12686,12 +11799,12 @@ def _load_blocked_revisions() -> dict:
             continue
         _put(out, rev)
     if _partly:
-        _logger.info(
+        _mrt._logger.info(
             "[BEST-GUARD] 台账里 %d 份欠账稿**部分**问题所依赖的判据已变"
             "（按具体问题计入，其余仍排除）：%s"
             % (len(_partly), ["%s×%d" % (r[:12], n) for r, n in _partly[:6]]))
     if stale:
-        _logger.info(
+        _mrt._logger.info(
             "[BEST-GUARD] 台账里 %d 份欠账稿是在**旧判据**下登记的（规则/提示指纹已变）"
             "——本轮不据此排除，按现行判据重新评估：%s"
             % (len(stale), [r[:12] for r in stale[:6]]))
@@ -12715,7 +11828,7 @@ def _snapshot_cross_field_blocking(script: dict):
         # v6.150（复核发现 4）：**校验器异常 ≠ 没有问题**。旧实现返回空表，与「无
         # blocking」不可区分——校验器一旦坏掉，所有快照都会「干净」地进候选池。
         # 返回 None 表示**未能校验**，调用方据此让该快照本次失去候选资格。
-        _logger.warn("[BEST-GUARD] 快照跨字段校验器异常（本次不具候选资格）: %s" % exc)
+        _mrt._logger.warn("[BEST-GUARD] 快照跨字段校验器异常（本次不具候选资格）: %s" % exc)
         return None
 
 
@@ -12742,7 +11855,7 @@ def _debt_issue_records(blocking) -> list:
         if code.startswith("model_audit_"):
             kind, fp = "audit", str(audit_prompt_version() or "")
         else:
-            kind, fp = "rules", str(RULE_SOURCE_FINGERPRINT or "")
+            kind, fp = "rules", str(_mrt.RULE_SOURCE_FINGERPRINT or "")
         out.append({"code": code,
                     "shot": str(b.get("shot_id") if b.get("shot_id") is not None else ""),
                     "field": str(b.get("field_path") or ""),
@@ -12757,7 +11870,7 @@ def _debt_issue_in_force(rec: dict) -> bool:
     if kind == "audit":
         return str(rec.get("crit_fp") or "") == str(audit_prompt_version() or "")
     if kind == "rules":
-        return str(rec.get("crit_fp") or "") == str(RULE_SOURCE_FINGERPRINT or "")
+        return str(rec.get("crit_fp") or "") == str(_mrt.RULE_SOURCE_FINGERPRINT or "")
     return True          # 认不出判据 → 保守：按仍然欠账
 
 
@@ -12855,7 +11968,7 @@ def _record_blocked_revision(revision: str, issues=None, versions=None) -> None:
                                 "revision_version": int(_rv_ver)},
                          ensure_ascii=False, indent=2)
     except Exception as exc:
-        _logger.warn(f"[BEST-GUARD] 欠账台账写入失败（不影响结论）: {exc}")
+        _mrt._logger.warn(f"[BEST-GUARD] 欠账台账写入失败（不影响结论）: {exc}")
 
 
 def _coerce_debt_map(raw, revisions) -> dict:
@@ -12915,7 +12028,7 @@ def _snapshot_new_candidate(script: dict) -> str:
     try:
         import time as _time
 
-        snap_dir = OUTPUT_FILE.parent / "snapshots"
+        snap_dir = _mrt.OUTPUT_FILE.parent / "snapshots"
         snap_dir.mkdir(parents=True, exist_ok=True)
         from shared.json_io import atomic_dump_json as _adj
         _path = snap_dir / ("candidate_pre_bestguard_%s.json"
@@ -12924,7 +12037,7 @@ def _snapshot_new_candidate(script: dict) -> str:
         return str(_path)
     except Exception as _snap_e:
         try:
-            _logger.warn(f"[BEST-GUARD] 新候选快照写入失败（不影响主流程）: {_snap_e}")
+            _mrt._logger.warn(f"[BEST-GUARD] 新候选快照写入失败（不影响主流程）: {_snap_e}")
         except Exception:
             pass
         return ""
@@ -12989,7 +12102,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         from step01_script_gen.plan_feasibility import check_script_dialogue_integrity
         from shared.quality_gate import SCRIPT_REVISION_VERSION
 
-        snap_dir = OUTPUT_FILE.parent / "snapshots"
+        snap_dir = _mrt.OUTPUT_FILE.parent / "snapshots"
         if not snap_dir.is_dir():
             return None, meta
         snaps = sorted(snap_dir.glob("script_result_*.json"))
@@ -13028,7 +12141,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             # 「算不出身份」既不能证明快照不是当前这一版，也不能证明它不欠账——
             # 显式不选稿（准则 7），不把无法核验的东西放进候选池。
             meta["reason"] = "revision_uncomputable"
-            _logger.warn("[BEST-GUARD] 本次终稿 revision 别名无法计算 → 本轮不做跨 run 选稿")
+            _mrt._logger.warn("[BEST-GUARD] 本次终稿 revision 别名无法计算 → 本轮不做跨 run 选稿")
             return None, meta
         _blocked_by_ver = _load_blocked_revisions()
         _blocked_names: list = []
@@ -13084,7 +12197,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             if _why:
                 _invalid.append(f"{sp.name}（{_why}）")
                 continue
-            if not HOOK_ENABLED:
+            if not _mrt.HOOK_ENABLED:
                 old.pop("hook", None)
             _old_aliases = _revision_aliases_or_empty(old)
             if not _old_aliases:
@@ -13119,7 +12232,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         _stale_plan_snaps = list(dict.fromkeys(_stale_plan_snaps))
         if _dlg_broken_snaps:
             # 显式记录（准则 7）：哪几份快照因台词破损被排除，为什么
-            _logger.warn(
+            _mrt._logger.warn(
                 "[BEST-GUARD] 台词完整性门排除 %d 份历史快照（未过本轮计划的选材门，"
                 "不参与评分）：%s"
                 % (len(_dlg_broken_snaps), _dlg_broken_snaps[:6])
@@ -13129,7 +12242,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             # 显式记录（准则 7 / 复核 P0-2）：哪几份快照因**计划身份不符**被排除。
             # 这些快照的 plan_refs 是对另一版计划作的声明，编号即使仍在范围内也指向
             # 别的节拍（`insert_after`/`split` 会重排 B 编号）。
-            _logger.warn(
+            _mrt._logger.warn(
                 "[BEST-GUARD] 计划身份不符，排除 %d 份历史快照（它们的 plan_refs 不是"
                 "对本轮计划作的声明，不参与评分）：%s"
                 % (len(_stale_plan_snaps), _stale_plan_snaps[:6])
@@ -13137,7 +12250,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             meta["stale_plan_snapshots"] = _stale_plan_snaps
         if _invalid:
             # 显式记录（准则 7）：跳过的原因必须能看见，否则"为什么没选历史稿"无从归因
-            _logger.warn(
+            _mrt._logger.warn(
                 "[BEST-GUARD] 跳过 %d 份**非分镜稿**的 JSON（不评分、不参与选稿；"
                 "常见原因是审计/诊断产物落进了 snapshots/ 候选目录）：%s"
                 % (len(_invalid), _invalid[:6])
@@ -13165,7 +12278,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 ((int(_debt_map.get(r, 1)), r)
                  for _revs in _blocked_by_ver.values() for r in _revs),
                 reverse=True)[:5]
-            _logger.warn(
+            _mrt._logger.warn(
                 "[BEST-GUARD] 全部历史快照都在欠账台账内（%d 份，判据指纹未变）"
                 "——本轮**不选历史稿**，让新稿直接进提交门检验；"
                 "欠账最重的几份：%s（正式产物仍受保护）"
@@ -13233,13 +12346,13 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             if _prefilter_rejected:
                 # v6.152（C5）：清单**打全**——此前 `[:6]` 截断，事后无法复核
                 # 到底哪几份被拒（run 01 就因此答不出 081241 是否在列）。
-                _logger.warn("[BEST-GUARD] %d 份快照未通过当前质量初筛：%s"
+                _mrt._logger.warn("[BEST-GUARD] %d 份快照未通过当前质量初筛：%s"
                              % (len(_prefilter_rejected), _prefilter_rejected))
                 meta["prefilter_rejected_snapshots"] = _prefilter_rejected
                 meta["reason"] = "snapshot_failed_prefilter"
             return None, meta
         if _prefilter_rejected:
-            _logger.warn("[BEST-GUARD] %d 份快照未通过当前质量初筛：%s"
+            _mrt._logger.warn("[BEST-GUARD] %d 份快照未通过当前质量初筛：%s"
                          % (len(_prefilter_rejected), _prefilter_rejected))
             meta["prefilter_rejected_snapshots"] = _prefilter_rejected
         meta.update({"best_score": best_score, "best_path": str(best_path),
@@ -13253,7 +12366,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         # 日志里只能看到 BEST-GUARD 存在，看不出快照为什么失利，稳定版与新版本的
         # 取舍无法复核。这里补一行对称 WARN（含 best/new 分数与风险、tier、margin）。
         def _log_new_kept(_reason: str):
-            _logger.warn(
+            _mrt._logger.warn(
                 "[BEST-GUARD] 保留新终稿（" + _reason + "）：本次 "
                 + str(new_score) + " 分/风险"
                 + str(new_quality.get("blocking_risk_count"))
@@ -13278,7 +12391,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                 _log_new_kept("新稿结构/完整性/风险档不更差")
                 return None, meta
 
-        _logger.warn(
+        _mrt._logger.warn(
             "[BEST-GUARD] 快照综合排序胜出：新终稿 " + str(new_score) + " 分/风险"
             + str(new_quality.get("blocking_risk_count")) + "；快照最优 "
             + str(best_score) + " 分/风险"
@@ -13286,13 +12399,13 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
             + "（" + best_path.name + "）"
         )
         if not keep_best:
-            _logger.warn("[BEST-GUARD] KEEP_BEST_SNAPSHOT=0 → 仅告警，保留新终稿")
+            _mrt._logger.warn("[BEST-GUARD] KEEP_BEST_SNAPSHOT=0 → 仅告警，保留新终稿")
             meta["reason"] = "keep_best_disabled"
             return None, meta
 
         # v6.123：文案必须与事实一致——真写了才说「已留档 <路径>」，没写成要说没写成。
         _new_snap = str(meta.get("new_candidate_snapshot") or "")
-        _logger.warn(
+        _mrt._logger.warn(
             "[BEST-GUARD] 选中历史快照作为候选（" + str(best_score) + " 分/风险"
             + str(best_quality.get("blocking_risk_count")) + "）；本次 "
             + str(new_score) + " 分版本"
@@ -13300,7 +12413,7 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
                else "**快照写入失败，未留档**（见上方 WARN）")
             + "。候选仍走公共提交管线（hook QC → finalize → quality → final audit）"
         )
-        _console(
+        _mrt._console(
             "  [BEST-GUARD] 本次 " + str(new_score) + " 分/风险"
             + str(new_quality.get("blocking_risk_count")) + "，快照综合排序更优："
             + str(best_score) + " 分/风险"
@@ -13323,12 +12436,12 @@ def _cross_run_best_guard(script: dict, novel_text: str, *,
         meta["selected_revision"] = str(_sel_aliases.get(SCRIPT_REVISION_VERSION) or "")
         meta["selected_revision_aliases"] = _sel_aliases
         if not meta["selected_revision"]:
-            _logger.warn("[BEST-GUARD] 快照自身 revision 计算失败"
+            _mrt._logger.warn("[BEST-GUARD] 快照自身 revision 计算失败"
                          "（欠账台账可能漏一条）")
         return best_script, meta
     except Exception as _bg_e:
         try:
-            _logger.warn(f"[BEST-GUARD] 护栏执行失败（不影响主流程）: {_bg_e}")
+            _mrt._logger.warn(f"[BEST-GUARD] 护栏执行失败（不影响主流程）: {_bg_e}")
         except Exception:
             pass
         meta["reason"] = f"error: {_bg_e}"
@@ -13390,22 +12503,22 @@ def main() -> None:
     globals()["PRESENTATION_MODE"] = _cli_mode
     os.environ["STEP01_PRESENTATION_MODE"] = _cli_mode
 
-    _logger.separator()
-    _logger.info("  步骤1: 分镜脚本生成 (v6.0)")
-    _logger.info("  新增: 钩子分镜 + 敏感词校验")
-    _logger.separator()
+    _mrt._logger.separator()
+    _mrt._logger.info("  步骤1: 分镜脚本生成 (v6.0)")
+    _mrt._logger.info("  新增: 钩子分镜 + 敏感词校验")
+    _mrt._logger.separator()
 
     # v6.70.2：章节级 single-flight 锁——禁止两个 step01 并发写同一章
     # （09-14 实测两个 Python 进程交错写 step01.log/script_result.json）。
-    if not _acquire_step01_lock():
+    if not _mrt._acquire_step01_lock():
         return
 
-    _timing_start()  # v6.70.3: 阶段计时起点（拿锁成功 = 本 run 独占计时器）
+    _mrt._timing_start()  # v6.70.3: 阶段计时起点（拿锁成功 = 本 run 独占计时器）
     # 每次模型调用记一条**带 run_id** 的台账（2026-10-02 复核：metrics.calls 全空、
     # 日志里也没有 run_id，事后无法对账）。落点：章节目录的 step01_calls.jsonl。
     from shared.call_ledger import set_ledger_path
     try:
-        set_ledger_path(CHAPTER_DIR / "step01_calls.jsonl")
+        set_ledger_path(_mrt.CHAPTER_DIR / "step01_calls.jsonl")
     except Exception as _degrade_exc:
         from shared.degrade import note_degraded as _note_degraded
         _note_degraded("step01_script_gen/main.py:main", _degrade_exc)
@@ -13416,26 +12529,26 @@ def main() -> None:
         _warn_silent_video_model()
 
         # 创建输出目录
-        CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
+        _mrt.CHAPTER_DIR.mkdir(parents=True, exist_ok=True)
 
         # 运行期间 print() 全部重定向到 step01.log，控制台静默
         # 最终摘要用 _console() 写 _REAL_STDOUT（模块级保存的真实 stdout）
         # 同时让 logger 控制台输出静默，避免 logger.print 经重定向回流日志造成双写
-        sys.stdout = _redirect_to_log()
-        _logger.console_silent = True
+        sys.stdout = _mrt._redirect_to_log()
+        _mrt._logger.console_silent = True
 
         # 读取章节
-        novel_text = read_chapter(None, chapter=NOVEL_CHAPTER)
+        novel_text = read_chapter(None, chapter=_mrt.NOVEL_CHAPTER)
         # v6.115（审核）：缓存指纹此前只取章节**前 1000 字**——后文改动不会改变
         # 指纹，于是「原文变了但缓存命中」→ 用旧稿当新稿用。指纹必须覆盖全部输入。
         novel_source_text = novel_text
 
         # 加载角色库（v6.1 新增）
-        character_bank = CharacterBank()
+        character_bank = _mrt.CharacterBank()
         character_bank.load()
 
         # 加载场景物体库（v6.6 新增）
-        scene_objects_bank = SceneObjectsBank()
+        scene_objects_bank = _mrt.SceneObjectsBank()
         scene_objects_bank.load()
 
         # v6.43（08-25）：3 个 LLM 预提取并发跑（角色/场景物体/大纲）——
@@ -13445,11 +12558,11 @@ def main() -> None:
         # 工作包 §4 D / §7.4：**整次运行唯一的绝对截止时刻**在这里算一次，之后
         # `extract_all_concurrent` → `generate_outline_result` → 修订控制器 → 生成前门
         # 全部用它；任何一层都不许再算 `now + cap`（`_planning_deadline_at` 只在此处调用）。
-        _deadline_monotonic = _planning_deadline_at()
+        _deadline_monotonic = _mrt._planning_deadline_at()
         # 结构化大纲结果（§7.2）：未启用大纲提取时为 None；失败原因从它读，不再丢成 None。
         _outline_result = None
-        if CHARACTER_EXTRACTION_ENABLED or SCENE_OBJECT_EXTRACTION_ENABLED or OUTLINE_ENABLED:
-            _logger.info("[INFO] 并发预提取 角色/场景物体/大纲（3 路并发）...")
+        if _mrt.CHARACTER_EXTRACTION_ENABLED or _mrt.SCENE_OBJECT_EXTRACTION_ENABLED or _mrt.OUTLINE_ENABLED:
+            _mrt._logger.info("[INFO] 并发预提取 角色/场景物体/大纲（3 路并发）...")
             from step01_script_gen.concurrent_extract import extract_all_concurrent
             from shared.config import SCRIPT_CANDIDATE_MODELS as _pre_models
             _pre_model = _pre_models[0] if len(_pre_models) == 1 else None
@@ -13457,13 +12570,13 @@ def main() -> None:
                 novel_text,
                 character_bank,
                 scene_objects_bank,
-                enable_characters=CHARACTER_EXTRACTION_ENABLED,
-                enable_scene_objects=SCENE_OBJECT_EXTRACTION_ENABLED,
-                enable_outline=OUTLINE_ENABLED,
+                enable_characters=_mrt.CHARACTER_EXTRACTION_ENABLED,
+                enable_scene_objects=_mrt.SCENE_OBJECT_EXTRACTION_ENABLED,
+                enable_outline=_mrt.OUTLINE_ENABLED,
                 model=_pre_model,
-                outline_cache_path=CHAPTER_DIR / "chapter_outline.cache.json",
+                outline_cache_path=_mrt.CHAPTER_DIR / "chapter_outline.cache.json",
                 outline_deadline_monotonic=_deadline_monotonic,
-                log_func=_logger.info,
+                log_func=_mrt._logger.info,
             )
             # === 角色：注册到 bank（主流程后段仍可复用） ===
             # `None` = **这次没产出**（调用/解析失败）⇒ **不写库、不报"已保存"**
@@ -13471,7 +12584,7 @@ def main() -> None:
             # `[]` = 真的没有角色 ⇒ 正常保存（内容不变，仍留一次来源 run_id）。
             chars = pre_results.get("characters")
             if chars is None:
-                _logger.warn("[WARN] 角色预提取未产出（不写库；既有角色库原样保留）")
+                _mrt._logger.warn("[WARN] 角色预提取未产出（不写库；既有角色库原样保留）")
             else:
                 pre_extracted_chars = chars
                 for c in chars:
@@ -13483,40 +12596,40 @@ def main() -> None:
                             ident,
                             c.get("static_features", ""),
                             c.get("dynamic_features", ""),
-                            NOVEL_CHAPTER,
+                            _mrt.NOVEL_CHAPTER,
                         )
                     elif c.get("dynamic_features"):
                         character_bank.update_dynamic_features(
                             ident, c.get("dynamic_features", ""),
                         )
-                        character_bank.update_character_chapter(ident, NOVEL_CHAPTER)
+                        character_bank.update_character_chapter(ident, _mrt.NOVEL_CHAPTER)
                 # 来源=**这一轮确实发生**的调用（从台账取，复核之七）：条目上记
                 # `last_call_ids`（最近若干次）+ `last_source`，不编造模型调用；
                 # 写盘**成功**才说"已保存"（旧写法无条件报成功）。
                 from shared import call_ledger as _cl
                 _ok = character_bank.save(
-                    run_id=_step01_run_id(),
+                    run_id=_mrt._step01_run_id(),
                     call_ids=_cl.call_ids_for(schema="characters"))
                 if _ok:
-                    _logger.info(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
+                    _mrt._logger.info(f"[INFO] 预提取到 {len(chars)} 个角色特征（已保存到角色库）")
                 else:
-                    _logger.warn("[WARN] 角色库**未写入**（保存失败，盘上原样保留）——"
+                    _mrt._logger.warn("[WARN] 角色库**未写入**（保存失败，盘上原样保留）——"
                                  "本次预提取结果未留档")
             # === 场景物体：注册到 bank ===
             objs = pre_results.get("scene_objects")
             if objs is None:
-                _logger.warn("[WARN] 场景物体预提取未产出（不写库；既有物体库原样保留）")
+                _mrt._logger.warn("[WARN] 场景物体预提取未产出（不写库；既有物体库原样保留）")
             else:
                 for o in objs:
-                    scene_objects_bank.register_object(o, NOVEL_CHAPTER)
+                    scene_objects_bank.register_object(o, _mrt.NOVEL_CHAPTER)
                 from shared import call_ledger as _cl
                 _ok = scene_objects_bank.save(
-                    run_id=_step01_run_id(),
+                    run_id=_mrt._step01_run_id(),
                     call_ids=_cl.call_ids_for(schema="scene_objects"))
                 if _ok:
-                    _logger.info(f"[INFO] 预提取到 {len(objs)} 个场景物体（已保存到场景物体库）")
+                    _mrt._logger.info(f"[INFO] 预提取到 {len(objs)} 个场景物体（已保存到场景物体库）")
                 else:
-                    _logger.warn("[WARN] 场景物体库**未写入**（保存失败，盘上原样保留）"
+                    _mrt._logger.warn("[WARN] 场景物体库**未写入**（保存失败，盘上原样保留）"
                                  "——本次预提取结果未留档")
             # === 大纲：预提取，主分镜生成时注入 prompt（**结构化结果**，§7.2） ===
             _outline_result = pre_results.get("outline")
@@ -13529,22 +12642,22 @@ def main() -> None:
         objects_bank_data = json.dumps(
             scene_objects_bank._data, ensure_ascii=False, sort_keys=True
         )
-        prompt_changed = _prompt_changed(
-            Path(__file__).parent / "prompts.py", SCRIPT_FILE, novel_source_text, NOVEL_CHAPTER,
-            objects_bank_data, rule_version=RULE_VERSION,
+        prompt_changed = _mrt._prompt_changed(
+            Path(__file__).parent / "prompts.py", _mrt.SCRIPT_FILE, novel_source_text, _mrt.NOVEL_CHAPTER,
+            objects_bank_data, rule_version=_mrt.RULE_VERSION,
         )
 
         if not prompt_changed:
-            _logger.info(f"[CACHE] 脚本已缓存: {SCRIPT_FILE}")
-            with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
+            _mrt._logger.info(f"[CACHE] 脚本已缓存: {_mrt.SCRIPT_FILE}")
+            with open(_mrt.SCRIPT_FILE, "r", encoding="utf-8") as f:
                 script = json.load(f)
-            if not HOOK_ENABLED:
+            if not _mrt.HOOK_ENABLED:
                 script.pop("hook", None)
             # 补写章节元信息（部名/章名，老缓存可能缺失）
             if not script.get("chapter_title"):
-                script.update(get_chapter_meta(resolve_novel_file(), NOVEL_CHAPTER))
+                script.update(_mrt.get_chapter_meta(_mrt.resolve_novel_file(), _mrt.NOVEL_CHAPTER))
             # 重新计算时间轴（使用增强算法）
-            _compute_timecodes(script)
+            _mrt._compute_timecodes(script)
             # v7: 缓存命中时也要跑场景/道具资产提取（老缓存无 scene_assets/prop_assets），
             # 结果写回 script 再落盘，保证 step02a 资产生成能拿到数据
             _extract_assets_and_update_script(script)
@@ -13589,30 +12702,30 @@ def main() -> None:
                 label="缓存命中提交")
             # C1：**两处提交返回走同一个投影**——提交 BLOCK 必须落到运行终局，
             # 缓存路径此前只打了一行 console，metrics/timing 仍报 ok。
-            _project_commit_outcome(_commit_summary)
-            _timing_mark("commit", status=_commit_summary.get("status"))
+            _mrt._project_commit_outcome(_commit_summary)
+            _mrt._timing_mark("commit", status=_commit_summary.get("status"))
             _snapshot_run_artifacts(script)
-            _logger.info("时间轴已重新计算")
+            _mrt._logger.info("时间轴已重新计算")
             # 缓存命中：恢复 stdout 并显示最终摘要
-            sys.stdout = _REAL_STDOUT
-            _logger.console_silent = False
+            sys.stdout = _mrt._REAL_STDOUT
+            _mrt._logger.console_silent = False
             shots = script.get("shots", [])
-            _console("")
-            _console("=" * 56)
-            _console("  [步骤1] 分镜脚本摘要（缓存命中，未重新生成）"
+            _mrt._console("")
+            _mrt._console("=" * 56)
+            _mrt._console("  [步骤1] 分镜脚本摘要（缓存命中，未重新生成）"
                      if _commit_summary.get("status") == "COMMITTED"
                      else "  [步骤1] ✗ BLOCK —— 正式产物未更新（缓存命中路径）")
-            _console("=" * 56)
+            _mrt._console("=" * 56)
             if _commit_summary.get("status") != "COMMITTED":
-                _console(f"  [BLOCK] {_commit_summary.get('detail')}")
-            _console(f"  输出: {SCRIPT_FILE}")
-            _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
-            _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+                _mrt._console(f"  [BLOCK] {_commit_summary.get('detail')}")
+            _mrt._console(f"  输出: {_mrt.SCRIPT_FILE}")
+            _mrt._console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
+            _mrt._console(f"  总时长: {script.get('total_duration', 0):.1f}s")
             _sa = script.get("scene_assets", {})
             _pa = script.get("prop_assets", {})
             if _sa or _pa:
-                _console(f"  资产: 场景{len(_sa)} / 道具{len(_pa)}")
-            _console("=" * 56)
+                _mrt._console(f"  资产: 场景{len(_sa)} / 道具{len(_pa)}")
+            _mrt._console("=" * 56)
             return
 
         # 生成脚本（含 JSON 解析重试）
@@ -13627,15 +12740,15 @@ def main() -> None:
         # 提前返回，不受影响；这里停下 ⇒ **零次候选生成**，且失败原因保真到 main。
         _stop_if_outline_unavailable(_outline_result, novel_text, _deadline_monotonic)
 
-        _contract = render_execution_contract(pre_extracted_outline)
-        _logger.info("[INFO] 生成执行契约 %d 字符（选用台词 %d 句）"
+        _contract = _mrt.render_execution_contract(pre_extracted_outline)
+        _mrt._logger.info("[INFO] 生成执行契约 %d 字符（选用台词 %d 句）"
                      % (len(_contract),
                         len((pre_extracted_outline or {}).get("dialogue_lines") or [])))
         _candidates = _generate_script_candidates(
             novel_text, character_bank, scene_objects_bank, pre_extracted_outline,
             deadline_monotonic=_deadline_monotonic,
         )
-        _timing_mark("candidate_generation",
+        _mrt._timing_mark("candidate_generation",
                      n_candidates=len(_candidates),
                      best_score=_candidates[0][0]["total"] if _candidates else None)
 
@@ -13646,13 +12759,13 @@ def main() -> None:
         # v6.67 接力修复：记录当前稿件的产出模型。GAP 重生成若被采纳会重置为 None
         #（产出者回到 provider 默认模型，接力标识失效）——见下方 GAP 循环。
         _producer_model = _best_score.get("_model")
-        _logger.warn(f"[DEBUG-RELAY] _best_score keys={list(_best_score.keys())[:5]}, _producer_model={_producer_model!r}")
-        if SCRIPT_CANDIDATE_TOPK > 1:
-            _logger.info(
+        _mrt._logger.warn(f"[DEBUG-RELAY] _best_score keys={list(_best_score.keys())[:5]}, _producer_model={_producer_model!r}")
+        if _mrt.SCRIPT_CANDIDATE_TOPK > 1:
+            _mrt._logger.info(
                 f"[CANDIDATE] 多路径择优完成：{len(_candidates)} 个候选 → "
                 f"最优分 {_best_score['total']}（{_best_score['detail']}）"
             )
-            _console(
+            _mrt._console(
                 f"  [择优] {len(_candidates)} 个候选 → 最优 {_best_score['total']}分 "
                 f"（{_best_score['detail']}）"
             )
@@ -13660,7 +12773,7 @@ def main() -> None:
             import copy as _cp
             try:
                 from shared.json_io import atomic_dump_json as _adj
-                _cand_dir = CHAPTER_DIR / "candidates"
+                _cand_dir = _mrt.CHAPTER_DIR / "candidates"
                 _cand_dir.mkdir(parents=True, exist_ok=True)
                 for _ci, (_cs, _cscript) in enumerate(_candidates):
                     _cpath = _cand_dir / f"candidate_{_ci+1}_score{int(_cs['total'])}.json"
@@ -13673,7 +12786,7 @@ def main() -> None:
         # ========== 差距分析（v5.0 新增）==========
         # 若差距过大，重新生成（最多2次）
 
-        if GAP_ANALYSIS_ENABLED:
+        if _mrt.GAP_ANALYSIS_ENABLED:
             # v6.62.4（09-08）预算动态化：原 `for attempt in range(GAP_MAX_REGEN_ATTEMPTS)`。
             # agent_plan(doubao) 预算是 1（v6.62.1 实测「2 次重试全部劣化回退、白烧
             # 5 分钟」刻意压到 1）。但「正片零高潮覆盖」是**结构性缺陷**（整段剧情没拍），
@@ -13681,37 +12794,37 @@ def main() -> None:
             # deepseek（预算 2）不会凭空变 3，除非它也零高潮。
             # 追加那次自动受下方 v6.47 `_is_retry_degraded` 回退保护（时长塌缩/台词
             # 失锚即回退上一版），所以多给一次不引入劣化风险。
-            _gap_budget = GAP_MAX_REGEN_ATTEMPTS
+            _gap_budget = _mrt.GAP_MAX_REGEN_ATTEMPTS
             _zero_climax_bonus_used = False
             attempt = 0
             while attempt < _gap_budget:
                 # 快速校验
-                validation = validate_script_gap(script, novel_text)
+                validation = _mrt.validate_script_gap(script, novel_text)
 
                 if validation["overall_pass"]:
-                    _logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{_gap_budget})")
+                    _mrt._logger.info(f"[GAP] 差距分析通过 (尝试 {attempt + 1}/{_gap_budget})")
                     # 保存脚本并生成完整报告
-                    partial_path = CHAPTER_DIR / "script_result.partial.json"
+                    partial_path = _mrt.CHAPTER_DIR / "script_result.partial.json"
                     from shared.json_io import atomic_dump_json as _adj
                     _adj(partial_path, _strip_runtime_fields(script),
                          ensure_ascii=False, indent=2)
-                    report = generate_gap_report(
+                    report = _mrt.generate_gap_report(
                         str(partial_path),
-                        resolve_novel_file(),
-                        NOVEL_CHAPTER
+                        _mrt.resolve_novel_file(),
+                        _mrt.NOVEL_CHAPTER
                     )
                     # 打印报告摘要
-                    print_gap_report(report)
+                    _mrt.print_gap_report(report)
                     # 清理临时文件
                     if partial_path.exists():
                         partial_path.unlink()
                     break
-                if not gap_needs_full_regen(validation):
-                    _logger.warn(
+                if not _mrt.gap_needs_full_regen(validation):
+                    _mrt._logger.warn(
                         "[GAP] 仅软告警（角色特征锚点等确定性可修复项），"
                         "跳过整稿重生，转交下游约束修复"
                     )
-                    _console("  [GAP] 仅软告警，跳过整稿重生")
+                    _mrt._console("  [GAP] 仅软告警，跳过整稿重生")
                     break
 
                 # 发现问题，反馈给 LLM 重新生成
@@ -13722,23 +12835,23 @@ def main() -> None:
                         and attempt + 1 >= _gap_budget):
                     _gap_budget += 1
                     _zero_climax_bonus_used = True
-                    _logger.warn(
+                    _mrt._logger.warn(
                         "[GAP] 正片零高潮覆盖（结构性缺陷：原文核心冲突整段未拍）"
                         f"→ 额外追加 1 次重试预算（{_gap_budget} 次）"
                     )
-                    _console("  [GAP] 正片零高潮覆盖 → 额外追加 1 次重试")
+                    _mrt._console("  [GAP] 正片零高潮覆盖 → 额外追加 1 次重试")
 
-                _logger.warn(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{_gap_budget})...")
+                _mrt._logger.warn(f"[GAP] 发现差距问题， 重新生成 (尝试 {attempt + 1}/{_gap_budget})...")
 
                 # 获取差距分析上下文并追加到 prompt（函数已在模块级导入）
-                gap_context = _load_gap_analysis_context(validation)
+                gap_context = _mrt._load_gap_analysis_context(validation)
                 # v6.47（08-27）反馈前置：重生成铁律放在反馈区**最前**——长 prompt 后段
                 # 规则易失声（实测重试版把总时长写塌到 11s、编造原文没有的台词），
                 # 必须在反馈前重申非协商规则作为拒收标准
-                gap_context = _build_regen_iron_rules() + gap_context
+                gap_context = _mrt._build_regen_iron_rules() + gap_context
                 # v6.33（08-12）：附加 checklist 聚合反馈——差距分析之外，把内容密度/景别
                 # 跳跃/致命伤等真实缺陷也喂给重生成 LLM（此前只喂覆盖率/分布，重生成还是老问题）
-                _checklist_fb = build_regen_feedback(script, novel_text)
+                _checklist_fb = _mrt.build_regen_feedback(script, novel_text)
                 if _checklist_fb:
                     gap_context = gap_context + _checklist_fb
 
@@ -13753,15 +12866,15 @@ def main() -> None:
                     novel_text, character_bank, scene_objects_bank,
                     pre_extracted_outline, _contract, gap_context)
 
-                _metrics_inc("calls.gap_regen")
-                service = create_service()
+                _mrt._metrics_inc("calls.gap_regen")
+                service = _mrt.create_service()
                 from _text_gen.deepseek_schema import SCRIPT_SCHEMA
-                req = TextGenerationRequest(
+                req = _mrt.TextGenerationRequest(
                     system_prompt=_gap_system,
                     user_prompt=prompt,
                     temperature=0.2,  # v6.5: 降低温度防止幻觉；v6.64 多候选用不同温度增加多样性
                     json_schema=SCRIPT_SCHEMA,
-                    timeout_sec=_full_script_timeout_sec(),  # v6.70.3: GAP 重生 300s 分级
+                    timeout_sec=_mrt._full_script_timeout_sec(),  # v6.70.3: GAP 重生 300s 分级
                 )
                 result = service.generate(req)
                 if not result.success:
@@ -13770,8 +12883,8 @@ def main() -> None:
                     # v6.62.5 起 provider 把「输出截断」也判为 success=False，这条路径
                     # 从罕见（网络错误）变常见（截断），必须与站点 422/1146 一致地软降级：
                     # 保留上一版脚本继续跑，而不是让整个流水线挂掉。
-                    _logger.warn(f"[WARN] GAP 重生成失败，保留上一版: {result.error}")
-                    _console("  [GAP] 重生成失败（详见 step01.log），保留上一版")
+                    _mrt._logger.warn(f"[WARN] GAP 重生成失败，保留上一版: {result.error}")
+                    _mrt._console("  [GAP] 重生成失败（详见 step01.log），保留上一版")
                     break
 
                 import re
@@ -13781,10 +12894,10 @@ def main() -> None:
                 raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
                 try:
-                    new_script = parse_response(raw, novel_text=novel_text)
+                    new_script = _mrt.parse_response(raw, novel_text=novel_text)
                 except (ValueError, json.JSONDecodeError) as e:
                     # 重生成结果 JSON 损坏 → 保留上一版，不中断流水线
-                    _logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")
+                    _mrt._logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")
                     break
                 # v6.62.7（09-09）零高潮救援：先判断这次重试是不是**修好了结构性
                 # 缺陷**。回退保护此前对「结构性缺陷 vs 措辞瑕疵」一视同仁，于是把
@@ -13793,7 +12906,7 @@ def main() -> None:
                 # → 终稿仍零高潮（原文 3100-4847 字的刺杀/尖叫/掩尸整段没拍，刺客与
                 # 张十三被提取进 characters 却零出镜，成片是 63s 吹箫风光片配一个
                 # 「公子遇刺」的钩子）。两个修复互相抵消，跟 v6.62.6 那次同构。
-                _new_climax = ((validate_script_gap(new_script, novel_text)
+                _new_climax = ((_mrt.validate_script_gap(new_script, novel_text)
                                 .get("distribution") or {}).get("climax_shots", 0))
                 _climax_rescue = _dist.get("climax_shots", 0) == 0 and _new_climax > 0
                 # 救援态下被豁免的软判据仍要留痕，否则「放宽了什么」不可追溯
@@ -13806,8 +12919,8 @@ def main() -> None:
                                       climax_rescue=_climax_rescue):
                     _reason = _retry_degrade_reason(script, new_script, novel_text,
                                                     climax_rescue=_climax_rescue)
-                    _logger.warn(f"[GAP] 重试版质量退化：{_reason}，回退保留上一版")
-                    _console(f"  [GAP] 重试版质量退化，回退保留上一版（{_reason}）")
+                    _mrt._logger.warn(f"[GAP] 重试版质量退化：{_reason}，回退保留上一版")
+                    _mrt._console(f"  [GAP] 重试版质量退化，回退保留上一版（{_reason}）")
                     break
                 # v6.157（2026-09-30 复核第 4 轮「重生成身份维护」）：GAP 重生成
                 # 也是**整份替换**——采纳前绑定本轮计划身份并核完整契约，不合格保留
@@ -13815,16 +12928,16 @@ def main() -> None:
                 _id_why = _bind_regen_plan_identity(script, new_script,
                                                     plan=pre_extracted_outline)
                 if _id_why:
-                    _logger.warn("[GAP] 重生成稿未保住计划身份/契约：%s，回退保留上一版"
+                    _mrt._logger.warn("[GAP] 重生成稿未保住计划身份/契约：%s，回退保留上一版"
                                  % "；".join(_id_why[:2]))
-                    _console("  [GAP] 重生成稿未保住计划身份/契约，回退保留上一版")
+                    _mrt._console("  [GAP] 重生成稿未保住计划身份/契约，回退保留上一版")
                     break
                 if _climax_rescue:
-                    _logger.warn(
+                    _mrt._logger.warn(
                         f"[GAP] 零高潮救援：上一版 0 个高潮镜 → 重试版 {_new_climax} 个，"
                         f"采纳重试版" + (f"（已豁免软判据：{_waived}）" if _waived else "")
                     )
-                    _console(f"  [GAP] 零高潮救援：采纳重试版（+{_new_climax} 高潮镜）")
+                    _mrt._console(f"  [GAP] 零高潮救援：采纳重试版（+{_new_climax} 高潮镜）")
                 script = new_script
                 # v6.67 接力修复：GAP 重生成走的是 provider 默认模型，产出者标识重置
                 _producer_model = None
@@ -13834,8 +12947,8 @@ def main() -> None:
             else:
                 # 达到最大尝试次数仍有问题，记录但不中断
                 # while...else 与原 for...else 语义一致：无 break 走完才告警
-                _logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
-            _timing_mark("gap_loop")  # v6.70.3: 通过/耗尽均在此收口（含 else 分支）
+                _mrt._logger.warn("[GAP] 达到最大重试次数，仍有差距问题，将继续处理")
+            _mrt._timing_mark("gap_loop")  # v6.70.3: 通过/耗尽均在此收口（含 else 分支）
 
         # v6.67（09-12）接力修复：赢家生成、输家修复——修复轮用互补模型换视角。
         # 修复 prompt 已有「只动告警镜头」+ Mask 字段约束，换模型影响面可控。
@@ -13844,13 +12957,13 @@ def main() -> None:
         _repair_model = _complementary_repair_model(_producer_model)
         if _repair_model:
             if _repair_model == _producer_model:
-                _logger.info(f"[RELAY] 单模型继续修复: {_repair_model}")
-                _console(f"  [单模型] 规划/生成/审查/修复均使用 {_repair_model}")
+                _mrt._logger.info(f"[RELAY] 单模型继续修复: {_repair_model}")
+                _mrt._console(f"  [单模型] 规划/生成/审查/修复均使用 {_repair_model}")
             else:
-                _logger.info(
+                _mrt._logger.info(
                     f"[RELAY] 产出模型 {_producer_model} → 修复轮接力 {_repair_model}"
                 )
-                _console(
+                _mrt._console(
                     f"  [接力] 修复轮改用 {_repair_model}（产出模型 {_producer_model} 的互补模型）"
                 )
 
@@ -13858,11 +12971,11 @@ def main() -> None:
         # v6.70.3: 超总预算 → 跳过可选修复轮（失败即保留原版语义，跳过无数据风险）
         # M04：额外动作启动**之前**为最终审计预留完整时间（不是等到审计开始时
         # 才截短额度）。动作耗时取最终生效的通道超时上限，保守按最坏情况算。
-        _adm_regen = (_action_budget_admission(
-            "regen_over_limit", _action_cost_sec("regen"))
-            if SHOT_COUNT_REGEN_ENABLED else {"allowed": False})
-        if SHOT_COUNT_REGEN_ENABLED and _adm_regen.get("allowed"):
-            _timing_mark("pre_regen_over_limit")
+        _adm_regen = (_mrt._action_budget_admission(
+            "regen_over_limit", _mrt._action_cost_sec("regen"))
+            if _mrt.SHOT_COUNT_REGEN_ENABLED else {"allowed": False})
+        if _mrt.SHOT_COUNT_REGEN_ENABLED and _adm_regen.get("allowed"):
+            _mrt._timing_mark("pre_regen_over_limit")
             from step01_script_gen.outline import outline_to_anchor as _o2a
             script = _regen_over_limit(
                 script, novel_text,
@@ -13875,25 +12988,25 @@ def main() -> None:
                 # （不能让它去基线里翻 `chapter_outline`——候选阶段它还没写入）
                 plan=pre_extracted_outline,
             )
-            _timing_mark("regen_over_limit")
-        elif SHOT_COUNT_REGEN_ENABLED:
-            _timing_mark("regen_over_limit", status="skipped_budget")
+            _mrt._timing_mark("regen_over_limit")
+        elif _mrt.SHOT_COUNT_REGEN_ENABLED:
+            _mrt._timing_mark("regen_over_limit", status="skipped_budget")
             _freeze_regen = _freeze_budget_exhausted(
                 script, action="regen_over_limit", admission=_adm_regen)
-            _metrics_set("budget.frozen_candidate", _freeze_regen)
-            _logger.warn("[BUDGET] 跳过镜头超限收敛轮（保留当前稿；终局=%s）"
+            _mrt._metrics_set("budget.frozen_candidate", _freeze_regen)
+            _mrt._logger.warn("[BUDGET] 跳过镜头超限收敛轮（保留当前稿；终局=%s）"
                          % _freeze_regen.get("terminal"))
-            _console("  [预算] 未给最终审计留下完整时间，冻结候选后停止额外生成")
+            _mrt._console("  [预算] 未给最终审计留下完整时间，冻结候选后停止额外生成")
 
         # v6.84（二次审核发现 1，P0）：**结构收敛轮**——单镜内容需求超 cap /
         # 时长低于下限。这两类缺陷字段级修复轮修不了（不是文本问题，是镜头切分
         # 问题），此前只有报告没有收敛路径，必然带着 BLOCK 落盘。这里让 LLM
         # **重做 shot-plan**（超限段落拆成多个完整子镜；过短镜头并入相邻剧情）。
-        _adm_structural = (_action_budget_admission(
-            "regen_structural_over_limit", _action_cost_sec("regen"))
-            if SHOT_COUNT_REGEN_ENABLED else {"allowed": False})
-        if SHOT_COUNT_REGEN_ENABLED and _adm_structural.get("allowed"):
-            _timing_mark("pre_regen_structural")
+        _adm_structural = (_mrt._action_budget_admission(
+            "regen_structural_over_limit", _mrt._action_cost_sec("regen"))
+            if _mrt.SHOT_COUNT_REGEN_ENABLED else {"allowed": False})
+        if _mrt.SHOT_COUNT_REGEN_ENABLED and _adm_structural.get("allowed"):
+            _mrt._timing_mark("pre_regen_structural")
             from step01_script_gen.outline import outline_to_anchor as _o2a
             # v6.128：结构收敛轮的道具候选短提示同样默认关闭（用户 2026-09-25 决定）
             from step01_script_gen.prop_state_anchor import (
@@ -13907,13 +13020,13 @@ def main() -> None:
                 contract_block=_contract,
                 plan=pre_extracted_outline,      # 同上（复核第 5 轮 P1-1）
             )
-            _timing_mark("regen_structural")
-        elif SHOT_COUNT_REGEN_ENABLED:
-            _timing_mark("regen_structural", status="skipped_budget")
+            _mrt._timing_mark("regen_structural")
+        elif _mrt.SHOT_COUNT_REGEN_ENABLED:
+            _mrt._timing_mark("regen_structural", status="skipped_budget")
             _freeze_structural = _freeze_budget_exhausted(
                 script, action="regen_structural_over_limit",
                 admission=_adm_structural)
-            _metrics_set("budget.frozen_candidate", _freeze_structural)
+            _mrt._metrics_set("budget.frozen_candidate", _freeze_structural)
 
         # v6.73: same-model independent audit before targeted repair.
         _audit_issues = []
@@ -13923,28 +13036,28 @@ def main() -> None:
                 len(_audit_models) == 1
                 and os.getenv("SINGLE_MODEL_AUDIT", "1").strip() == "1"
             )
-            _budget_hit_mid = _budget_exceeded_with_pause("mid_pipeline_audit")
+            _budget_hit_mid = _mrt._budget_exceeded_with_pause("mid_pipeline_audit")
             if _audit_enabled and not _budget_hit_mid:
                 from step01_script_gen.audit import run_same_model_audit_with_status
-                _metrics_inc("calls.audit")
-                _allow, _deadline, _to_info = _audit_budget_allowance()
-                _logger.info("[AUDIT] 本次审计可用 %ss（%s）｜总预算剩余 %s 秒"
+                _mrt._metrics_inc("calls.audit")
+                _allow, _deadline, _to_info = _mrt._audit_budget_allowance()
+                _mrt._logger.info("[AUDIT] 本次审计可用 %ss（%s）｜总预算剩余 %s 秒"
                              % (_allow, _to_info.get("why") or "-",
                                 _to_info.get("left") if _to_info.get("left") is not None
                                 else "未知"))
                 _audit_result = run_same_model_audit_with_status(
                     novel_text, pre_extracted_outline, script,
                     model=_repair_model or _producer_model,
-                    timeout_sec=int(_to_info.get("cap") or AUDIT_TIMEOUT_CAP_SEC),
+                    timeout_sec=int(_to_info.get("cap") or _mrt.AUDIT_TIMEOUT_CAP_SEC),
                     deadline_ts=_deadline,
                 )
                 _audit_issues = _audit_result.issues
                 # M04：中间轮审计同样分别记四项读数（不进产物，只进 metrics/日志）。
-                _mid_timing = _audit_budget_timing(
+                _mid_timing = _mrt._audit_budget_timing(
                     _audit_result, allowance_sec=_allow,
                     left_sec=_to_info.get("left"), phase="mid_pipeline")
-                _metrics_set("audit.budget_timing_mid", _mid_timing)
-                _logger.info(
+                _mrt._metrics_set("audit.budget_timing_mid", _mid_timing)
+                _mrt._logger.info(
                     "[AUDIT][BUDGET] mid_pipeline 剩余预算=%s｜审计允许=%ss｜"
                     "服务端等待=%ss｜流式耗时=%s（来源=%s）"
                     % (_mid_timing["remaining_budget_sec"],
@@ -13952,8 +13065,8 @@ def main() -> None:
                        _mid_timing["server_wait_sec"],
                        _mid_timing["stream_elapsed_sec"],
                        _mid_timing["stream_timing_source"]))
-                _metrics_set("audit.status", _audit_result.status)
-                _metrics_set("audit.issues", len(_audit_issues))
+                _mrt._metrics_set("audit.status", _audit_result.status)
+                _mrt._metrics_set("audit.issues", len(_audit_issues))
                 # v6.112：中间轮审计也进同一个台账（phase 区分），
                 # 否则「修复轮之前那一次审计说了什么」仍然无处可查。
                 _record_audit_diag(
@@ -13976,7 +13089,7 @@ def main() -> None:
                     # ① 让「提交点之外的第二个写入者」重新出现；
                     # ② 破坏 final audit 的复用判据（revision/scope 都对不上）。
                     _audit_dump(
-                        CHAPTER_DIR / "step01_audit.advisory.json",
+                        _mrt.CHAPTER_DIR / "step01_audit.advisory.json",
                         {
                             "status": _audit_result.status,
                             # 与提交轮同一口径：记**实际提交**的模型/通道
@@ -13991,43 +13104,43 @@ def main() -> None:
                         indent=2,
                     )
                 except Exception as _audit_dump_err:
-                    _logger.warn(f"[AUDIT] 审查结果落盘失败（不阻断）: {_audit_dump_err}")
+                    _mrt._logger.warn(f"[AUDIT] 审查结果落盘失败（不阻断）: {_audit_dump_err}")
                 if _audit_result.status == "ok":
-                    _logger.info(f"[AUDIT] same-model audit issues={len(_audit_issues)}")
+                    _mrt._logger.info(f"[AUDIT] same-model audit issues={len(_audit_issues)}")
                 else:
-                    _metrics_set("audit.error", _audit_result.error)
-                    _logger.warn(
+                    _mrt._metrics_set("audit.error", _audit_result.error)
+                    _mrt._logger.warn(
                         f"[AUDIT] same-model audit {_audit_result.status}"
                         f"（区别于 0 issue，不阻断）: {_audit_result.error}"
                     )
         except Exception as _audit_err:
-            _metrics_set("audit.status", "exception")
-            _metrics_set("audit.error", str(_audit_err))
-            _logger.warn(f"[AUDIT] same-model audit failed（不阻断）: {_audit_err}")
+            _mrt._metrics_set("audit.status", "exception")
+            _mrt._metrics_set("audit.error", str(_audit_err))
+            _mrt._logger.warn(f"[AUDIT] same-model audit failed（不阻断）: {_audit_err}")
 
         # v6.35（08-15，P18 闭环）：GAP 通过后仍存在的高价值告警（开篇冲突/
         # 爆点密度/威胁源朝向/关键帧质量/内容密度等）→ 定向修复轮，只重写
         # 告警镜头（此前这些 WARN 纯打印落盘，无人修，带伤进 step02）。
-        _adm_repair = (_action_budget_admission(
-            "repair_rounds", _action_cost_sec("repair"))
-            if REPAIR_ROUNDS_ENABLED else {"allowed": False})
-        if REPAIR_ROUNDS_ENABLED and _adm_repair.get("allowed"):
-            _timing_mark("pre_repair_rounds")
+        _adm_repair = (_mrt._action_budget_admission(
+            "repair_rounds", _mrt._action_cost_sec("repair"))
+            if _mrt.REPAIR_ROUNDS_ENABLED else {"allowed": False})
+        if _mrt.REPAIR_ROUNDS_ENABLED and _adm_repair.get("allowed"):
+            _mrt._timing_mark("pre_repair_rounds")
             script = _repair_shot_warnings(
                 script, novel_text,
                 bank=character_bank, objects_bank=scene_objects_bank,
                 model=_repair_model,
                 audit_issues=_audit_issues,
             )
-            _timing_mark("repair_rounds")
-        elif REPAIR_ROUNDS_ENABLED:
-            _timing_mark("repair_rounds", status="skipped_budget")
+            _mrt._timing_mark("repair_rounds")
+        elif _mrt.REPAIR_ROUNDS_ENABLED:
+            _mrt._timing_mark("repair_rounds", status="skipped_budget")
             _freeze_repair = _freeze_budget_exhausted(
                 script, action="repair_rounds", admission=_adm_repair)
-            _metrics_set("budget.frozen_candidate", _freeze_repair)
-            _logger.warn("[BUDGET] 跳过定向修复轮（保留当前稿，告警仍会落 SAVE-WARN；"
+            _mrt._metrics_set("budget.frozen_candidate", _freeze_repair)
+            _mrt._logger.warn("[BUDGET] 跳过定向修复轮（保留当前稿，告警仍会落 SAVE-WARN；"
                          "终局=%s）" % _freeze_repair.get("terminal"))
-            _console("  [预算] 未给最终审计留下完整时间，跳过定向修复轮")
+            _mrt._console("  [预算] 未给最终审计留下完整时间，跳过定向修复轮")
 
         # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
         script = _post_process(script)
@@ -14043,18 +13156,18 @@ def main() -> None:
         _preserve_shots: list[int] = []
         try:
             from shared.shot_diff import compute_shot_diff, should_preserve_artifacts
-            _old_script = json.load(open(SCRIPT_FILE, encoding="utf-8")) if SCRIPT_FILE.exists() else None
+            _old_script = json.load(open(_mrt.SCRIPT_FILE, encoding="utf-8")) if _mrt.SCRIPT_FILE.exists() else None
             if _old_script and should_preserve_artifacts(_old_script, script):
                 _diff = compute_shot_diff(_old_script, script)
                 _preserve_shots = _diff.get("unchanged", [])
-                _logger.info(
+                _mrt._logger.info(
                     f"[PRESERVE] 逐镜对比放行：未变 {len(_preserve_shots)} 镜"
                     f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_diff.get('changed', []))} 镜重新生成"
                 )
                 # 只清理 changed/removed 镜头的帧/视频（未变镜头保留）
                 for _sub_path, _shots_root in (
-                    (vimax_working_dir(), vimax_shots_dir()),
-                    (stretched_dir(), stretched_dir() / "shots"),
+                    (_mrt.vimax_working_dir(), _mrt.vimax_shots_dir()),
+                    (_mrt.stretched_dir(), _mrt.stretched_dir() / "shots"),
                 ):
                     if _sub_path.exists():
                         if _shots_root.exists():
@@ -14063,33 +13176,33 @@ def main() -> None:
                                 if _shot_dir.exists():
                                     import shutil as _sh
                                     _sh.rmtree(_shot_dir)
-                                    _logger.verbose(f"  [已清理] {_sub_path.name}/shots/{_sid}/（内容变更）")
+                                    _mrt._logger.verbose(f"  [已清理] {_sub_path.name}/shots/{_sid}/（内容变更）")
         except Exception as _preserve_err:
-            _logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
+            _mrt._logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
 
         if not _preserve_shots:
-            _logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
-            for subdir_path in (audio_dir(), vimax_working_dir(), stretched_dir()):
+            _mrt._logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
+            for subdir_path in (_mrt.audio_dir(), _mrt.vimax_working_dir(), _mrt.stretched_dir()):
                 if subdir_path.exists():
                     import shutil
                     try:
                         shutil.rmtree(subdir_path)
-                        _logger.verbose(f"  [已删除] {subdir_path.name}/")
+                        _mrt._logger.verbose(f"  [已删除] {subdir_path.name}/")
                     except PermissionError as _e:
                         # 09-13 实测：Explorer/看图器/杀毒占用目录 → WinError 32。
                         # 清理失败就 FATAL 会吞掉整个 LLM 生成结果（此时 script 尚未
                         # 落盘，两轮实跑各 ~10 min 全白跑）。旧帧由内容哈希自动失效
                         # （ff/kf desc 变更 → hash mismatch → step02a 重抽），跳过即可。
-                        _logger.warn(f"  [WARN] {subdir_path.name}/ 被占用（{type(_e).__name__}），"
+                        _mrt._logger.warn(f"  [WARN] {subdir_path.name}/ 被占用（{type(_e).__name__}），"
                                      "跳过清理——旧文件由内容哈希自动失效")
         # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
-        for fpath in (final_file(), subtitles_file()):
+        for fpath in (_mrt.final_file(), _mrt.subtitles_file()):
             if fpath.exists():
                 try:
                     fpath.unlink()
-                    _logger.verbose(f"  [已删除] {fpath.name}")
+                    _mrt._logger.verbose(f"  [已删除] {fpath.name}")
                 except PermissionError:
-                    _logger.warn(f"  [WARN] {fpath.name} 被占用（播放器？），跳过重删")
+                    _mrt._logger.warn(f"  [WARN] {fpath.name} 被占用（播放器？），跳过重删")
 
         # ========================================================================
         # 钩子分镜生成（v6 沿用 + v6.39 调用顺序硬约束）
@@ -14113,7 +13226,7 @@ def main() -> None:
         #   - 步骤③ _hook_dup_hits 比对时 shots 列表未变（避免 race）
         # ========================================================================
         _forbidden_lines: list[str] | None = None
-        if HOOK_ENABLED and _hook_max_sends() > 0:
+        if _mrt.HOOK_ENABLED and _hook_max_sends() > 0:
             #: 钩子分类预算（初始 1 次 + 重复重试；上限 `_hook_max_sends()`）
             _hook_sends = 0
             # ===== ① 提取 forbidden_lines（assert 保护调用顺序）=====
@@ -14127,10 +13240,10 @@ def main() -> None:
                 _body = _speech_body(_s.get("narration_segment", ""))
                 if _body:
                     _forbidden_lines.append(_body)
-            _logger.info(f"[INFO] 钩子禁止台词清单已就绪（{len(_forbidden_lines)} 条）")
+            _mrt._logger.info(f"[INFO] 钩子禁止台词清单已就绪（{len(_forbidden_lines)} 条）")
 
             # ===== ② 调用 hook LLM（注入 forbidden_lines）=====
-            _logger.info("\n[INFO] 开始生成钩子分镜...")
+            _mrt._logger.info("\n[INFO] 开始生成钩子分镜...")
             hook = gen_hook_script(
                 novel_text,
                 bank=character_bank,
@@ -14138,12 +13251,12 @@ def main() -> None:
                 forbidden_lines=_forbidden_lines,  # 必传参数，v6.32 强约束
             )
             _hook_sends += 1
-            _timing_mark("hook_generation", ok=hook is not None)
+            _mrt._timing_mark("hook_generation", ok=hook is not None)
 
             if hook:
                 # ===== ③ 合并 + 去重 retry + 兜底清空 =====
                 script["hook"] = hook
-                _logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
+                _mrt._logger.info(f"[OK] 钩子分镜已生成: {hook.get('narration_segment', '')[:30]}...")
 
                 # 闭包：引用外层 _shots_for_hook（步骤③ shots 列表不变 invariant）
                 def _hook_dup_hits() -> list:
@@ -14168,11 +13281,11 @@ def main() -> None:
                        and _hook_sends < _hook_max_sends()):
                     _regen_attempt += 1
                     _hook_line_prev = _speech_body(hook.get("narration_segment", ""))
-                    _logger.warn(
+                    _mrt._logger.warn(
                         f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复（C4 修复），"
                         f"自动重新生成钩子换台词（尝试 {_regen_attempt}/2）..."
                     )
-                    _console(f"  [WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复，重新生成钩子（{_regen_attempt}/2）...")
+                    _mrt._console(f"  [WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复，重新生成钩子（{_regen_attempt}/2）...")
                     _dup_note = (
                         f"上一版钩子台词「{_hook_line_prev[:30]}」与主分镜镜头 {_dup_hits} 的台词重复"
                         f"（观众刚在钩子听到、又在正片听到，倒叙穿帮）。请严格换一句完全不同的台词：\n"
@@ -14189,18 +13302,18 @@ def main() -> None:
                         break  # 重生成失败，保留原钩子
                     hook = _hook_retry
                     script["hook"] = hook
-                    _logger.info(f"[OK] 钩子分镜已重新生成: {hook.get('narration_segment', '')[:30]}...")
+                    _mrt._logger.info(f"[OK] 钩子分镜已重新生成: {hook.get('narration_segment', '')[:30]}...")
                     _dup_hits = _hook_dup_hits()
                 if _dup_hits:
                     # 确定性兜底（08-12）：重试仍重复则清空钩子台词，改纯画面开场——
                     # 钩子画面（刺客破水+匕首下刺）本身是强开场，宁可无台词也不倒叙穿帮。
                     hook["narration_segment"] = ""
                     hook["subtitle"] = ""
-                    _logger.warn(
+                    _mrt._logger.warn(
                         f"[WARN] 钩子台词与主分镜镜头 {_dup_hits} 重复且重生成仍未解决，"
                         f"已强制改为纯画面开场（narration_segment 清空）——无台词优于倒叙穿帮。"
                     )
-                    _console(f"  [WARN] 钩子台词仍重复，已改为纯画面开场")
+                    _mrt._console(f"  [WARN] 钩子台词仍重复，已改为纯画面开场")
                 # v6.18：钩子在 parse_response 之后才挂载（_validate_script 已跑完），
                 # 必须补自动修复 + 校验，否则钩子 ff_desc 零校验零修复（多动作堆叠
                 # 直接落盘，导致首帧图画不出三个同时态动作）。
@@ -14209,7 +13322,7 @@ def main() -> None:
                     post_fix_shot_prompts(script)  # 幂等：shots 已修复过，主要触发 hook 分支
                     validate_hook(script["hook"], script.get("characters", []))
                 except Exception as _hook_fix_err:
-                    _logger.warn(f"[WARN] 钩子修复/校验异常（不阻断）: {_hook_fix_err}")
+                    _mrt._logger.warn(f"[WARN] 钩子修复/校验异常（不阻断）: {_hook_fix_err}")
 
                 # ===== ④ 钩子后置校验轮（v6.70.1，09-13；09-14 抽出共享门）=====
                 # 结构性缺口：钩子生成时点在定向修复轮之后，checklist 的 LLM 修复轮
@@ -14224,38 +13337,38 @@ def main() -> None:
                         forbidden_lines=_forbidden_lines,
                         producer_model=_producer_model)
                 except Exception as _e:
-                    _logger.warn(f"[WARN] 钩子后置校验异常（不阻断）: {_e}")
+                    _mrt._logger.warn(f"[WARN] 钩子后置校验异常（不阻断）: {_e}")
             else:
-                _logger.info("[INFO] 跳过钩子分镜")
+                _mrt._logger.info("[INFO] 跳过钩子分镜")
 
         # 提取角色（跨章节一致性）
-        if CHARACTER_EXTRACTION_ENABLED:
+        if _mrt.CHARACTER_EXTRACTION_ENABLED:
             if pre_extracted_chars is not None:
                 # 复用预提取结果，避免二次 LLM 调用（角色库已在预提取阶段保存）
                 chars = pre_extracted_chars
-                _logger.info(f"[INFO] 复用预提取的 {len(chars)} 个角色")
+                _mrt._logger.info(f"[INFO] 复用预提取的 {len(chars)} 个角色")
             else:
                 # 预提取阶段失败时才重新提取
-                _logger.info("[INFO] 提取角色信息...")
+                _mrt._logger.info("[INFO] 提取角色信息...")
                 # #26 修复 2026-08-14：LLM 提取失败不应中断整条流水线——
                 # 回退到脚本解析阶段已收集的 characters（可能为空），仅 WARN。
                 # 2026-10-02：提取器把"没产出"（调用/解析失败）与"真的没有角色"分开
                 # ——前者返回 `None`，这里同样按失败回退（旧实现两者都是 `[]`，
                 # 于是 `script["characters"]` 会被写成 None / 记成"0 个"）。
                 try:
-                    chars = extract_characters(novel_text, character_bank)
+                    chars = _mrt.extract_characters(novel_text, character_bank)
                     if chars is None:
-                        _logger.warn(
+                        _mrt._logger.warn(
                             "[WARN] 角色提取未产出（调用/解析失败）——回退使用脚本内已有 characters")
                         chars = script.get("characters", []) or []
                 except Exception as _char_err:
-                    _logger.warn(
+                    _mrt._logger.warn(
                         f"[WARN] 角色提取失败（不阻断）: {_char_err}，"
                         f"回退使用脚本内已有 characters")
                     chars = script.get("characters", []) or []
             script["characters"] = chars
             # 注意：角色库已在预提取阶段保存，无需重复保存
-            _logger.info(f"[INFO] 已提取 {len(chars)} 个角色")
+            _mrt._logger.info(f"[INFO] 已提取 {len(chars)} 个角色")
 
         # 写入场景物体锚定（v6.6）：供下游 step02/validation 引用统一尺寸
         _scene_objects_out = {}
@@ -14273,10 +13386,10 @@ def main() -> None:
         # v7: 场景/道具资产提取（依赖 script 的 shots[].scene/location/prompt，
         # 必须在脚本生成/收敛之后执行；缓存命中路径也调用同一函数）
         _extract_assets_and_update_script(script)
-        _timing_mark("asset_extraction")
+        _mrt._timing_mark("asset_extraction")
 
         # 计算时间轴（v5.0 运镜量化参数）
-        _compute_timecodes(script)
+        _mrt._compute_timecodes(script)
         # 08-23 v6.41 P19 闭环：硬修复层必须在 _compute_timecodes 之后调用——
         # 此前 hard_fix 在 REPAIR 内部调用，但 line 1659 _compute_timecodes 会按
         # motion_desc 重算 duration_sec，覆盖 W6 时长拉伸的值。改为：每次落盘前
@@ -14291,7 +13404,7 @@ def main() -> None:
         _check_fps_consistency(script)
 
         # 章节元信息（部名/章名，来自小说标题行「第一部 杀青州 第NNN章 章名」）
-        script.update(get_chapter_meta(resolve_novel_file(), NOVEL_CHAPTER))
+        script.update(_mrt.get_chapter_meta(_mrt.resolve_novel_file(), _mrt.NOVEL_CHAPTER))
 
         # 写入 hash
         # v6.83（二次审核发现 6）：**必须用非下划线键**。
@@ -14302,9 +13415,9 @@ def main() -> None:
         # 「重跑 = 缓存重验」这条路径从未生效过（chapter 001 实测
         # `_source_hash=None`）。缓存/version 迁移测试也因此失去意义。
         # 读侧仍兼容旧文件里的 `_source_hash`（见 hash_cache._prompt_changed）。
-        script["source_hash"] = _hash_source(
-            str(Path(__file__).parent / "prompts.py"), novel_source_text, NOVEL_CHAPTER,
-            objects_bank_data, rule_version=RULE_VERSION,
+        script["source_hash"] = _mrt._hash_source(
+            str(Path(__file__).parent / "prompts.py"), novel_source_text, _mrt.NOVEL_CHAPTER,
+            objects_bank_data, rule_version=_mrt.RULE_VERSION,
         )
 
         # v6.50（08-29）：保存前重算 shot_count——timecode pre-pass 拆镜发生在
@@ -14314,7 +13427,7 @@ def main() -> None:
         # v6.70.1（09-14）：BEST-GUARD 可能选中历史快照——v6.103 起它**只选候选**，
         # 不再落盘、不再 finalize、不再跑钩子门；被选中的快照与本次终稿走**同一条**
         # 公共提交管线（hook QC → finalize → revision → quality → final audit）。
-        if not HOOK_ENABLED:
+        if not _mrt.HOOK_ENABLED:
             script.pop("hook", None)
         # v6.135（工作包 sunny-kindling-wilkinson，审核约束③时序）：**终稿台词完整性门**
         # ——盖在定向拆分（`_scoped_split_over_cap_shots` 会重排 narration）与
@@ -14338,9 +13451,9 @@ def main() -> None:
         except Exception as _e:
             _ct_ok = False
             _ct_viol = [{"code": "gate_error", "shot": "", "detail": str(_e)}]
-            _logger.error(f"[CANDIDATE] 事件履约契约门异常（终稿层，fail-closed）：{_e}")
+            _mrt._logger.error(f"[CANDIDATE] 事件履约契约门异常（终稿层，fail-closed）：{_e}")
         if not _ct_ok:
-            _logger.error(
+            _mrt._logger.error(
                 "[CANDIDATE] event contract failed（终稿层，拆分/finalize 后）："
                 + "；".join("%s@%s %s" % (v.get("code"), v.get("shot") or "-",
                                           str(v.get("detail"))[:60])
@@ -14353,13 +13466,13 @@ def main() -> None:
             # （独立诊断），不裸崩、不退回原样匹配放行
             _dlg_ok = False
             _dlg_broken = [{"line": "", "reason": "gate_error: %s" % _e}]
-            _logger.error(f"[CANDIDATE] 台词门异常（终稿层，fail-closed BLOCK）：{_e}")
+            _mrt._logger.error(f"[CANDIDATE] 台词门异常（终稿层，fail-closed BLOCK）：{_e}")
         if not _dlg_ok:
             _dlg_total = len(plan_dialogue_lines(pre_extracted_outline))
-            dump_dialogue_incomplete(CHAPTER_DIR, [_dlg_broken], total_lines=_dlg_total,
+            dump_dialogue_incomplete(_mrt.CHAPTER_DIR, [_dlg_broken], total_lines=_dlg_total,
                                      layer="终稿层", plan=pre_extracted_outline)
             _dlg_gate_err = str(_dlg_broken[0].get("reason") or "").startswith("gate_error")
-            _logger.error(
+            _mrt._logger.error(
                 "[CANDIDATE] dialogue integrity failed（终稿台词完整性门，拆分/finalize 后）："
                 + "；".join("%s（%s）" % (b.get("line", "")[:40], b.get("reason"))
                             for b in _dlg_broken[:3]))
@@ -14383,7 +13496,7 @@ def main() -> None:
             script = _bg_selected
         if pre_extracted_outline:
             script["chapter_outline"] = pre_extracted_outline
-        _metrics_update("best_guard", {
+        _mrt._metrics_update("best_guard", {
             "selected": bool(_bg_meta.get("selected")),
             "reason": _bg_meta.get("reason"),
             "new_score": _bg_meta.get("new_score"),
@@ -14412,13 +13525,13 @@ def main() -> None:
             source_revision=str(_bg_meta.get("selected_revision") or ""),
             source_aliases=dict(_bg_meta.get("selected_revision_aliases") or {}))
         # C1：提交结果 → 运行终局（**与缓存命中路径同一投影**）
-        _project_commit_outcome(_commit_summary)
+        _mrt._project_commit_outcome(_commit_summary)
         # C5 修复（08-11）：fps 一致性校验（finalize 之后 timeline 已存在）
         _check_fps_consistency(script)
         # 提交成功后留档（失败时提交点自己会写诊断快照）
         if _commit_summary.get("status") == "COMMITTED":
             _snapshot_run_artifacts(script)
-        _timing_mark("commit", status=_commit_summary.get("status"))
+        _mrt._timing_mark("commit", status=_commit_summary.get("status"))
 
         # v6.70.1（09-13）：提交后未解决 issue 汇总——对最终写盘版本生效。
         # 定向修复轮超时/失败走「保留原版」时只有一行 WARN，残伤数据静默落盘
@@ -14430,29 +13543,29 @@ def main() -> None:
             _n_hard_shots = len([k for k in (_final_hard.get("shots") or {})
                                  if k not in ("_has_hard",)])
             if _final_hard.get("_has_hard") or _final_hook_issues:
-                _logger.warn(
+                _mrt._logger.warn(
                     f"[SAVE-WARN] ⚠️ 落盘脚本仍带未解决 issue：{_n_hard_shots} 镜 + "
                     f"钩子 {len(_final_hook_issues)} 条——修复轮可能超时保留原版，"
                     f"请过目 step01 日志再进 step02a")
-                _console(f"  ⚠️ 落盘前仍有未解决 issue（{_n_hard_shots} 镜 / 钩子 "
+                _mrt._console(f"  ⚠️ 落盘前仍有未解决 issue（{_n_hard_shots} 镜 / 钩子 "
                          f"{len(_final_hook_issues)} 条），详见日志")
         except Exception as _e:
-            _logger.warn(f"[WARN] 落盘前 issue 汇总异常（不阻断）: {_e}")
+            _mrt._logger.warn(f"[WARN] 落盘前 issue 汇总异常（不阻断）: {_e}")
 
         # 质量报告由提交点产出（staged → 自验 → 原子替换），这里只消费它的结果。
         _quality = _commit_summary.get("quality") or {}
         _shot_total = sum(float(s.get("duration_sec") or 0) for s in script.get("shots", []))
         _hook_total = float((script.get("hook") or {}).get("duration_sec") or 0)
-        _metrics_update("duration", {
-            "duration_band": duration_band(),
+        _mrt._metrics_update("duration", {
+            "duration_band": _mrt.duration_band(),
             "shots_total_sec": round(_shot_total, 3),
             "hook_sec": round(_hook_total, 3),
             "total_sec": round(_shot_total + _hook_total, 3),
             "budget_status": (
-                "PASS" if DURATION_MIN_SEC - 0.01 <= _shot_total <= DURATION_MAX_SEC + 0.01 else "BLOCK"
+                "PASS" if _mrt.DURATION_MIN_SEC - 0.01 <= _shot_total <= _mrt.DURATION_MAX_SEC + 0.01 else "BLOCK"
             ),
         })
-        _metrics_update("quality", {
+        _mrt._metrics_update("quality", {
             "status": _quality.get("status"),
             "hard_count": _quality.get("hard_count", 0),
             "visual_risk_count": _quality.get("visual_risk_count", 0),
@@ -14468,81 +13581,81 @@ def main() -> None:
             # 「PASS: 无 HARD / VisualRisk 阻塞项」。那是**没检出**被说成**没问题**
             # （工作准则 7），而且同一个 run 的 manifest 里还列着 10 条 blocking。
             # 「没有可用的质量判定」必须显式说出来。
-            _logger.warn(
+            _mrt._logger.warn(
                 "[QUALITY-GATE] 未产出质量报告（提交提前中止 / 审计未完成）——"
                 "本次没有可用的质量判定，不得据此认为无阻塞项"
             )
         elif _quality.get("blocking"):
-            _logger.warn(
+            _mrt._logger.warn(
                 f"[QUALITY-GATE] BLOCK: hard={_quality.get('hard_count', 0)}, "
                 f"visual={_quality.get('visual_risk_count', 0)}; "
                 f"categories={_quality.get('blocking_categories', [])}"
             )
-            _console("  [QUALITY-GATE] BLOCK: 仍有生图阻塞告警，见 step01_quality.json")
+            _mrt._console("  [QUALITY-GATE] BLOCK: 仍有生图阻塞告警，见 step01_quality.json")
         else:
-            _logger.info("[QUALITY-GATE] PASS: 无 HARD / VisualRisk 阻塞项")
+            _mrt._logger.info("[QUALITY-GATE] PASS: 无 HARD / VisualRisk 阻塞项")
         # v6.103：**只有真的提交了**才能说「已保存」。提交点 BLOCK 时三份正式产物
         # 一个字都没换（旧脚本会被骗成「已保存」——真实重跑实测过：BLOCK 之后仍打
         # 了「[OK] 分镜脚本已保存至 …」，而文件时间戳还是上一版）。
         _committed = _commit_summary.get("status") == "COMMITTED"
         if _committed:
-            _logger.info(f"[OK] 分镜脚本已提交至 {OUTPUT_FILE}")
+            _mrt._logger.info(f"[OK] 分镜脚本已提交至 {_mrt.OUTPUT_FILE}")
         else:
-            _logger.error(
+            _mrt._logger.error(
                 f"[BLOCK] 分镜脚本**未提交**（三份正式产物保持上一版）："
                 f"{_commit_summary.get('detail')}"
             )
 
         # ---- 最终摘要：写真实 stdout（控制台），绕过重定向 ----
         shots = script.get("shots", [])
-        _console("")
-        _console("=" * 56)
-        _console("  [步骤1] " + ("完成 —— 分镜脚本摘要" if _committed
+        _mrt._console("")
+        _mrt._console("=" * 56)
+        _mrt._console("  [步骤1] " + ("完成 —— 分镜脚本摘要" if _committed
                                   else "✗ BLOCK —— 正式产物未更新"))
-        _console("=" * 56)
+        _mrt._console("=" * 56)
         if not _committed:
-            _console(f"  [BLOCK] {_commit_summary.get('detail')}")
-            _console("  step01_commit.json 标记为 BLOCK；下游（step02a）会拒绝启动")
-        _console(f"  输出: {OUTPUT_FILE}")
-        _console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
-        _console(f"  总时长: {script.get('total_duration', 0):.1f}s")
+            _mrt._console(f"  [BLOCK] {_commit_summary.get('detail')}")
+            _mrt._console("  step01_commit.json 标记为 BLOCK；下游（step02a）会拒绝启动")
+        _mrt._console(f"  输出: {_mrt.OUTPUT_FILE}")
+        _mrt._console(f"  镜头数: {len(shots)}" + ("  + 钩子" if script.get("hook") else ""))
+        _mrt._console(f"  总时长: {script.get('total_duration', 0):.1f}s")
         _scene_objs = script.get("scene_objects", {})
         if _scene_objs:
-            _console(f"  场景物体: {', '.join(_scene_objs.keys())}")
+            _mrt._console(f"  场景物体: {', '.join(_scene_objs.keys())}")
         _sa = script.get("scene_assets", {})
         _pa = script.get("prop_assets", {})
         if _sa or _pa:
-            _console(f"  资产: 场景{len(_sa)}个 {', '.join(_sa.keys())} / 道具{len(_pa)}个 {', '.join(_pa.keys())}")
+            _mrt._console(f"  资产: 场景{len(_sa)}个 {', '.join(_sa.keys())} / 道具{len(_pa)}个 {', '.join(_pa.keys())}")
         for k in ("resolution", "ratio", "fps", "render_style"):
             if k in script:
-                _console(f"  {k}: {script[k]}")
-        _console("  前 3 镜:")
+                _mrt._console(f"  {k}: {script[k]}")
+        _mrt._console("  前 3 镜:")
         for shot in shots[:3]:
             idx = shot.get("index", "?")
             sub = (shot.get('subtitle', '') or '').strip()
             if sub:
-                _console(f"    - 镜{idx}: {sub[:42]}")
+                _mrt._console(f"    - 镜{idx}: {sub[:42]}")
             else:
                 # subtitle 为空时回退到 main_subject（避免误报"空镜"）
                 ms = (shot.get('main_subject', '') or '').strip()
-                _console(f"    - 镜{idx}: [{ms[:42]}] （subtitle 空）" if ms else f"    - 镜{idx}: (无 main_subject)")
-        _console("=" * 56)
-        _console("  ⚠️ 详细校验 WARN 已写入 step01.log，控制台不再重复输出")
-        _console("=" * 56)
+                _mrt._console(f"    - 镜{idx}: [{ms[:42]}] （subtitle 空）" if ms else f"    - 镜{idx}: (无 main_subject)")
+        _mrt._console("=" * 56)
+        _mrt._console("  ⚠️ 详细校验 WARN 已写入 step01.log，控制台不再重复输出")
+        _mrt._console("=" * 56)
 
         # 恢复 stdout
-        sys.stdout = _REAL_STDOUT
-        _logger.console_silent = False
+        sys.stdout = _mrt._REAL_STDOUT
+        _mrt._logger.console_silent = False
     finally:
-        _release_step01_lock()
+        _mrt._release_step01_lock()
         # **终局判定单点**（2026-10-02 复核）：`finally` 里 `sys.exc_info()` 非空 ⇒ 本轮
         # 是带着异常退出的（含 `PlanInfeasibleError` 这类"计划层停下"）⇒ metrics/timing
         # 如实写 failed + 码；旧实现无论怎么死都写 `_total status=ok`。
         _exc = sys.exc_info()[0]
         if _exc is not None:
-            _run_finish("failed", getattr(_exc, "__name__", str(_exc)))
-        _timing_dump(CHAPTER_DIR / "step01_timing.json")  # v6.70.3: 阶段耗时指标落盘
-        _metrics_dump(CHAPTER_DIR / "step01_metrics.json")  # 调用/修复/时长结构化指标
+            _mrt._run_finish("failed", getattr(_exc, "__name__", str(_exc)))
+        _mrt._timing_dump(_mrt.CHAPTER_DIR / "step01_timing.json")  # v6.70.3: 阶段耗时指标落盘
+        _mrt._metrics_dump(_mrt.CHAPTER_DIR / "step01_metrics.json")  # 调用/修复/时长结构化指标
 
 
 if __name__ == "__main__":
@@ -14553,9 +13666,9 @@ if __name__ == "__main__":
         tb = traceback.format_exc()
         # 完整 traceback 写入 step01.log（verbose 仅文件，不依赖 stderr）
         for line in tb.splitlines():
-            _logger.verbose(line)
+            _mrt._logger.verbose(line)
         # 恢复真实 stdout，控制台显示一行错误摘要
-        sys.stdout = _REAL_STDOUT
-        _logger.console_silent = False
-        _logger.error(f"[FATAL] {_fatal_summary(sys.exc_info()[1], tb)}")
+        sys.stdout = _mrt._REAL_STDOUT
+        _mrt._logger.console_silent = False
+        _mrt._logger.error(f"[FATAL] {_fatal_summary(sys.exc_info()[1], tb)}")
         sys.exit(1)

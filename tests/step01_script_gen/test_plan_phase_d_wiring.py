@@ -29,6 +29,7 @@ if str(_ROOT) not in sys.path:
 from step01_script_gen import outline as o                                    # noqa: E402
 from step01_script_gen import plan_feasibility as pf                          # noqa: E402
 from step01_script_gen.concurrent_extract import extract_all_concurrent       # noqa: E402
+from tests.verification_helpers import step01_getsource  # noqa: E402
 
 #: 规划额度**单一来源**（2026-11-15 用户批准 4→6；测试不再写字面量 3/4）
 _N = o.DEFAULT_REVISION_MAX_CALLS
@@ -367,7 +368,7 @@ def test_d04_the_deadline_is_computed_once_and_checked_before_candidates():
     """§7.4 / D04：`_planning_deadline_at()` 在 main 里**只算一次**；判"能不能下发"在
     **候选生成之前**（⇒ executable=False 时候选生成调用次数为 0）."""
     from step01_script_gen import main as _m
-    _src = inspect.getsource(_m.main)
+    _src = step01_getsource(_m.main)
     assert _src.count("_planning_deadline_at()") == 1, (
         "同一次运行只许算一次绝对截止时刻（各处不得重算 now+cap）")
     assert _src.count("_deadline_monotonic = _planning_deadline_at()") == 1
@@ -385,7 +386,7 @@ def test_d04_the_deadline_is_computed_once_and_checked_before_candidates():
 def test_d04_the_pre_generation_gate_takes_the_same_deadline(tmp_path, monkeypatch):
     """G3：生成前门接同一份截止；截止已到 ⇒ `deadline_exhausted` 诊断（不是"故事不可行"）."""
     from step01_script_gen import main as _m
-    _src = inspect.getsource(_m._generate_script_candidates)
+    _src = step01_getsource(_m._generate_script_candidates)
     assert "deadline_monotonic=deadline_monotonic" in _src
     _past = 1.0                       # 远早于现在的单调钟 ⇒ 必定已过
     with pytest.raises(pf.PlanInfeasibleError) as _e:

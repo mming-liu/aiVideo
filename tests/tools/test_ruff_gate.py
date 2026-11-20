@@ -69,3 +69,24 @@ def test_init_writes_once_and_rejects_f821(tmp_path, monkeypatch):
     assert ruff_gate.load_baseline(p) == Counter({("m.py", "F401", "os"): 1})
     assert ruff_gate.main(["--init"]) == 1
     assert ruff_gate.main([]) == 0
+
+
+def test_offset_moves_only_matches_same_code_and_name():
+    added = [(("pkg/new/a.py", "F401", "os"), 1), (("pkg/new/a.py", "F401", "re"), 1),
+             (("other.py", "F401", "os"), 1)]
+    removed = [(("pkg/main.py", "F401", "os"), 1)]
+    rest, offsets = ruff_gate.offset_moves(added, removed, "pkg/main.py", "pkg/new/")
+    assert offsets == [("F401", "os", "pkg/main.py", "pkg/new/a.py", 1)]
+    assert rest == [(("pkg/new/a.py", "F401", "re"), 1), (("other.py", "F401", "os"), 1)]
+
+
+def test_update_with_moves_accepts_moved_entries(tmp_path, monkeypatch):
+    p = tmp_path / "b.json"
+    monkeypatch.setattr(ruff_gate, "BASELINE", p)
+    ruff_gate.dump_baseline(Counter({("pkg/main.py", "F401", "os"): 1}), p)
+    monkeypatch.setattr(ruff_gate, "run_ruff", lambda: [_diag("pkg/new/a.py", "F401", "os")])
+    assert ruff_gate.main([]) == 1
+    args = ["--moved-from", "pkg/main.py", "--moved-to", "pkg/new/"]
+    assert ruff_gate.main(args) == 0
+    assert ruff_gate.main(["--update", *args]) == 0
+    assert ruff_gate.load_baseline(p) == Counter({("pkg/new/a.py", "F401", "os"): 1})

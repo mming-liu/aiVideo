@@ -37,6 +37,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from step01_script_gen import plan_feasibility as pf  # noqa: E402
+from tests.verification_helpers import step01_getsource  # noqa: E402
 
 _FIX = Path(__file__).resolve().parent / "fixtures"
 
@@ -503,7 +504,7 @@ def test_all_four_full_draft_entries_carry_the_execution_contract():
     import inspect
     import step01_script_gen.main as m
 
-    _g = inspect.getsource(m.gen_spy_script)
+    _g = step01_getsource(m.gen_spy_script)
     assert "render_execution_contract(outline)" in _g
     assert "append_execution_contract(" in _g
     for _fn in (m._regen_over_limit, m._regen_structural_over_limit):
@@ -512,7 +513,7 @@ def test_all_four_full_draft_entries_carry_the_execution_contract():
         _tail = _src[_src.index("append_execution_contract(prompt, contract_block)"):]
         assert "prompt = prompt +" not in _tail and "prompt +=" not in _tail, (
             "%s：契约追加之后又拼了内容，契约不在末尾" % _fn.__name__)
-    _main = inspect.getsource(m.main)
+    _main = step01_getsource(m.main)
     assert "_contract = render_execution_contract(pre_extracted_outline)" in _main, (
         "契约块要在扇出前算一次，四个入口共用同一份")
     assert "_build_gap_regen_prompt(" in _main, "GAP 重生必须走统一组装（契约在末尾）"
@@ -520,7 +521,7 @@ def test_all_four_full_draft_entries_carry_the_execution_contract():
         "超限收敛 / 结构收敛两处都要带契约块")
     assert _main.count("_o2a(pre_extracted_outline, novel_text)") == 2, (
         "结构收敛 / 超限收敛两处锚点渲染都要带**核验过**的原文")
-    assert "_o2a(outline, novel_text)" in inspect.getsource(m._build_gap_regen_prompt), (
+    assert "_o2a(outline, novel_text)" in step01_getsource(m._build_gap_regen_prompt), (
         "GAP 那处的锚点渲染同样要带核验过的原文")
 
 
@@ -541,7 +542,7 @@ def test_every_full_draft_entry_renders_the_anchor_with_the_plan():
     import inspect
     import step01_script_gen.main as m
 
-    assert 'outline_anchor: str = ""' in inspect.getsource(m._regen_over_limit), (
+    assert 'outline_anchor: str = ""' in step01_getsource(m._regen_over_limit), (
         "超限收敛必须能收大纲锚点")
 
 

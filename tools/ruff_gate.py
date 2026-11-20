@@ -90,10 +90,34 @@ def compare(current: Counter, baseline: Counter) -> tuple[list, list]:
     return added, removed
 
 
+def offset_moves(added: list, removed: list, moved_from: str, moved_to: str):
+    """代码搬迁抵消：`moved_to` 前缀下新增、`moved_from` 下减少的同 (code, 名字) 条目互相抵消.
+
+    返回 (剩余新增, 抵消明细)。抵消明细逐条列出，写进交付记录。
+    """
+    pool: dict = {}
+    for (path, code, name), k in removed:
+        if path == moved_from:
+            pool[(code, name)] = pool.get((code, name), 0) + k
+    rest, offsets = [], []
+    for (path, code, name), k in added:
+        if path.startswith(moved_to) and pool.get((code, name), 0) > 0:
+            take = min(k, pool[(code, name)])
+            pool[(code, name)] -= take
+            offsets.append((code, name, moved_from, path, take))
+            if k - take:
+                rest.append(((path, code, name), k - take))
+        else:
+            rest.append(((path, code, name), k))
+    return rest, offsets
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--update", action="store_true")
     ap.add_argument("--init", action="store_true", help="基线文件不存在时写入首份基线")
+    ap.add_argument("--moved-from", help="代码搬迁的源文件（相对路径），与 --moved-to 一起用")
+    ap.add_argument("--moved-to", help="代码搬迁的目标路径前缀")
     args = ap.parse_args(argv)
     try:
         current = to_counter(run_ruff())
@@ -112,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     baseline = load_baseline()
     added, removed = compare(current, baseline)
+    if args.moved_from and args.moved_to:
+        added, offsets = offset_moves(added, removed, args.moved_from, args.moved_to)
+        for code, name, src, dst, k in offsets:
+            print(f"  ~ 搬迁抵消 {code} `{name}` x{k}: {src} → {dst}")
     totals = Counter()
     for (_, code, _), k in current.items():
         totals[code] += k

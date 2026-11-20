@@ -232,4 +232,28 @@ def step01_source_text() -> str:
         if path.exists():
             parts.append(path.read_text(encoding="utf-8-sig"))
     parts.append((root / "main.py").read_text(encoding="utf-8-sig"))
-    return "\n".join(parts)
+    return strip_split_aliases("\n".join(parts))
+
+
+#: 拆分工具给跨模块引用加的模块别名前缀（`_mrt.X` 等，见 tools/split_step01_main.py）
+_SPLIT_ALIAS_RE = None
+
+
+def strip_split_aliases(src: str) -> str:
+    """去掉 `_mrt.` / `_mcm.` 等拆分别名前缀，还原成拆分前的写法，供源码子串断言使用.
+
+    别名是机械改写（跨模块引用经模块属性访问），不改变逻辑；源码断言关心的是
+    「某段调用/赋值是否存在」，不应因前缀而失配。
+    """
+    global _SPLIT_ALIAS_RE
+    if _SPLIT_ALIAS_RE is None:
+        import re
+        _SPLIT_ALIAS_RE = re.compile(
+            r"\b_m(?:rt|sc|rg|ra|fa|rc|fz|tg|rr|ps|bl|gn|cm|bg)\.(?=[A-Za-z_])")
+    return _SPLIT_ALIAS_RE.sub("", src)
+
+
+def step01_getsource(obj) -> str:
+    """`inspect.getsource` + `strip_split_aliases`（Step 01 编排函数的源码断言入口）."""
+    import inspect
+    return strip_split_aliases(inspect.getsource(obj))
