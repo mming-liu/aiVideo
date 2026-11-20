@@ -209,3 +209,27 @@ def legal_record_for(view, novel_text: str = "", plan_digest=None) -> dict:
 __all__ = ["carrier_for_fact", "carrier_exhibiting", "exhibiting_body",
            "frozen_obligation", "obligation", "obligations_for",
            "obligations_for_result", "stamp_basis", "legal_record_for"]
+
+
+# ---------------------------------------------------------------------------
+# Step 01 编排源码（2026-11-19 S04：main.py 拆分到 orchestrator/ 之后的源码级断言入口）
+# ---------------------------------------------------------------------------
+def step01_source_text() -> str:
+    """Step 01 编排实现的完整源码：`orchestrator/<模块>.py`（按依赖顺序）+ `main.py`.
+
+    拆分前（orchestrator 下尚无子模块）返回值即 `main.py` 全文；拆分后各片段的
+    相对顺序与原 main.py 中的定义顺序一致（`main()` 在最后），供「源码里必须/
+    不得出现某段文字」类断言使用。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "step01_script_gen"
+    from step01_script_gen.orchestrator import MODULE_ORDER
+
+    parts = []
+    for name in MODULE_ORDER:
+        path = root / "orchestrator" / f"{name}.py"
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8-sig"))
+    parts.append((root / "main.py").read_text(encoding="utf-8-sig"))
+    return "\n".join(parts)

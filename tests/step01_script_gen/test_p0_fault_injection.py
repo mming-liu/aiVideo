@@ -100,7 +100,8 @@ def test_finalize_does_not_swallow_logic_fault(monkeypatch):
 # ---------------------------------------------------------------------------
 def _injury_block_source() -> str:
     """取出「伤情兜底」那一段（去注释），供结构守卫断言用."""
-    src = (Path(_ROOT) / "step01_script_gen" / "main.py").read_text(encoding="utf-8")
+    from tests.verification_helpers import step01_source_text
+    src = step01_source_text()
     start = src.index("_injury_lay_words = (")
     end = src.index("_effect_ledger.observe_writer(WRITER_INJURY_ANCHOR", start)
     lines = [ln for ln in src[start:end].splitlines() if not ln.lstrip().startswith("#")]

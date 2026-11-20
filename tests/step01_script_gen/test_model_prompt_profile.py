@@ -208,8 +208,8 @@ def test_agent_plan_log_line_names_the_actual_model_profile():
     """
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parents[2]
-           / "step01_script_gen" / "main.py").read_text(encoding="utf-8")
+    from tests.verification_helpers import step01_source_text
+    src = step01_source_text()
     for line in src.splitlines():
         if "doubao 专属 prompt" in line:
             assert line.lstrip().startswith("#"), (

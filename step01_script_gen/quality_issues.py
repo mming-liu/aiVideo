@@ -183,6 +183,10 @@ def _compute_prompt_source_fingerprint() -> str:
 
     root = Path(__file__).resolve().parent
     files = [root / "prompts.py", root / "outline.py", root / "main.py"]
+    # 2026-11-19 S04：main.py 的修复提示词与接受判据已拆到 orchestrator/，一并覆盖
+    _orch_dir = root / "orchestrator"
+    if _orch_dir.is_dir():
+        files.extend(p for p in sorted(_orch_dir.glob("*.py")) if p.is_file())
     _prompt_dir = root / "prompts"
     if _prompt_dir.is_dir():
         files.extend(p for p in sorted(_prompt_dir.rglob("*")) if p.is_file())

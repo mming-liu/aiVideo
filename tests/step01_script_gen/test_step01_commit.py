@@ -839,8 +839,8 @@ def test_audit_reuse_ignores_non_ok_status(chapter, monkeypatch):
 def test_all_entry_points_route_through_one_commit_function():
     """正常 / 缓存 / BEST-GUARD 三条入口都只调用 `_commit_step01_outputs`，
     且 BEST-GUARD 自己不再写盘。"""
-    src = (Path(_PROJECT_ROOT) / "step01_script_gen" / "main.py").read_text(
-        encoding="utf-8")
+    from tests.verification_helpers import step01_source_text
+    src = step01_source_text()
     assert src.count("_commit_step01_outputs(") >= 3, "三条入口都要调它"
     # BEST-GUARD 体内不得出现落盘调用
     start = src.index("def _cross_run_best_guard(")
@@ -870,8 +870,9 @@ def test_cache_hit_branch_defines_every_name_it_reads():
     """
     import ast
 
+    # main() 留在 main.py 里：只解析入口文件本身（拆分后编排实现在 orchestrator/）
     src = (Path(_PROJECT_ROOT) / "step01_script_gen" / "main.py").read_text(
-        encoding="utf-8")
+        encoding="utf-8-sig")
     tree = ast.parse(src)
     main_fn = next(n for n in ast.walk(tree)
                    if isinstance(n, ast.FunctionDef) and n.name == "main")
