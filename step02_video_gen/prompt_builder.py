@@ -1769,6 +1769,7 @@ def _collect_r2v_references(shot: dict, characters: list | None = None,
     composition_refs: list[str] = []
     try:
         from shared.paths import first_frame_file as _fff
+        from shared.paths import vimax_working_dir
         ff_candidate = _fff(shot.get("index", 0))
         if ff_candidate.exists() and ff_candidate.stat().st_size > 10 * 1024:
             composition_refs = [str(ff_candidate)]
