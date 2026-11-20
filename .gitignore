@@ -589,3 +589,15 @@ start_studio.bat
 !docs/aivideo_medium_long_term_plan.md
 !tests/step02_video_gen/test_generation_requirements_audio.py
 !tests/step02_video_gen/test_request_key_audio_reason.py
+
+# 2026-11-19 第 1 包（离线卫生整改）：新增用例与交付记录逐条放行。
+!tests/shared/test_degrade.py
+!tests/shared/test_vimax_adapters_timeout.py
+!tests/shared/test_maybe_qc_frame_wiring.py
+!tests/tools/test_ruff_gate.py
+!tests/tools/test_print_effective_config.py
+!tests/step01_script_gen/test_repair_locked_only_prefilter.py
+!tests/step01_script_gen/test_pkg1_validation_f821.py
+!tests/step01_script_gen/test_pkg1_f821_misc.py
+!tests/step02_video_gen/test_pkg1_r2v_fallback.py
+!docs/pkg1-offline-hygiene-20261119.md
