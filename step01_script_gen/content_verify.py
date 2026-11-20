@@ -282,6 +282,7 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
     当成对**这一份**候选的内容结论。调用方（`verify_view_with_service` / 控制器）据此
     记 `FAIL_INPUT`，**不发起模型调用**。
     """
+    from shared.presentation_contract import PresentationContractError
     _want_obligations = frozen_obligations(view)
     _adm = _request_admission(view)
     if _adm:

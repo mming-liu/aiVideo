@@ -7334,22 +7334,8 @@ def _kf_structural_violations(before_script: dict, after_script: dict,
             _nm = str(_c.get("identifier") or "").strip()
             if _nm:
                 _canonical.add(_nm)     # 正名：出处关系校验要求「同句含全部当事角色」
-
-    def _collect_names(node) -> None:
-        if isinstance(node, dict):
-            _nm = str(node.get("name") or "").strip()
-            if _nm:
-                _roster.add(_nm)
-        elif isinstance(node, list):
-            for _x in node:
-                _collect_names(_x)
-
-    _collect_names(before_script.get("frame_layouts"))
-    for _s in (before_script.get("shots") or []):
-        if isinstance(_s, dict):
-            _collect_names(_s.get("frame_layouts"))
-    if isinstance(before_script.get("hook"), dict):
-        _collect_names(before_script["hook"].get("frame_layouts"))
+    # 2026-11-19 第 1 包 M03：删除未使用的布局名册收集——它写入从未定义的
+    # `_roster`（20a6bac 起），布局节点带 `name` 时整个守卫以 NameError 崩溃。
 
     out: list[str] = []
     for tid in picked or ():

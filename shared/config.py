@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import math
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # 确保只加载一次：.env.content 存放内容参数，.env.keys 存放 API Key

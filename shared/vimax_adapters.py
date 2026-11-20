@@ -368,7 +368,7 @@ class VideoGeneratorAiVideoAdapter:
             # 底层线程可能仍在提交（requests 自带 HTTP timeout，最终会返回/报错），
             # 但 task_id 已拿不到——上层若重试会产生重复任务（烧额度），必须显式告警
             from shared.tee_logger import get_logger
-            from shared.paths import chapter_dir
+            from shared import log_utils as _log_utils
             get_logger(_log_utils.resolve_log_file("step02.log"), console_level="INFO").warn(
                 f"  [WARN] 视频提交 {self._VIDEO_SUBMIT_TIMEOUT}s 外层超时；底层请求"
                 f"可能仍在进行，重试可能产生重复任务（建议检查网络/供应商状态后重跑）"
@@ -490,7 +490,7 @@ class VideoGeneratorAiVideoAdapter:
             )
         except asyncio.TimeoutError:
             from shared.tee_logger import get_logger
-            from shared.paths import chapter_dir
+            from shared import log_utils as _log_utils
             get_logger(_log_utils.resolve_log_file("step02.log"), console_level="INFO").warn(
                 f"  [WARN] 候选提交 {self._VIDEO_SUBMIT_TIMEOUT}s 外层超时；底层请求可能仍在"
                 f"进行，晚到 task_id 由提交侧落盘（**不**自行重发）")
