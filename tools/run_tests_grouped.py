@@ -65,23 +65,44 @@ def all_groups() -> dict[str, tuple[str, ...]]:
     return groups
 
 
-def run_group(name: str, targets: tuple[str, ...], out_dir: Path) -> dict:
+def validate_report(xml_path: Path, started_at: float) -> str | None:
+    """本轮报告是否可用：存在、在本组启动之后写出、可解析、含 testsuite。None = 可用."""
+    if not xml_path.exists():
+        return "未生成 JUnit XML"
+    if xml_path.stat().st_mtime < started_at:
+        return "JUnit XML 早于本组启动时间（旧文件）"
+    try:
+        root = ET.parse(xml_path).getroot()
+    except ET.ParseError as exc:
+        return f"JUnit XML 无法解析: {exc}"
+    suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+    if not suites:
+        return "JUnit XML 没有 testsuite"
+    return None
+
+
+def run_group(name: str, targets: tuple[str, ...], out_dir: Path, *,
+              runner=subprocess.run) -> dict:
     xml_path = out_dir / f"{name}.xml"
+    if xml_path.exists():
+        xml_path.unlink()                    # 绝不让上一轮的报告冒充本轮结果
     cmd = [sys.executable, "-m", "pytest", *[f"tests/{t}" for t in targets],
            "-q", "-p", "no:cacheprovider", f"--junitxml={xml_path}",
            "-o", "junit_family=xunit2"]
     t0 = time.monotonic()
+    started_at = time.time() - 1.0           # 容忍文件系统时间戳精度
     try:
-        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace",
-                              timeout=GROUP_TIMEOUT_SEC)
+        proc = runner(cmd, cwd=ROOT, capture_output=True, text=True,
+                      encoding="utf-8", errors="replace", timeout=GROUP_TIMEOUT_SEC)
         code, tail = proc.returncode, (proc.stdout or "")[-3000:] + (proc.stderr or "")[-2000:]
     except subprocess.TimeoutExpired as exc:
         code, tail = -1, f"timeout after {GROUP_TIMEOUT_SEC}s: {exc}"
+    problem = validate_report(xml_path, started_at)
     (out_dir / f"{name}.log").write_text(tail, encoding="utf-8")
     return {"group": name, "targets": list(targets), "returncode": code,
             "seconds": round(time.monotonic() - t0, 1),
-            "xml": xml_path.name if xml_path.exists() else None}
+            "xml": xml_path.name if problem is None else None,
+            "report_problem": problem}
 
 
 def merge_xml(out_dir: Path, names: list[str]) -> Path:
@@ -89,7 +110,7 @@ def merge_xml(out_dir: Path, names: list[str]) -> Path:
     for name in names:
         path = out_dir / f"{name}.xml"
         if not path.exists():
-            continue
+            continue                         # 缺报告的组已在 summary 判为失败，不合并
         root = ET.parse(path).getroot()
         suites = [root] if root.tag == "testsuite" else list(root)
         for suite in suites:
@@ -118,16 +139,28 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         ap.error(f"未知分组: {sorted(unknown)}")
     out_dir = args.out if args.out.is_absolute() else ROOT / args.out
+    if out_dir.exists() and any(out_dir.iterdir()):
+        print(f"输出目录非空：{out_dir}——每轮必须使用独立的新目录，避免旧报告冒充本轮结果")
+        return 2
     out_dir.mkdir(parents=True, exist_ok=True)
+    return run_all(names, groups, out_dir)
+
+
+def run_all(names, groups, out_dir: Path, *, runner=subprocess.run) -> int:
     results = []
     for name in names:
-        res = run_group(name, groups[name], out_dir)
+        res = run_group(name, groups[name], out_dir, runner=runner)
         results.append(res)
-        print(f"[{name}] rc={res['returncode']} {res['seconds']}s", flush=True)
-    merge_xml(out_dir, names)
+        flag = f" REPORT_INVALID: {res['report_problem']}" if res["report_problem"] else ""
+        print(f"[{name}] rc={res['returncode']} {res['seconds']}s{flag}", flush=True)
+    merge_xml(out_dir, [r["group"] for r in results if r["xml"]])
+    bad = [r for r in results
+           if r["returncode"] not in (0, 1) or r["report_problem"] is not None]
     (out_dir / "summary.json").write_text(
-        json.dumps({"groups": results}, ensure_ascii=False, indent=2), encoding="utf-8")
-    bad = [r for r in results if r["returncode"] not in (0, 1)]
+        json.dumps({"groups": results, "complete": not bad}, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    if bad:
+        print("不完整：" + ", ".join(r["group"] for r in bad))
     return 2 if bad else 0
 
 

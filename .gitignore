@@ -606,3 +606,6 @@ start_studio.bat
 !tests/step01_script_gen/test_main_facade_contract.py
 !tests/step01_script_gen/test_orchestrator_guards.py
 !docs/step01-main-split-20261119.md
+
+# 2026-11-19 复核 P2-4：分组跑测工具的旧报告隔离用例
+!tests/tools/test_run_tests_grouped.py
