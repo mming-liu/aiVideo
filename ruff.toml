@@ -5,6 +5,10 @@ target-version = "py310"
 extend-exclude = [
     "baselines",
     "reference_skills",
+    # 第三方技能脚本：本机多为指向 .agents/skills 的 junction，干净检出里是真实文件，
+    # 两边 ruff 读数会不一致；不属于项目代码，不进门禁。
+    "skills",
+    ".agents",
     "tests",
     "tests_local",
     "docs",
