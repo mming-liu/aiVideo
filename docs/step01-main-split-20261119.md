@@ -1,6 +1,6 @@
 # step01 main.py 按职责拆分（S00–S10）交付记录（2026-11-19）
 
-分支 `refactor/pkg1-offline-hygiene`。拆分前基线固定在分支 `refactor/step01-split-base`（`75dbdc5`），拆分工具每次都从该基线重新生成。全程离线，0 模型调用，未碰 `output/`。未合并、未推送。
+分支 `refactor/pkg1-offline-hygiene`。拆分前基线固定在分支 `refactor/step01-split-base`（`75dbdc5`），拆分工具每次都从该基线重新生成。全程离线，0 模型调用，未碰 `output/`。已于 2026-11-19 合并到 master 并推送（`2f1e3f9`）。门面恢复缓存的复核修正（P2-5）见 `docs/pkg1-offline-hygiene-20261119.md` 第 6 节。
 
 ## 1. 结果
 

@@ -1,6 +1,6 @@
 # 第 1 包：离线卫生整改 交付记录（2026-11-19）
 
-分支 `refactor/pkg1-offline-hygiene`，基于 master `8bea852`。全程离线，0 模型调用，未碰 `output/` 正式产物。未合并、未推送。
+分支 `refactor/pkg1-offline-hygiene`，基于 master `8bea852`。全程离线，0 模型调用，未碰 `output/` 正式产物。已快进合并到 master（`75dbdc5`），并于 2026-11-19 推送到 gitee/github（`2f1e3f9`，含后续 S00–S10 拆分）。复核修正见文末第 6 节。
 
 ## 1. 冻结基线（M00）
 
@@ -60,3 +60,17 @@
 - 没有真实模型运行，QC 恢复后的实际效果要等下一次 step02a 才能看到。
 - 本包新增测试之外的大部分测试仍未入库，干净检出只证明本包新增的 30 条测试可复现，不代表全量测试通过。
 - F401/F811 存量没有整理（不做 `--fix`，以免删掉被测试打桩的名字）。
+
+## 6. 复核修正（2026-11-19，提交 `4bdfac4`–`c3bac1c`）
+
+复核在 M00–M09 中确认 4 项 P2，又在门面中确认 1 项。全部离线修复，0 模型调用。每项都先在**修复前代码**上让新测试失败，再修复。
+
+| # | 问题 | 修法 | 测试 |
+|---|---|---|---|
+| P2-1 | M04-c 恢复导入后，r2v 首帧缺失时肖像兜底被放进首帧构图锚点位，组装时据此排除场景图，最终只剩一张肖像。**原方案把"兜底肖像可替代首帧"当成前提，前提错误** | 真实首帧与身份兜底分开：`composition_refs` 只放真实首帧；兜底肖像记为身份参考，进角色组，场景资产图照常注入 | `test_pkg1_r2v_fallback.py`：首帧缺失时最终参考同时含场景图和肖像（场景在前）；有真实首帧时仍替代场景图 |
+| P2-2 | M07 只认直接 `os.getenv`，漏掉经包装函数/跨模块常量读取的 `AUDIT_TEXT_PROVIDER`、`REPAIR_TEXT_PROVIDER`、`DURATION_MIN_SEC/MAX_SEC` | 识别包装函数（形参流入读取，支持包装的包装）与跨模块唯一常量；运行前必核配置（`REQUIRED_KEYS`）即使未扫到也必须出现在报告里并标 `scanned=False`；无法求值的读取列入"动态读取" | 合成包装/常量用例；真实仓库 step01 报告中四项均被扫到，`required_unscanned=[]` |
+| P2-3 | M07 用 `dotenv_values`（插值优先级与生产不同）打印"最终值"：shell `BASE=production`、文件 `URL=https://${BASE}/v1` 时报 `sandbox` | 来源仍按键所在文件判定；值一律取生产语义 `load_dotenv(override=False)` 加载后的 `os.environ`（`production_load`，与 `shared/config.py` 同顺序） | 子进程复现最小反例：`URL` 报 `https://production/v1`、来源 `.env.content` |
+| P2-4 | M00 复用输出目录时，若 pytest 在写新 XML 前以 1 退出，旧 XML 会被当成本轮结果 | 拒绝非空输出目录；每组启动前删除同名 XML；逐组校验报告存在、晚于本组启动、可解析、含 testsuite；不合格的组判为不完整（返回 2，`summary.complete=false`） | `test_run_tests_grouped.py`（桩 runner）：旧 XML + 退出码 1 + 不写新报告 → 不完整 |
+| P2-5 | 门面恢复缓存跨补丁会话残留：patch 正常退出后缓存未清，之后所属模块更新、再经门面覆盖并删除会恢复成过期值 | 写入值等于缓存的原值（`mock.patch` 退出 / monkeypatch 撤销）时清除缓存；嵌套 patch 在最外层退出前保留 | `test_main_facade_contract.py` 新增 3 条：连续会话、monkeypatch 撤销后、嵌套 |
+
+说明：P2-4 证明的是工具缺陷；本包第 3 节的 `junit_final` 是在新目录下完整跑完的，历史结果未受影响。
