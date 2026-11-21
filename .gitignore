@@ -611,3 +611,4 @@ start_studio.bat
 
 # 2026-11-19 复核 P2-4：分组跑测工具的旧报告隔离用例
 !tests/tools/test_run_tests_grouped.py
+!docs/step01-planning-failure-corpus-2026-11-21.md
