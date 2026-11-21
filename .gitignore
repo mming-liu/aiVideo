@@ -31,6 +31,8 @@ output/
 
 # 本地 agent / 会话计划
 .agents/
+# 第三方 skill 拷贝（部分为指向 .agents/skills 的 junction），不入库（2026-11-21 精简包 S01）
+/skills/
 .zcode/
 
 # OS

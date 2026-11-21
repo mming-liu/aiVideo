@@ -54,8 +54,12 @@ _SKIP_DIRS = {
     #: 忽略、0 个受版本控制文件、189 个 .py，项目源码无一处 import 它）。
     #: 它里面确实有一处同类写法（`Micro-Drama-Skills/projects/DM-002_tjkc/
     #: generate_media.py:392`），但那不是本项目要保证 3.10+ 可运行的源码，故不纳入。
-    #: 注：`skills/` 是**受版本控制的项目内容**（338 个文件），必须继续纳入扫描。
     "reference_skills",
+    #: 2026-11-21（精简包 S01）：`skills/` 与 `.agents/` 同为第三方 skill 拷贝，已取消
+    #: 版本控制（`.gitignore`），项目源码不 import 它们，与 `reference_skills/` 同口径
+    #: 不纳入。项目自有技能在 `.aiVideo/skills/`（只有 .md，无 .py）。
+    "skills",
+    ".agents",
 }
 
 #: 只有单字符定界符受 ≤3.11 限制（见模块 docstring 的实测表）
