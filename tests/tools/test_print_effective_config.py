@@ -169,3 +169,54 @@ def test_interpolation_follows_production_load_semantics(tmp_path):
     res = json.loads(proc.stdout.strip().splitlines()[-1])
     assert res["BASE"] == {"value": "production", "source": "shell"}
     assert res["URL"] == {"value": "https://production/v1", "source": ".env.content"}
+
+
+# --------------------------------------------------------------------------- 2026-11-19 复核第二轮 P2-2
+def test_wrapper_default_passed_through_conversion_is_resolved():
+    """`os.getenv(name, str(default))` 的包装：调用点的字面默认值必须被识别."""
+    import ast
+    trees = {"pkg/config.py": ast.parse(
+        "import os\n"
+        "def _setting(name, default):\n    return float(os.getenv(name, str(default)))\n"
+        "D_MIN = _setting('D_MIN_SEC', 60)\n"
+        "D_MAX = _setting(name='D_MAX_SEC', default=90)\n")}
+    wrappers = pec.find_wrappers(trees)
+    assert wrappers["_setting"]["default_pos"] == {0: 1}
+    st, _ = pec.scan_source(ast.unparse(trees["pkg/config.py"]), "pkg/config.py",
+                            wrappers=wrappers)
+    got = {s["name"]: s["default"] for s in st}
+    assert got == {"D_MIN_SEC": "60", "D_MAX_SEC": "90"}
+
+
+def test_real_repo_duration_defaults_match_shared_config_without_receipt(tmp_path):
+    """无环境覆盖、无采纳收据的章节：工具报告的时长值必须等于 shared.config 实际值."""
+    keys = ("DURATION_MIN_SEC", "DURATION_MAX_SEC",
+            "DURATION_TARGET_MIN_SEC", "DURATION_TARGET_MAX_SEC")
+    env = {k: v for k, v in __import__("os").environ.items() if k not in keys}
+    env["OUTPUT_BASE"] = str(tmp_path / "out")          # 隔离：该根下没有任何采纳收据
+    out = tmp_path / "report.json"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "print_effective_config.py"),
+         "--stage", "step01", "--chapter", "987", "--out", str(out)],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=env, timeout=180)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    report = json.loads(out.read_text(encoding="utf-8"))
+    by_name = {r["name"]: r for r in report["variables"]}
+    actual = subprocess.run(
+        [sys.executable, "-c",
+         "import json, shared.config as c; print(json.dumps({k: getattr(c, k) for k in %r}))"
+         % (keys,)],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+        env=dict(env, NOVEL_CHAPTER="987"), timeout=120)
+    assert actual.returncode == 0, actual.stderr[-2000:]
+    expected = json.loads(actual.stdout.strip().splitlines()[-1])
+    for key in keys:
+        row = by_name[key]
+        content_has = key in pec._dotenv(ROOT / ".env.content")
+        if content_has:                                  # 配置文件显式给了：来源必须是它
+            assert row["source"] == ".env.content", row
+        else:
+            assert row["source"] == "code_default", row
+        assert row["value"] is not None, row
+        assert float(row["value"]) == float(expected[key]), (key, row, expected[key])

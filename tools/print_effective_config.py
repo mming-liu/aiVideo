@@ -82,6 +82,15 @@ def _module_consts(tree: ast.Module) -> dict[str, str]:
     return consts
 
 
+def _unwrap_conversion(node):
+    """`str(x)` / `int(x)` / `float(x)` 包一层的默认值：取里面的 x（`os.getenv(n, str(default))`）."""
+    while (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+           and node.func.id in ("str", "int", "float") and len(node.args) == 1
+           and not node.keywords):
+        node = node.args[0]
+    return node
+
+
 def _callee_name(call: ast.Call) -> str | None:
     f = call.func
     if isinstance(f, ast.Name):
@@ -145,8 +154,9 @@ def find_wrappers(trees: dict[str, ast.Module]) -> dict[str, dict]:
             for name_node, default_node in pairs:
                 if isinstance(name_node, ast.Name) and name_node.id in params:
                     dpos = None
-                    if isinstance(default_node, ast.Name) and default_node.id in params:
-                        dpos = params.index(default_node.id)
+                    _dn = _unwrap_conversion(default_node)
+                    if isinstance(_dn, ast.Name) and _dn.id in params:
+                        dpos = params.index(_dn.id)
                     found[params.index(name_node.id)] = dpos
             if not found or fname in wrappers:
                 continue                     # 同名函数只登记第一个（按名字匹配的已知近似）
@@ -211,8 +221,9 @@ def scan_source(source: str, rel: str, *, wrappers: dict | None = None,
                 continue
             name = resolve(name_node)
             default = None
-            if isinstance(default_node, ast.Constant):
-                default = None if default_node.value is None else str(default_node.value)
+            _dn = _unwrap_conversion(default_node)
+            if isinstance(_dn, ast.Constant):
+                default = None if _dn.value is None else str(_dn.value)
             if name:
                 static.append({"name": name, "path": rel, "line": node.lineno,
                                "default": default, "via": via})
