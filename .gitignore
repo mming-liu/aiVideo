@@ -617,3 +617,4 @@ start_studio.bat
 !tests/tools/test_replay_plan_revision.py
 !tests/step01_script_gen/test_revision_request_hygiene.py
 !tests/step01_script_gen/test_verifier_hint_downgrade.py
+!tests/step01_script_gen/test_media_cleanup_after_commit.py

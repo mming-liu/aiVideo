@@ -91,6 +91,62 @@ def _presentation_mode_argv(argv=None) -> str:
     return _av[_i + 1]
 
 
+def _cleanup_stale_media_after_commit(status, *, preserve_shots=(),
+                                      changed_shots=(), removed_shots=()) -> None:
+    """**S12（2026-11-21）**：媒体清理只在提交 `COMMITTED` 之后执行.
+
+    旧实现把音频/`vimax`/`stretched`/成片的删除放在 `_commit_step01_outputs` **之前**：
+    提交门一旦 BLOCK，正式稿仍是旧版，配套媒体却已经被删——下游 step02 要付费重做。
+    现在先只算"逐镜保留范围"，删除动作收口到本函数、由提交状态决定：
+
+    - `status != COMMITTED`：**不动任何媒体**（保留旧稿的可复用产物与成片）；
+    - `COMMITTED`：语义与原实现一致——逐镜保留未变镜头（`preserve_shots`），
+      清理 changed/removed 镜头；没有保留范围时全量清理音频/vimax/stretched；
+      成片与字幕仍删除（结构变了必须重做）。占用导致删不掉只告警、不 FATAL。
+    """
+    if str(status or "") != "COMMITTED":
+        _mrt._logger.info(
+            "[CLEANUP] 提交未 COMMITTED（%s）⇒ 保留现有媒体产物，不做删除"
+            % (status or "未产出"))
+        return
+    import shutil
+    # 逐镜保留：只清理 changed/removed 镜头的帧/视频（未变镜头保留）
+    for _sub_path, _shots_root in (
+        (_mrt.vimax_working_dir(), _mrt.vimax_shots_dir()),
+        (_mrt.stretched_dir(), _mrt.stretched_dir() / "shots"),
+    ):
+        if _shots_root.exists():
+            for _sid in list(changed_shots) + list(removed_shots):
+                _shot_dir = _shots_root / str(_sid)
+                if _shot_dir.exists():
+                    shutil.rmtree(_shot_dir)
+                    _mrt._logger.verbose(
+                        f"  [已清理] {_sub_path.name}/shots/{_sid}/（内容变更）")
+    if not preserve_shots:
+        _mrt._logger.info("[INFO] 分镜脚本已提交，清理旧的音视频文件...")
+        for subdir_path in (_mrt.audio_dir(), _mrt.vimax_working_dir(),
+                            _mrt.stretched_dir()):
+            if subdir_path.exists():
+                try:
+                    shutil.rmtree(subdir_path)
+                    _mrt._logger.verbose(f"  [已删除] {subdir_path.name}/")
+                except PermissionError as _e:
+                    # 09-13 实测：Explorer/看图器/杀毒占用目录 → WinError 32。
+                    # 清理失败不能 FATAL（会吞掉已生成的脚本结果）；旧帧由内容哈希
+                    # 自动失效（ff/kf desc 变更 → hash mismatch → step02a 重抽）。
+                    _mrt._logger.warn(
+                        f"  [WARN] {subdir_path.name}/ 被占用（{type(_e).__name__}），"
+                        "跳过清理——旧文件由内容哈希自动失效")
+    # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
+    for fpath in (_mrt.final_file(), _mrt.subtitles_file()):
+        if fpath.exists():
+            try:
+                fpath.unlink()
+                _mrt._logger.verbose(f"  [已删除] {fpath.name}")
+            except PermissionError:
+                _mrt._logger.warn(f"  [WARN] {fpath.name} 被占用（播放器？），跳过重删")
+
+
 def main() -> None:
     """主流程：读取章节 → 生成脚本 → 生成钩子 → 验证 → 后处理 → 保存.
 
@@ -751,64 +807,27 @@ def main() -> None:
         # 后处理：注入全局配置 + 合规过滤 + 敏感词校验
         script = _mgn._post_process(script)
 
-        # 脚本已更新，删除旧的音频和视频文件。
-        # 2026-08-09 用户需求：若新旧脚本只是分镜数量差异且总时长≤3min，逐镜对比后
-        # 保留未变镜头的帧/视频产物，只清理新增/改动/删除的镜头（避免重跑 step02 全量
-        # 重新生成白烧额度）。
-        # 2026-08-09 修复：原实现把此段放在 script 生成之前，引用未赋值变量 script
-        # 触发 UnboundLocalError，逐镜保留从未生效（每次都全量清理）。现在移到
-        # _post_process 之后——新分镜已定稿（含收敛/合规过滤），旧 script_result.json
-        # 仍在磁盘可读，对比才有意义；且 LLM 生成失败时旧产物也不会被提前删掉。
+        # 脚本已更新：**先算逐镜保留范围，不在提交前删任何媒体**（S12，2026-11-21）。
+        # 旧实现此处就删除音频/vimax/stretched/成片：提交门一旦 BLOCK，正式稿仍是旧版，
+        # 配套媒体却已被删，下游要付费重做。删除动作改到提交 `COMMITTED` 之后执行
+        # （`_cleanup_stale_media_after_commit`）；BLOCK 时媒体原样保留。
         _preserve_shots: list[int] = []
+        _changed_shots: list[int] = []
+        _removed_shots: list[int] = []
         try:
             from shared.shot_diff import compute_shot_diff, should_preserve_artifacts
             _old_script = json.load(open(_mrt.SCRIPT_FILE, encoding="utf-8")) if _mrt.SCRIPT_FILE.exists() else None
             if _old_script and should_preserve_artifacts(_old_script, script):
                 _diff = compute_shot_diff(_old_script, script)
                 _preserve_shots = _diff.get("unchanged", [])
+                _changed_shots = list(_diff.get("changed", []))
+                _removed_shots = list(_diff.get("removed", []))
                 _mrt._logger.info(
                     f"[PRESERVE] 逐镜对比放行：未变 {len(_preserve_shots)} 镜"
-                    f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_diff.get('changed', []))} 镜重新生成"
+                    f"（保留旧产物），新增/改动 {len(_diff.get('added', [])) + len(_changed_shots)} 镜重新生成"
                 )
-                # 只清理 changed/removed 镜头的帧/视频（未变镜头保留）
-                for _sub_path, _shots_root in (
-                    (_mrt.vimax_working_dir(), _mrt.vimax_shots_dir()),
-                    (_mrt.stretched_dir(), _mrt.stretched_dir() / "shots"),
-                ):
-                    if _sub_path.exists():
-                        if _shots_root.exists():
-                            for _sid in _diff.get("changed", []) + _diff.get("removed", []):
-                                _shot_dir = _shots_root / str(_sid)
-                                if _shot_dir.exists():
-                                    import shutil as _sh
-                                    _sh.rmtree(_shot_dir)
-                                    _mrt._logger.verbose(f"  [已清理] {_sub_path.name}/shots/{_sid}/（内容变更）")
         except Exception as _preserve_err:
-            _mrt._logger.warn(f"[PRESERVE] 逐镜对比失败，全量清理: {_preserve_err}")
-
-        if not _preserve_shots:
-            _mrt._logger.info(f"[INFO] 分镜脚本已更新，清理旧的音视频文件...")
-            for subdir_path in (_mrt.audio_dir(), _mrt.vimax_working_dir(), _mrt.stretched_dir()):
-                if subdir_path.exists():
-                    import shutil
-                    try:
-                        shutil.rmtree(subdir_path)
-                        _mrt._logger.verbose(f"  [已删除] {subdir_path.name}/")
-                    except PermissionError as _e:
-                        # 09-13 实测：Explorer/看图器/杀毒占用目录 → WinError 32。
-                        # 清理失败就 FATAL 会吞掉整个 LLM 生成结果（此时 script 尚未
-                        # 落盘，两轮实跑各 ~10 min 全白跑）。旧帧由内容哈希自动失效
-                        # （ff/kf desc 变更 → hash mismatch → step02a 重抽），跳过即可。
-                        _mrt._logger.warn(f"  [WARN] {subdir_path.name}/ 被占用（{type(_e).__name__}），"
-                                     "跳过清理——旧文件由内容哈希自动失效")
-        # 删除最终视频和字幕（脚本结构变了，最终产物必须重做）
-        for fpath in (_mrt.final_file(), _mrt.subtitles_file()):
-            if fpath.exists():
-                try:
-                    fpath.unlink()
-                    _mrt._logger.verbose(f"  [已删除] {fpath.name}")
-                except PermissionError:
-                    _mrt._logger.warn(f"  [WARN] {fpath.name} 被占用（播放器？），跳过重删")
+            _mrt._logger.warn(f"[PRESERVE] 逐镜对比失败，提交成功后全量清理: {_preserve_err}")
 
         # ========================================================================
         # 钩子分镜生成（v6 沿用 + v6.39 调用顺序硬约束）
@@ -1137,6 +1156,12 @@ def main() -> None:
         # 提交成功后留档（失败时提交点自己会写诊断快照）
         if _commit_summary.get("status") == "COMMITTED":
             _mps._snapshot_run_artifacts(script)
+        # S12（2026-11-21）：媒体清理只在 COMMITTED 之后执行；BLOCK 时媒体原样保留。
+        _cleanup_stale_media_after_commit(
+            _commit_summary.get("status"),
+            preserve_shots=_preserve_shots,
+            changed_shots=_changed_shots,
+            removed_shots=_removed_shots)
         _mrt._timing_mark("commit", status=_commit_summary.get("status"))
 
         # v6.70.1（09-13）：提交后未解决 issue 汇总——对最终写盘版本生效。
