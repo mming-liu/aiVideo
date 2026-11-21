@@ -40,7 +40,6 @@ class Conflict:
 # 手工注册的已知冲突（按 v6.41+ 跑批观测）
 # 元组: (A名, B名, 描述)
 _KNOWN_CONFLICTS: List[Tuple[str, str, str]] = [
-    # 举例：narrative_strip 可能剥掉 boat_crop 留下的"船头"——已知无冲突，记为空
     # 真实冲突示例（按需添加）：
     # ("gaze_direction", "injury_continuity",
     #  "gaze_direction 追加'目光紧盯'，injury_continuity 在结尾追加'伤处白袍暗红洇痕'，次序应 gaze 先 / injury 后，否则 gaze 写入的位置会被 injury 锚词覆盖"),

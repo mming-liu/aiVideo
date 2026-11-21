@@ -33,7 +33,7 @@ os.environ["OUTPUT_BASE"] = str(_TMP_OUT)
 
 # 2) 清理可能从 shell 泄漏进来的行为开关（测试各自按需 setenv）
 #    注意：这里只对**不在 .env.content 里**的键有效——见下面 autouse fixture 的说明。
-for _k in ("HARD_FIX_USE_OLD", "REGEN_AUTO_TRIGGER", "SELF_REVIEW_ENABLED",
+for _k in ("HARD_FIX_USE_OLD", "REGEN_AUTO_TRIGGER",
            "IMAGE_QC_WRITE_CRITICAL", "QC_SEMANTICS_CRITICAL"):
     os.environ.pop(_k, None)
 

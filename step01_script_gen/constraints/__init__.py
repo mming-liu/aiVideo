@@ -28,7 +28,6 @@ from .kf_monotonic import KfMonotonicConstraint  # F1 (v6.43, 08-23)
 
 # Phase 4 迁移：G~Z + T1/T2（08-22 ~ 08-23 跑批累计）
 from .axis_jump import AxisJumpConstraint  # G
-from .boat_crop import BoatCropConstraint  # H
 from .boat_width import BoatWidthConstraint  # I
 from .bridge_words import BridgeWordsConstraint  # J
 from .camera_variety import CameraVarietyConstraint  # K
@@ -66,7 +65,6 @@ from .punch_density import PunchDensityConstraint  # Z
 from .runtime_extend import RuntimeExtendConstraint  # W6（红果时长拉伸，HARD）
 from .threat_gaze_coupling import ThreatGazeCouplingConstraint  # T1
 from .transition_keywords import TransitionKeywordsConstraint  # T3
-from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
 from .v6_43_prompt_enforcement import V643PromptEnforcementConstraint  # v6.43 (08-23 强化)
 from .kf_weak_template import KfWeakTemplateConstraint  # W16 kf弱模板占位（v6.45, 08-26）
 from .camera_movement_fill import CameraMovementFillConstraint  # J3 运镜缺失补填（v6.47, 08-27）
@@ -92,7 +90,6 @@ from .motion_time_bounds import MotionTimeBoundsConstraint
 from .duration_budget import DurationBudgetConstraint
 from .framing_prefix_fill import FramingPrefixFillConstraint  # F11 景别词回填（v6.62, 09-06）
 from .gaze_state_repair import GazeStateRepairConstraint  # F15 无视线状态 gaze_target 修复
-from .self_review import SelfReviewConstraint  # SR（LLM 自检回路）
 from .split_content_similarity import SplitContentSimilarityConstraint  # A7 拆分镜内容重复检测（v6.58, 09-03）
 from .mandatory_biz_fields import MandatoryBizFieldsConstraint
 from .role_anchor import RoleAnchorConstraint
@@ -228,7 +225,6 @@ ALL_CONSTRAINTS.extend([
 
     # Phase 4
     AxisJumpConstraint(),  # G HARD
-    BoatCropConstraint(),
     BridgeWordsConstraint(),
     CameraVarietyConstraint(),
     IdentityUnificationConstraint(),  # 别名/群演占位必须先于锚点与 char_layout 消费
@@ -278,7 +274,6 @@ ALL_CONSTRAINTS.extend([
     MotionTimeBoundsConstraint(),  # motion 时段 > duration 时扩时长，禁止静默截断
     FramingPrefixFillConstraint(),  # F11 prompt 无景别词 → 推断前置「[景别]」（v6.62, 09-06）
     GazeStateRepairConstraint(),  # F15 无视线状态 gaze_target 修复
-    SelfReviewConstraint(),  # SR opt-in via SELF_REVIEW_ENABLED=1
     SplitContentSimilarityConstraint(),  # A7 拆分镜内容重复检测（v6.58, 09-03）
     MandatoryBizFieldsConstraint(),  # B1 业务必填字段兜底（v6.60 doubao 适配引入，v6.61 起全 provider 共用）
     OvershoulderConsistencyConstraint(),

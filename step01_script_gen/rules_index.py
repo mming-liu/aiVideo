@@ -1499,7 +1499,6 @@ RULES_INDEX: dict[str, RuleEntry] = {
             "char_layout_sync",         # N: char_layout 同步
             "facing_to_gaze",           # T2: 面向→凝望
             "boat_width",               # T1: 船体宽度
-            "boat_crop_strip",          # V: 船体裁切（旧称 boat_crop）
             "prompt_repetition",        # P: 复读机
             "platform_compliance",      # O: 首镜 AI 生成标注
             # conflict_detector：独立检测器（engine.detect_and_log 直调，非 Constraint 子类）

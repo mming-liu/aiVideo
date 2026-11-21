@@ -88,10 +88,9 @@ def test_no_content_specific_terms_in_skill_files():
 
 
 def test_no_story_terms_in_prompt_assembler():
-    """提示装配器（prompts.py）与自检提示（self_review.py）同样不得写死剧情."""
+    """提示装配器（prompts.py）同样不得写死剧情（自检提示 self_review.py 已于 2026-11-21 删除）."""
     violations = []
-    for rel in ("step01_script_gen/prompts.py",
-                "step01_script_gen/constraints/self_review.py"):
+    for rel in ("step01_script_gen/prompts.py",):
         path = ROOT / rel
         if path.is_file():
             violations.extend(_python_violations(path, STORY_TERMS))
