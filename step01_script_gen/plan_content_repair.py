@@ -1656,8 +1656,11 @@ def slot_prompt(request, novel_text: str = "") -> str:
                   "已用 %s s / 上限 %s s（剩 %s s）。新增声音**直接吃剩余预算**；"
                   "画面承载不占发声时长，能拍出来就别加旁白/台词。"
                   % (_vb.get("used_sec"), _vb.get("max_sec"), _vb.get("remaining_sec")))
-    return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s"
-            % (_head, _body, _rule))
+    # S06（2026-11-21 D4）：载体能力表与 delta/view 修订请求同源（呈现协议生成）；
+    # 槽位请求同样需要它来解释"哪种载体能承载什么"。
+    from shared.presentation_contract import carrier_capability_table
+    return ("%s\n# 槽位请求（只在这些集合里选）\n%s\n%s\n\n%s"
+            % (_head, _body, _rule, carrier_capability_table()))
 
 
 NORMALIZATION_VERSION = "slot_answer_shape.v1"

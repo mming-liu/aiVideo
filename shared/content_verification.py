@@ -1448,13 +1448,20 @@ def _fact_axis_problems(record, view, *, background_uids=frozenset()) -> list:
                         # 被拒。**只放行 `partial`**——说反（contradicted）与判不了
                         # （unknown）照旧拒收：说反比缺一半严重，与档位无关。
                         continue
-                    _p.append(_rec("verify_fact_unsupported", "verification", _fu,
-                                   "事实 %s 的实际载体**没有完整表达**这条事实（%s）：%s%s"
-                                   % (_fu, _v,
-                                      str(_r.get("missing") or "").strip() or "（未说明缺什么）",
-                                      "；建议改的载体：%s" % "、".join(
-                                          map(str, _r.get("suggested_carriers") or []))
-                                      if _r.get("suggested_carriers") else "")))
+                    # 2026-11-21（S06/D4）：核验员的 `suggested_carriers` 是**未核实的提示**，
+                    # 不再是"建议改的载体"这种指令式文本（它没有载体能力检查：内心事实
+                    # 曾被建议挂到画面节拍）。结构化字段随记录下发，由请求侧标注"未核实"。
+                    _hints = [str(x) for x in (_r.get("suggested_carriers") or [])
+                              if str(x).strip()]
+                    _ps = _rec("verify_fact_unsupported", "verification", _fu,
+                               "事实 %s 的实际载体**没有完整表达**这条事实（%s）：%s"
+                               % (_fu, _v,
+                                  str(_r.get("missing") or "").strip()
+                                  or "（未说明缺什么）"))
+                    if _hints:
+                        _ps["hint_carriers"] = _hints
+                        _ps["hint_note"] = "核验员提示，未核实（不等于可执行的修法）"
+                    _p.append(_ps)
                 continue
             # `supported` 的事实：支持片段必须**逐字出自实际载体正文**
             _spans = [str(s) for s in (_r.get("support_spans") or []) if str(s).strip()]

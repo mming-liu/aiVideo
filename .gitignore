@@ -615,3 +615,5 @@ start_studio.bat
 
 # 2026-11-21 S02：Step01 计划修订离线回放工具（tools/replay_plan_revision.py）的单测入库
 !tests/tools/test_replay_plan_revision.py
+!tests/step01_script_gen/test_revision_request_hygiene.py
+!tests/step01_script_gen/test_verifier_hint_downgrade.py

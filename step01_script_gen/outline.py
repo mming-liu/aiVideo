@@ -31,6 +31,7 @@ from shared.presentation_contract import (MODE_HYBRID, MODE_LEGACY, PLAN_CONTRAC
                                           DELTA_SCHEMA, PRESENTATION_SCHEMA, REVISION_SCHEMA,
                                           PresentationContractError,
                                           apply_delta_view, apply_editable_view,
+                                          carrier_capability_table,
                                           delta_request, plan_basis, plan_from_view,
                                           plan_mode, ref_uid, revision_request, view_from_plan,
                                           view_digest, view_problems)
@@ -1721,11 +1722,18 @@ def _revision_feedback_block(problems, plan) -> str:
         _head = "未通过的项目（共 %d 项）：" % _n
     _lines = ["【本轮修订要求】上一版计划未通过统一验收。", "", _head]
     for _p in _recs[:FEEDBACK_DETAIL_LIMIT]:
-        _lines.append("- %s（能力：%s）｜%s｜%s"
-                      % (_p.get("path") or "（未定位到字段）",
-                         _p.get("capability") or "未登记",
-                         str(_p.get("reason") or _p.get("detail") or ""),
-                         str(_p.get("basis") or "")))
+        _line = "- %s（能力：%s）｜%s｜%s" % (
+            _p.get("path") or "（未定位到字段）",
+            _p.get("capability") or "未登记",
+            str(_p.get("reason") or _p.get("detail") or ""),
+            str(_p.get("basis") or ""))
+        # S06（2026-11-21）：核验员的载体提示是**未核实**的线索，不是修法指令——
+        # 单独标注，避免被当成"照它改就必过"（它没有载体能力校验）。
+        _hints = [str(x) for x in (_p.get("hint_carriers") or []) if str(x).strip()]
+        if _hints:
+            _line += "；[%s] 候选载体：%s" % (
+                str(_p.get("hint_note") or "核验员提示，未核实"), "、".join(_hints))
+        _lines.append(_line)
     if _n > FEEDBACK_DETAIL_LIMIT:
         _lines += _unexpanded_block(_recs[FEEDBACK_DETAIL_LIMIT:])
         _lines.append("本轮**能改的键**见上面的操作说明；改不动或没改完的项会在下一轮继续反馈。")
@@ -2438,8 +2446,7 @@ def source_verbatim_rule() -> str:
     return _SOURCE_VERBATIM_RULE_TEMPLATE.replace("{norm_note}", source_norm_note())
 
 
-_PLAN_DELTA_INSTRUCTION = """
-【本轮修订协议：`plan_revision.delta.v1` 按 UID 的**增量**修订】
+_DELTA_PROTOCOL_HEADER = """【本轮修订协议：`plan_revision.delta.v1` 按 UID 的**增量**修订】
 你**不要**回整份视图。只回**改动**——没提到的条目由本地按基线保留，冻结事实主张、
 事件与 `plan_basis` **一个字都不用它重抄**。
 
@@ -2462,56 +2469,79 @@ _PLAN_DELTA_INSTRUCTION = """
 - `order`：`upsert` 或 `delete` **改动了集合**时**必须**给出该集合**最终完整的 id 顺序**
   （含新增的临时 id）；只改正文、不动集合时可以省略。
 
-**提交前自检（这几条一旦违反，整份响应被拒收、不进入应用）**：
-1. `delete` 里的每个 id 是否**也**出现在 `upsert` 里？—— 必须是空交集。
-2. 改动了集合（含 `new:` 新增 / 删条目）时，`order` 里是否给了该集合**最终完整**顺序？
-3. `upsert` 的每一项是否都是**完整对象**（不是 id 字符串、不是数字）？
-4. 事实的 `承载：Bn/…` 与节拍的 `载体：…` 是否**互相登记**？k 条旁白要各有一条标着
-   `载体：旁白k` 的节拍；一条节拍只能标一个载体。
-5. 每个 `voice_ref.uid` 是否**确实存在**？——只能引用**当前计划里已有的**声音条目，或本次
-   `upsert.dialogue_units` / `upsert.narration_units` 里用 `new:` 声明的条目；引用一个
-   不存在的 id 会被拒收（`view_voice_ref_dangling`，实测第 2 轮就栽在这里）。
-   **引用本次新增的声音时，`voice_ref.uid` 必须原样带 `new:` 前缀**（写 `new:n09`，
-   不能写成 `n09`）——声明、`order`、`voice_ref` 三处前缀必须一致。
-6. 只改**顺序**时不要把条目全塞进 `upsert`：给 `order` 的完整顺序即可。
-7. **每条声音条目都必须仍有节拍承载**：改完之后，`dialogue_units` / `narration_units` 里的
-   **每一个** uid 都要能在某条节拍的 `voice_ref` 上找到；删节拍、改 `voice_ref` 或替换
-   声音条目时，别把某条声音弄成"没有任何节拍念它"（`view_voice_unit_unplaced`，
-   实测第 16/17 次都栽在这里）。
-   **保留在 `dialogue_units` 或 `narration_units` 里的每个 uid，都必须同时被某条
-   `beats[].voice_ref`（形如 `{"kind": "dialogue", "uid": "d01"}`）绑定**；严禁只保留
-   `d01` 却把承载节拍的 `voice_ref` 设为 `null` 或删掉（必触发 `view_voice_unit_unplaced`）。
-8. **预算**：`budget` 里的总发声下界上限（{{DURATION_MAX}} s）与单镜上限（{{SHOT_CAP}} s）是**硬约束**。
-   某条声音超单镜上限、或总下界超预算时，**两条合法修法**：
-   · **保留原 uid 换短句**：`upsert` 原 id + **完整对象**，`text` 换成原文里更短、
-     带句末标点、一镜说得完的那一句；
-   · **整条撤下**：`delete` 它的 uid，把它原先承载的事实改挂到**画面**载体，并给出该集合
-     的完整 `order`。**撤下一条旁白是允许的**（反馈里的 `must_delete` 就是此意）。
-   ⚠️ **同一个 uid 的「换短句」与「整条删除」绝对互斥**（实测 r3/r4 连续两次
-   `delta_delete_and_upsert_same_uid`，白烧 2 次修订额度）：选保留 uid 换短句就
-   **只写 `upsert`**、严禁同时写进 `delete`；选整条撤下就**只写 `delete`**、
-   严禁同时写进 `upsert`。要「换」一条已有条目时用**新 `new:` 临时 id** 写
-   `upsert`、旧正式 id 写 `delete`。
-   ⚠️ **不可单镜表示的整条**（超单镜上限、句内又没有句末标点，例如 88 字 / 20s 的长旁白）：
-   **必须**撤下它，或换成原文里**带句末标点且 ≤35 字**的短句；**不许原样保留**——
-   留着它计划永远过不了预算门（实测反馈说了两轮仍被保留）。
-   **唯一不许**的是"同一句换人念"：把基线旁白的正文原样改挂到角色发声的单元上、或删掉后
-   用 `new:` 换人重建——都判 `view_voice_role_changed` 拒收（`frozen_voice_roles` 是
-   每条旁白的有效声源，随 uid 冻结）。
-   **不要靠新增旁白或新增节拍**——新增内容只会把下界推得更高。同理，一条事实用画面
-   承载时优先复用**已有**节拍，不要为它再造一个带声音的新节拍。
-9. **不许把 `dialogue_units` 删空**：生成前要求计划至少保留一条**逐字台词**
-   （原文里人物真的说过的话）。删到空会被判「计划未选用任何逐字台词」而直接停稿；
-   要修「声音没有发声节拍」，就给已有台词补 `voice_ref` / 建承载节拍，不要整条删光。
-10. **被核验判为「叙述冒充对白」的声音**（`verify_voice_not_speech` / 说话人为空 /
-   `budget_unrepresentable` 且切不出合法解，例如 d09）：**必须从 `dialogue_units` 里整条
-   `delete`**，把它原先承载的事实改挂到**画面**或一条**合规短旁白**上；不要靠改说话人名、
-   不要原样保留——这类条目留着一定过不了生成前的核验门。同样**只写 `delete`**，
-   不要把同一个 uid 再放进 `upsert`（同一 id 既删又改会被整份拒收）。
-11. **节拍顺序按原文因果**：心理决断 → 当面应对 → 动身离开，不得倒置；承载「心理+行动」
-   复合事实的节拍正文必须写出**可拍的外部动作**（只写内心独白不算表达，会被判
-   `verify_fact_unsupported`）。调整顺序用 `order.beats` 的**完整顺序**，不要只改正文。
-- `fact_bindings`：只列**改动过**的事实，每项 `{"fact_uid": …, "carriers": […]}`；
+**提交前自检（这几条一旦违反，整份响应被拒收、不进入应用；本轮按问题类别只下发相关几条）**：
+"""
+
+#: 增量协议自检规则的**唯一来源**：`(规则键, 类别, 正文)`。
+#:
+#: 类别用于**按问题集裁剪**下发（2026-11-21 S05/D6；规则正文只有这一份，不复制第二份）：
+#: - `always`：协议核心（条目形状、承载登记、声音引用、顺序与因果）；
+#: - `budget`：只在**本轮有预算类问题**时下发（没有预算问题时不发预算规则）；
+#: - `delete`：只在**本轮可能出现删除/增删内容**时下发（删改互斥、整条撤下、清单不删空）。
+#:
+#: 规则正文**不得写入具体小说、编号或情节模板**（内容无关性）：示例只给匿名形状；
+#: 错误码可保留（它们是代码里的稳定标识），不写"第 N 轮实测"这类过程痕迹。
+_DELTA_RULES = (
+    ("delete_upsert_disjoint", "delete",
+     "1. `delete` 里的每个 id 是否**也**出现在 `upsert` 里？—— 必须是空交集。"),
+    ("collection_order", "delete",
+     "2. 改动了集合（含 `new:` 新增 / 删条目）时，`order` 里是否给了该集合**最终完整**顺序？"),
+    ("upsert_complete", "always",
+     "3. `upsert` 的每一项是否都是**完整对象**（不是 id 字符串、不是数字）？"),
+    ("carrier_registration", "always",
+     "4. 事实的 `承载：Bn/…` 与节拍的 `载体：…` 是否**互相登记**？k 条旁白要各有一条标着\n"
+     "   `载体：旁白k` 的节拍；一条节拍只能标一个载体。"),
+    ("voice_ref_exists", "always",
+     "5. 每个 `voice_ref.uid` 是否**确实存在**？——只能引用**当前计划里已有的**声音条目，或本次\n"
+     "   `upsert.dialogue_units` / `upsert.narration_units` 里用 `new:` 声明的条目；引用一个\n"
+     "   不存在的 id 会被拒收（`view_voice_ref_dangling`）。\n"
+     "   **引用本次新增的声音时，`voice_ref.uid` 必须原样带 `new:` 前缀**（写 `new:<新 uid>`，\n"
+     "   不能写成不带 `new:` 前缀的同一 uid）——声明、`order`、`voice_ref` 三处前缀必须一致。"),
+    ("order_only", "always",
+     "6. 只改**顺序**时不要把条目全塞进 `upsert`：给 `order` 的完整顺序即可。"),
+    ("voice_unit_placed", "always",
+     "7. **每条声音条目都必须仍有节拍承载**：改完之后，`dialogue_units` / `narration_units` 里的\n"
+     "   **每一个** uid 都要能在某条节拍的 `voice_ref` 上找到；删节拍、改 `voice_ref` 或替换\n"
+     "   声音条目时，别把某条声音弄成\"没有任何节拍念它\"（`view_voice_unit_unplaced`）。\n"
+     "   **保留在 `dialogue_units` 或 `narration_units` 里的每个 uid，都必须同时被某条\n"
+     "   `beats[].voice_ref`（形如 `{\"kind\": \"dialogue\", \"uid\": \"<声音 uid>\"}`）绑定**；严禁只保留\n"
+     "   某个条目却把承载节拍的 `voice_ref` 设为 `null` 或删掉（必触发 `view_voice_unit_unplaced`）。"),
+    ("budget", "budget",
+     "8. **预算**：`budget` 里的总发声下界上限（{{DURATION_MAX}} s）与单镜上限（{{SHOT_CAP}} s）是**硬约束**。\n"
+     "   某条声音超单镜上限、或总下界超预算时，**两条合法修法**：\n"
+     "   · **保留原 uid 换短句**：`upsert` 原 id + **完整对象**，`text` 换成原文里更短、\n"
+     "     带句末标点、一镜说得完的那一句；\n"
+     "   · **整条撤下**：`delete` 它的 uid，把它原先承载的事实改挂到**画面**载体，并给出该集合\n"
+     "     的完整 `order`。**撤下一条旁白是允许的**（反馈里的 `must_delete` 就是此意）。\n"
+     "   ⚠️ **同一个 uid 的「换短句」与「整条删除」绝对互斥**（`delta_delete_and_upsert_same_uid`）：\n"
+     "   选保留 uid 换短句就**只写 `upsert`**、严禁同时写进 `delete`；选整条撤下就**只写 `delete`**、\n"
+     "   严禁同时写进 `upsert`。要「换」一条已有条目时用**新 `new:` 临时 id** 写\n"
+     "   `upsert`、旧正式 id 写 `delete`。\n"
+     "   ⚠️ **不可单镜表示的整条**（超单镜上限、句内又没有句末标点、无法合法切分的长句）：\n"
+     "   **必须**撤下它，或换成原文里**带句末标点且一镜说得完**的短句；**不许原样保留**——\n"
+     "   留着它计划永远过不了预算门。\n"
+     "   **唯一不许**的是\"同一句换人念\"：把基线旁白的正文原样改挂到角色发声的单元上、或删掉后\n"
+     "   用 `new:` 换人重建——都判 `view_voice_role_changed` 拒收（`frozen_voice_roles` 是\n"
+     "   每条旁白的有效声源，随 uid 冻结）。\n"
+     "   **不要靠新增旁白或新增节拍**——新增内容只会把下界推得更高。同理，一条事实用画面\n"
+     "   承载时优先复用**已有**节拍，不要为它再造一个带声音的新节拍。"),
+    ("dialogue_not_empty", "delete",
+     "9. **不许把 `dialogue_units` 删空**：生成前要求计划至少保留一条**逐字台词**\n"
+     "   （原文里人物真的说过的话）。删到空会被判「计划未选用任何逐字台词」而直接停稿；\n"
+     "   要修「声音没有发声节拍」，就给已有台词补 `voice_ref` / 建承载节拍，不要整条删光。"),
+    ("voice_not_speech", "delete",
+     "10. **被核验判为「叙述冒充对白」的声音**（`verify_voice_not_speech` / 说话人为空 /\n"
+     "    `budget_unrepresentable` 且切不出合法解）：**必须从 `dialogue_units` 里整条\n"
+     "    `delete`**，把它原先承载的事实改挂到**画面**或一条**合规短旁白**上；不要靠改说话人名、\n"
+     "    不要原样保留——这类条目留着一定过不了生成前的核验门。同样**只写 `delete`**，\n"
+     "    不要把同一个 uid 再放进 `upsert`（同一 id 既删又改会被整份拒收）。"),
+    ("causal_order", "always",
+     "11. **节拍顺序按原文时间与因果先后，不得倒置**；承载「心理 + 行动」复合事实的节拍正文\n"
+     "    必须写出**可拍的外部动作**（只写内心独白不算表达，会被判\n"
+     "    `verify_fact_unsupported`）。调整顺序用 `order.beats` 的**完整顺序**，不要只改正文。"),
+)
+
+_DELTA_PROTOCOL_FOOTER = """- `fact_bindings`：只列**改动过**的事实，每项 `{"fact_uid": …, "carriers": […]}`；
   一条事实只能出现一次；`carriers` 里的每一项是 `{"kind": …, "uid"/"beat_uid"/"card_id": …}`。
   legacy_audio 每条事实最多一个载体，该载体须完整表达主张。**画面事实可以绑定承载
   旁白或对白的既有节拍**，保留其合法 `voice_ref`（声画共镜）；确需新增节拍时才新增。
@@ -2530,8 +2560,55 @@ _PLAN_DELTA_INSTRUCTION = """
 （不要求每条 `event_uids` 都覆盖全部事件），且事件在节拍里出现的先后**不得回退**。
 **不许改**：事实主张、事件集合与顺序、`plan_basis` 里的字段、已有实体的 id。
 
-**空修改**：什么都不给（或所有块都空）⇒ 记为 `no_change`，同样不采纳。
-"""
+**空修改**：什么都不给（或所有块都空）⇒ 记为 `no_change`，同样不采纳。"""
+
+
+def _delta_rule_categories(problems) -> set:
+    """本轮需要下发哪些类别的自检规则（只裁剪**说明**，不裁剪任何本地校验）.
+
+    2026-11-21（S05/D6）：此前 11 条规则对所有轮次全量下发，其中预算/删除类规则
+    在"本轮根本没有预算或删除可能"时只增加提示噪声。按问题类别裁剪：
+
+    - 有预算类 code ⇒ 下发 `budget` 规则；
+    - 修法能力是 `content`/`plan_field`（要增删内容或改操作协议碰不到的字段），
+      或有"声音冒充对白/预算切不出"这类必须整条撤下的 code ⇒ 下发 `delete` 规则；
+    - `always` 规则始终下发（协议形状与引用正确性不能省）。
+
+    判不出来时**fail-open**（保留全部规则）：裁剪说明是为了减少噪声，不得因此漏掉
+    模型照做会踩的坑。
+    """
+    if not problems:
+        return {"always", "budget", "delete"}
+    codes = [str((p or {}).get("code") or "") for p in (problems or [])
+             if isinstance(p, dict)]
+    cats = {"always"}
+    if any(c.startswith("budget") for c in codes):
+        cats.add("budget")
+    _cap = _fix_capability(problems)
+    _delete_hint = bool(_cap.get("inexpressible")) or any(
+        c in ("verify_voice_not_speech", "verify_voice_speaker_missing",
+              "verify_voice_role_changed") for c in codes)
+    if _delete_hint:
+        cats.add("delete")
+    return cats
+
+
+def delta_instruction_for(problems) -> str:
+    """按问题集裁剪后的增量协议说明（与 `_PLAN_DELTA_INSTRUCTION` **同一份规则来源**）."""
+    cats = _delta_rule_categories(problems)
+    rules = [text for _rid, cat, text in _DELTA_RULES if cat in cats]
+    return chr(10).join([_DELTA_PROTOCOL_HEADER.rstrip(), chr(10).join(rules),
+                         "", _DELTA_PROTOCOL_FOOTER])
+
+
+#: 全量协议说明（规则正文的唯一来源拼装；回放/文档/测试仍可读这一份）：
+#: `_replan_by_view` 的请求用 `delta_instruction_for(problems)` 按类别裁剪。
+_PLAN_DELTA_INSTRUCTION = chr(10).join([
+    _DELTA_PROTOCOL_HEADER.rstrip(),
+    chr(10).join(text for _rid, _cat, text in _DELTA_RULES),
+    "", _DELTA_PROTOCOL_FOOTER,
+])
+
 
 #: v2 的**输出 schema**：一个信封（三个基线摘要 + 完整视图）。
 #:
@@ -2797,6 +2874,13 @@ def _view_feedback_block(problems, view) -> str:
                json.dumps(_p.get("limits") or {}, ensure_ascii=False)
                if _p.get("limits") else "（无）"))
         _lines.append("  原因：%s" % str(_p.get("reason") or ""))
+        # S06（2026-11-21 D4）：核验员的载体候选是**未核实提示**，不是修法指令——
+        # 单独标注（核验员没有载体能力校验，不能当"照它改必过"的依据）。
+        _hints = [str(x) for x in (_p.get("hint_carriers") or []) if str(x).strip()]
+        if _hints:
+            _lines.append("  提示：[%s] 候选载体：%s"
+                          % (str(_p.get("hint_note") or "核验员提示，未核实"),
+                             "、".join(_hints)))
         if _p.get("basis"):
             _lines.append("  判据：%s" % _p["basis"])
         if _p.get("fix"):
@@ -3654,7 +3738,9 @@ def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
                           ensure_ascii=False, indent=1)
     _prompt = chr(10).join([
         _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS]),
-        (_render_duration_template(_PLAN_DELTA_INSTRUCTION)
+        # S05（2026-11-21 D6）：按**本轮问题类别**裁剪自检规则（预算/删除类只在相关时下发；
+        # 规则正文只有 `_DELTA_RULES` 一份来源，全量版本仍由 `_PLAN_DELTA_INSTRUCTION` 拼装）。
+        (_render_duration_template(delta_instruction_for(problems))
          if _is_delta else _PLAN_VIEW_INSTRUCTION),
         # **两条协议都拼**（2026-10-11 离线回放诊断）：统一验收链核"正文是不是原文片段"，
         # 请求就必须说出来——只在首版提示里有，等于让修订轮去踩一个没人告诉它的坑。
@@ -3662,6 +3748,9 @@ def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
         # ⚠️ **必须用 v2 词汇那一份**：拼 v5 的 `render_protected_fields_rule()`
         # 会让同一份 prompt 里出现两套互相冲突的形状规格（实跑 2026-10-06 根因）
         render_view_protected_rule(),
+        # S06（2026-11-21 D4）：载体能力表（呈现协议单源生成），替代未核实的
+        # "建议改的载体"指令；只描述能力，不做语义判定。
+        carrier_capability_table(),
         "",
         "# 当前可编辑视图（**你要改的就是这一份**；两个基线摘要必须原样回带）",
         _payload,

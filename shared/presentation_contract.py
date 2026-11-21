@@ -87,6 +87,35 @@ KIND_CARD = "screen_card"
 KIND_DIALOGUE = "dialogue"
 KIND_NARRATION = "narration"
 CARRIER_KINDS = (KIND_VISUAL, KIND_CARD, KIND_DIALOGUE, KIND_NARRATION)
+
+#: 载体**能力表**（单源，2026-11-21 S06）：种类取自 `CARRIER_KINDS`，说明只描述
+#: "这种载体能承载什么、不能承载什么"，不含任何具体小说内容，也不替模型做语义判定。
+#: 修订请求把它附在协议说明后，替代"核验员建议改的载体"这类未核实指令。
+CARRIER_CAPABILITY = {
+    KIND_VISUAL: ("画面",
+                  "可观察的人物动作、姿态、道具状态、环境光影与空间关系；"
+                  "编剧侧可用它演出事实，但**不承载具体台词内容或内心原话**。"),
+    KIND_DIALOGUE: ("对白",
+                    "逐字出自原文的人物台词；需绑定发声节拍与合法说话人，"
+                    "不得把叙述或内心独白伪装成对白。"),
+    KIND_NARRATION: ("旁白",
+                     "逐字出自原文的叙述文本；需有合法发声位置，"
+                     "不得把旁白改挂给角色发声。"),
+    KIND_CARD: ("文字卡",
+                "仅 screen_hybrid 模式；屏幕上可读的逐字原文片段，"
+                "受阅读预算约束，且不得超出原文。"),
+}
+
+
+def carrier_capability_table() -> str:
+    """修订请求用的载体能力表（由 `CARRIER_KINDS` 生成，单源；不含内容前提）."""
+    _lines = ["【载体能力表（由呈现协议生成；只描述能力，不做语义判定）】"]
+    for _kind in CARRIER_KINDS:
+        _name, _desc = CARRIER_CAPABILITY[_kind]
+        _lines.append("- `%s`（%s）：%s" % (_kind, _name, _desc))
+    _lines.append("选择哪个载体由**本计划的模式与事实性质**决定；"
+                  "表格不替模型判断某条事实该由谁承载。")
+    return chr(10).join(_lines)
 #: **写了的载体标注但解析不出**（越界编号、区间写法、别字）——不是"没标"，
 #: 也不是"标了别的"，是**非法**。三种状态必须分得开。
 KIND_INVALID = "invalid"

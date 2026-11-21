@@ -651,7 +651,10 @@ def test_production_dispatches_by_mode_and_replays_the_older_one_explicitly():
     # 2026-10-30：源码里这条三元表达式是**换行**写的（HEAD 起就是），逐字匹配会永远红。
     # 断言意图不变，改成两段各自成立：增量用 delta 说明块、否则用完整视图说明块。
     _flat = " ".join(_joined.split())
-    assert "_render_duration_template(_PLAN_DELTA_INSTRUCTION)" in _flat
+    # S05（2026-11-21）：请求里的增量说明按问题类别裁剪，但规则正文仍只有一份来源——
+    # 断言意图不变：增量用 delta 说明块（trimmed），否则用完整视图说明块。
+    assert "delta_instruction_for(problems)" in _flat or \
+        "delta_instruction_for(" in _flat
     assert "if _is_delta else _PLAN_VIEW_INSTRUCTION" in _flat
     # 预算短路不许绕过新路由（否则 `_INTERFACE_ADVICE[_route]` KeyError 的老毛病复发）——
     # 这一句在**分派函数**里，不在应用器里
