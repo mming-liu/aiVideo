@@ -163,7 +163,60 @@ BLOCK 与失败原因。批次脚本 `.tmp/s11_batch_runs.py`：
   `summary.json`，并同步 `.tmp/step01_plan_corpus_20261121/acceptance/
   s11_batch_40runs.json`；断点续跑按 tag 跳过已完成轮次。
 
-（批次运行中，完成后回填 40 轮终局/原因直方图与分章统计。）
+**批次结果（2026-11-22 04:17 完成，40/40 轮，无中断）**：耗时 4.72h，569 次
+订阅通道调用、1,901,566 completion tokens；正式五件套与主工作区 `output/` 未被写
+（`script_result.json` sha1 仍 `17719bd8…`；冻结候选都落在快照 `.dsh/`，共 17 个）。
+
+| 章节 | 轮数 | COMMITTED | COMMIT_BLOCK | PLAN_CONTRACT_INVALID | PLAN_INFEASIBLE | ERROR |
+|---|---|---|---|---|---|---|
+| 第 1 章 | 20 | 0 | 9 | 4 | 6 | 1 |
+| 第 2 章 | 20 | 0 | 8 | 1 | 10 | 1 |
+| 合计 | 40 | **0** | **17** | **5** | **16** | **2** |
+
+逐轮数据：`.tmp/s11_batch/summary.jsonl`（含每轮 reason/detail/replan/calls/sha1）；
+原因聚合：`.tmp/s11_batch/analysis.json`，并同步
+`.../acceptance/s11_batch_40runs.json` 与 `s11_batch_40runs_analysis.json`。
+
+**失败原因分解（按现场样本归因）**：
+
+1. **计划层响应违约 `illegal_response`：16 轮（ch1 6 / ch2 10）**，全部在额度耗尽前
+   模型连续给出被拒响应。按最后一次拒收 code 分：
+   - `repair_narrow_invalid` ×3（收窄后的声音正文不是原句逐字连续子串/切分点不合法）；
+   - `repair_answer_target_not_allowed` ×2（**S13 已修**：所选片段无已有落点却给 existing）；
+   - `core_field_frozen` ×4（模型反复尝试改 `main_events`/`climax` 等冻结摘要）；
+   - `carrier_dangling` 类 ×2（替换后 D1/D2 没有任何节拍承载）；
+   - `scope_uneditable_beat_modified` ×1（新声音节拍插到未授权锚点）；
+   - `route_field_violation` ×1（本通道不允许改 `screen_cards`）；
+   - `delta_delete_and_upsert_same_uid` ×1（同 uid 同时出现在 delete/upsert）；
+   - `view_ref_identity_conflict` ×1（一条引用给了多个互不一致 id 写法）；
+   - `repair_slot_conflict` ×1（同一画面被两个槽写成不同内容）。
+2. **统一验收不通过（PLAN_CONTRACT_INVALID）：5 轮**：
+   - 核验语义残余 3 轮（`verify_fact_unsupported`/`verify_bad_response`，如 f05/f06/f07
+     的 partial："未展示说话人身份""没有展示离开""出处只支持猜测"）；
+   - 核验额度耗尽 1 轮（`verify_not_available`：核验次数已达上限 4）；
+   - 确定性来源问题 1 轮（`source_narration_not_in_novel` N1 不在原文、`carrier_dangling`
+     B6 旁白4 不存在、预算不可单镜表示 D1 12.1s>12s 无句末边界）。
+3. **提交门 BLOCK：17 轮**：
+   - `budget_guard` ×16：最终审计修复轮前预算不足（剩余时间 < 本轮修复 180s + 最终
+     审计 600s + 收尾 60s），已保存冻结候选、正式产物不动；
+   - `audit_or_quality` ×1：final semantic audit 在 145s 墙钟上限内未返回（request_failed）。
+4. **生成层 ERROR：2 轮**（非计划层）：`EventContractBrokenError`、`DialogueIncompleteError`。
+
+**结论**：批量的计划层终局率 21/40（52.5%），**没有一次** `PlanContractInvalidError`；
+但 `illegal_response`（16/40）与"统一验收核验残余"（5/40）是主因，且后段
+`budget_guard` 把 16/40 挡在提交门外。对照 S11 五轮小样本（1/5 计划层终局），40 轮
+样本显示**模型响应合规性**与**核验语义/额度**仍是规划层主战场；S13 只覆盖其中
+`repair_answer_target_not_allowed` 一类（2/40 现场样本），其余原因尚未修复。
+
+**后续建议（S14 候选，需用户定优先级/授权）**：
+- S14a 响应合规性收敛：`repair_narrow_invalid`（给合法收窄候选而非让模型自由改）、
+  `core_field_frozen`/`route_field_violation`（请求侧显式禁令与可编辑范围）、
+  `carrier_dangling`/`repair_slot_conflict`（槽位答案交叉校验前移）；
+- S14b 核验轴：语义残余与 `verify_not_available`（额度/失败重试策略）；
+- S14c 提交门：`budget_guard` 在 17/40 BLOCK 中的占比（是否调整预算分配或审计等待
+  上限，属费用/产品取舍，需用户裁决）；
+- 可用 S13 后代码补跑一小批（如 ch1/ch2 各 3 轮）验证 target_not_allowed 是否消失，
+  但需另计真实调用。
 
 ## 五·补二、S11 首轮发现的修复：S13（已提交）
 
