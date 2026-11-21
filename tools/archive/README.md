@@ -21,6 +21,5 @@
 | `tools/build_s06_decision_samples.py` | `tools/archive/build_s06_decision_samples.py` | S06 G1/G2/G6 裁决样本 |
 | `tools/build_s06_g3_isolated_diff.py` | `tools/archive/build_s06_g3_isolated_diff.py` | S06 G3 隔离请求差异 |
 | `tools/build_s06_g7_samples.py` | `tools/archive/build_s06_g7_samples.py` | S06 G7 裁决样本 |
-| `tools/diag_prop_anchor_generation.py` | `tools/archive/diag_prop_anchor_generation.py` | 09-25 道具锚点提示实验 |
 
 更早归档的 `apply_738fa_audit_patch.py`、`apply_final_audit_patch.py` 不在本表。

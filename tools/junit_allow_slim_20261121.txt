@@ -1,0 +1,11 @@
+# compare_junit.py --allow：2026-11-21 精简包的已解释差异（每行一个 nodeid）
+#
+# ① S03：test_build_tools_use_atomic_dump_json 按 tools/build_*.py 参数化；下列脚本已删除或
+#    移到 tools/archive/，对应参数实例随之消失（脚本内容未改，归档件仍可在 archive/ 查看）：
+tests.tools.test_json_artifact_serialization::test_build_tools_use_atomic_dump_json[build_frame_mockup_svg.py]
+tests.tools.test_json_artifact_serialization::test_build_tools_use_atomic_dump_json[build_m02_u6_candidate.py]
+tests.tools.test_json_artifact_serialization::test_build_tools_use_atomic_dump_json[build_m03_issue_status.py]
+tests.tools.test_json_artifact_serialization::test_build_tools_use_atomic_dump_json[build_s03_identity_shadow_diff.py]
+tests.tools.test_json_artifact_serialization::test_build_tools_use_atomic_dump_json[build_s06_decision_samples.py]
+tests.tools.test_json_artifact_serialization::test_build_tools_use_atomic_dump_json[build_s06_g3_isolated_diff.py]
+tests.tools.test_json_artifact_serialization::test_build_tools_use_atomic_dump_json[build_s06_g7_samples.py]
