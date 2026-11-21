@@ -5,7 +5,8 @@
 
 1. 船宽缺规格时补 `宽1.4米`、容量补「可容3人」——尺寸与载客量都没有来源；
 2. 「窄身」被整段删除，不区分该字段说的是不是船（「窄身机甲」也会被删）；
-3. 船体裁切短语（「船尾在画外」）被直接删除——裁切可能是输入里的合法构图；
+3. 船体裁切短语（「船尾在画外」）被直接删除——裁切可能是输入里的合法构图
+   （2026-11-21 起对应约束已删除，改为验证整条约束链不删）；
 4. 「潜伏水下」被追加固定露头高度（约 2cm）——替输入决定姿态。
 
 修法：没有输入规格就不改写；形制词只在字段确实在说船时处理；裁切只报不改；
@@ -13,7 +14,6 @@
 """
 from __future__ import annotations
 
-from step01_script_gen.constraints.boat_crop import BoatCropConstraint
 from step01_script_gen.constraints.boat_width import BoatWidthConstraint
 from step01_script_gen.constraints.context import ConstraintContext
 from step01_script_gen.constraints.v6_43_prompt_enforcement import (
@@ -84,17 +84,13 @@ def test_narrow_body_of_a_boat_is_still_rewritten_with_a_spec():
 # ---------------------------------------------------------------------------
 # 3. 裁切只报不改
 # ---------------------------------------------------------------------------
-def test_crop_phrase_is_reported_not_deleted():
-    shot = {"prompt": "[中景] 小舟漂在湖面，船身向画面右方延伸出画外"}
-    before = shot["prompt"]
-    repairs = BoatCropConstraint().apply(_ctx([shot]))
-    assert shot["prompt"] == before, "合法裁切不得被删除"
-    assert repairs and repairs[0].action == "warn"
-
-
-def test_crop_phrase_absence_reports_nothing():
-    shot = {"prompt": "[中景] 小舟完整漂在湖面"}
-    assert BoatCropConstraint().apply(_ctx([shot])) == []
+def test_crop_phrase_survives_the_whole_constraint_chain():
+    """2026-11-21：只报不改的 `boat_crop_strip` 已删除（内容特化、历史运行从未触发）。
+    不变量仍成立：整条约束链不得删掉输入里的裁切构图。"""
+    from step01_script_gen.constraints.engine import apply_constraints
+    shot = {"index": 1, "prompt": "[中景] 小舟漂在湖面，船身向画面右方延伸出画外"}
+    apply_constraints(_ctx([shot]))
+    assert "船身向画面右方延伸出画外" in shot["prompt"], "合法裁切不得被删除"
 
 
 # ---------------------------------------------------------------------------

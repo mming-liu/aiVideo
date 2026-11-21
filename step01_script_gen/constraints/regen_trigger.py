@@ -8,7 +8,7 @@ runtime_extend），把违例信息打成"修复反馈 prompt"，调用 LLM 局�
   - 只读 violations_remaining 列表，不修改 shot
   - 输出 regen prompt（同时打 INFO 日志，便于人审）
   - 调用 LLM 同 TextGenerationRequest，复用 provider 切换
-  - LLM 失败不抛（与 self_review 一致）
+  - LLM 失败不抛
 
 完整接入 step01 的 regen loop 是后续工作（需要把 regen 出来的 shot 合并回
 原 script + 触发 _validate_script 复检）。本 PoC 只生成 regen prompt 并记录。

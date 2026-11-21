@@ -57,7 +57,7 @@ async def _qc_asset_image(asset_path: Path, ident: str, desc: str,
                           empty_scene: bool = False) -> bool:
     """资产图内容质检（B8 修复 08-11）.
 
-    复用 shared/vimax_bridge._maybe_qc_frame 的视觉质检（ds-vision-skill）：
+    复用 shared/vimax_bridge._maybe_qc_frame 的视觉质检（shared/image_qc）：
     - 场景 wide/near 图（禁止人物）：empty_scene=True → QC 检查空镜出人
     - 道具 prop 图（白底棚拍）：empty_scene=False → QC 检查多余物/水印/手
     质检通过（ok=True 且无 critical）返回 False（不需要重生成）；检出 critical
@@ -181,7 +181,7 @@ async def gen_scene_assets(image_adapter, force: bool = False, hallucinated_ids:
 
             # v6.40 08-23：跳过视觉 QC——专用 wide prompt 已 4 次强约束"不得出现任何
             # 人物/身影/人影/轮廓或人形"，且专用横屏适配器关闭了幻觉锁图。
-            # ds-vision-skill 视觉模型对 2560x1440 大场景空镜误判率高（详见 git 历史）。
+            # 当时的视觉 QC 模型（ds-vision-skill，已删除）对 2560x1440 大场景空镜误判率高（详见 git 历史）。
             try:
                 img_out = await gen.generate_wide(scene, save_path=str(wide_path))
                 if not _save_image(img_out, wide_path):

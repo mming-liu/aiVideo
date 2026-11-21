@@ -235,9 +235,8 @@ CINEMATIC_STYLE = os.getenv("CINEMATIC_STYLE", "")
 # 多张时同框多角色可各自传入肖像，提升人物一致性
 IMAGE_MULTI_REF = int(os.getenv("IMAGE_MULTI_REF", "1"))
 
-# 图片生成后视觉质检（ds-vision-skill 接入，step02a 帧生成后自动检查首帧+尾帧）
+# 图片生成后视觉质检（step02a 帧生成后自动检查；渠道见下方 QC_OPENCODE_*）
 IMAGE_QC_ENABLED = os.getenv("IMAGE_QC_ENABLED", "1").strip() == "1"  # 总开关（默认开启）
-IMAGE_QC_TIMEOUT_SEC = int(os.getenv("IMAGE_QC_TIMEOUT_SEC", "300"))  # 单次质检超时（Agnes 端点慢，默认 300s）
 # 是否把 critical 级问题写入 sidecar（默认 1=写 critical，让 submit_poll 遇 critical 自动删帧重生成）。
 # 2026-08-09 审计 P0-3：此前默认 0 把 critical 封顶成 warning，导致 submit_poll 的
 # 删帧重生成逻辑永远读不到 critical、成为死代码——QC 白检不修复。现统一为「critical 即重生成」。
@@ -507,22 +506,14 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 
 
 # ============================================================================
-# QC 视觉理解渠道（shared/image_qc.py 三层检测用；key 缺失时渠道自动跳过）
+# QC 视觉理解渠道（shared/image_qc.py 三层检测用）
 # ============================================================================
 # 2026-11-02（用户决定）：图片 QC 只走 OpenCode Go 网关
-# （QC_PROVIDER=opencode；模型 deepseek-v4.1-flash 支持 image 输入）。
-# 不再回落 agnes/dashscope/ark，也不调 ds-vision-skill 的 router 子进程——
-# router 单次超时 300s，是此前「生图很快、QC 很慢」的主因。
+# （QC_PROVIDER=opencode，代码默认值；模型 deepseek-v4.1-flash 支持 image 输入）。
+# 2026-11-21：agnes/dashscope/ark 视觉链与 ds-vision-skill router 子进程已删除，
+# QC_PROVIDER 只支持 opencode / off。
 QC_OPENCODE_MODEL = os.getenv("QC_OPENCODE_MODEL", "deepseek-v4.1-flash")
 QC_OPENCODE_TIMEOUT_SEC = int(os.getenv("QC_OPENCODE_TIMEOUT_SEC", "120"))
-# ARK 渠道视觉模型（doubao-seed-1-6 视觉 chat；当前账号未开通时 404 自动落
-# agnes/dashscope 渠道，见 image_qc._vision_chat）。仅在 QC_PROVIDER 非 opencode 时使用。
-QC_ARK_MODEL = os.getenv("QC_ARK_MODEL", "doubao-seed-1-6-250615")
-# dashscope OpenAI 兼容端点（qwen-vl-max 视觉渠道）。仅在 QC_PROVIDER 非 opencode 时使用。
-QC_DASHSCOPE_BASE_URL = os.getenv(
-    "QC_DASHSCOPE_BASE_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
 
 
 # ============================================================================
