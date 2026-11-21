@@ -497,6 +497,12 @@ def _metrics_update(path: str, values: dict) -> None:
         pass
 
 
+def _constraint_stats() -> dict:
+    """取走约束引擎本进程累计的逐约束计数（延迟导入：约束包体量大，只在落盘时加载）."""
+    from step01_script_gen.constraints.engine import drain_constraint_stats
+    return drain_constraint_stats()
+
+
 def _metrics_dump(path) -> None:
     """Persist structured call/time/repair metrics without affecting the run.
 
@@ -509,6 +515,12 @@ def _metrics_dump(path) -> None:
         from shared.json_io import atomic_dump_json as _adj
 
         payload = dict(_RUN_METRICS)
+        # 精简包 S06：逐约束完整计数（日志只列前 5）。取数失败显式落 `constraints_error`，
+        # 不影响其余指标落盘。
+        try:
+            payload["constraints"] = _constraint_stats()
+        except Exception as _cs_err:
+            payload["constraints_error"] = f"{type(_cs_err).__name__}: {_cs_err}"
         payload["run_id"] = _step01_run_id()
         payload["status"] = _RUN_OUTCOME["status"]
         payload["outcome_code"] = _RUN_OUTCOME["code"]

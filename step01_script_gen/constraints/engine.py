@@ -16,7 +16,9 @@ run_hard_fix(script) 是 main.py 用的便捷入口：跑 Constraint 框架。
 from __future__ import annotations
 
 import os
+import threading
 import time
+from collections import Counter
 from typing import Any, Callable, Optional, Tuple, Type
 
 from .types import RepairReport
@@ -85,6 +87,37 @@ def _raise_env_fault(where: str, exc: BaseException) -> None:
 ALL_CONSTRAINTS: list = []
 
 
+# ============================================================================
+# 逐约束运行计数（2026-11-21 精简包 S06）
+# ============================================================================
+# `run_hard_fix` 的日志只列修复数前 5 的约束，低频约束可能根本不上日志，
+# 无法据此判断「从未触发」。这里在唯一的执行循环里记完整计数，由
+# `orchestrator.runtime._metrics_dump` 取走写入 `step01_metrics.json["constraints"]`。
+# 只读 report，不改变任何约束行为。候选可在线程里并行跑，计数加锁。
+CONSTRAINT_STAT_KEYS = ("ran", "repair", "warn", "violation", "error")
+_STATS_LOCK = threading.Lock()
+_RUN_STATS: dict = {}
+
+
+def _stats_add(name: str, key: str, n: int = 1) -> None:
+    with _STATS_LOCK:
+        _RUN_STATS.setdefault(name, Counter())[key] += n
+
+
+def drain_constraint_stats() -> dict:
+    """取走并清空本进程累计的逐约束计数：``{name: {ran, repair, warn, violation, error}}``.
+
+    ``ran`` = 约束被执行的次数（已启用且未被 only/skip 过滤）；``repair`` / ``warn``
+    = 返回的 RepairRecord 中 action 非 warn / 为 warn 的条数；``violation`` = 留下的
+    违例条数；``error`` = 约束抛异常的次数（含随后 fail-closed 上抛的环境故障）。
+    """
+    with _STATS_LOCK:
+        out = {name: {k: int(c.get(k, 0)) for k in CONSTRAINT_STAT_KEYS}
+               for name, c in sorted(_RUN_STATS.items())}
+        _RUN_STATS.clear()
+    return out
+
+
 def apply_constraints(
     ctx: ConstraintContext,
     *,
@@ -116,15 +149,22 @@ def apply_constraints(
             continue
         if not c.is_enabled():
             continue
+        _stats_add(c.name, "ran")
         try:
             repairs = c.apply(ctx)
             if repairs:
                 report.repairs.extend(repairs)
+                _n_warn = sum(1 for r in repairs if getattr(r, "action", "") == "warn")
+                if _n_warn:
+                    _stats_add(c.name, "warn", _n_warn)
+                if len(repairs) - _n_warn:
+                    _stats_add(c.name, "repair", len(repairs) - _n_warn)
             # v6.80：阶段屏障钩子——每个约束执行后回调，供写入跟踪使用
             # （见 shared/semantic_barrier.py）。默认 None = 零行为变更。
             if on_constraint_done is not None:
                 on_constraint_done(c.name, ctx.script)
         except Exception as e:
+            _stats_add(c.name, "error")
             # 环境故障 = 约束没跑 ⇒ 显式失败；约束自身的逻辑异常仍按原语义
             # 「保留原版 + warn」继续（那是内容/实现问题，不该让整章崩掉）。
             if isinstance(e, fail_closed_types()):
@@ -139,6 +179,8 @@ def apply_constraints(
 
     # 取出每个 Constraint 上报的违例
     report.violations_remaining = ctx.drain_violations()
+    for _v in report.violations_remaining:
+        _stats_add(getattr(_v, "constraint_name", "") or "<unknown>", "violation")
     report.duration_ms = (time.time() - start) * 1000
     return report
 
