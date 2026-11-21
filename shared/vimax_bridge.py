@@ -981,7 +981,7 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                           kf_index: int | None = None) -> bool:
     """帧生成后执行视觉质检（软失败，不阻断流水线）.
 
-    通过 shared/image_qc.py 调用 ds-vision-skill 的 vision-router.ps1 对帧图做内容质检；
+    通过 shared/image_qc.py（OpenCode Go 视觉通道）对帧图做内容质检；
     QC 成功（ok=True）即写 sidecar（检出与否都写，has_hallucination=false 表示"已检过无问题"，
     供 should_run_qc 靠 sidecar 新鲜度跳过重复质检）。默认封顶 warning，不触发 step02b 自动重生成。
     asyncio.to_thread 避免阻塞事件循环（单次质检 2-4 分钟）。
@@ -1007,8 +1007,8 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         else:
             prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final")
     try:
-        from shared.image_qc import (frame_identity, maybe_qc_sync, qc_state,
-                                     sidecar_path, write_sidecar)
+        from shared.image_qc import (frame_identity, maybe_qc_sync, qc_provider,
+                                     qc_state, sidecar_path, write_sidecar)
         # U4：QC 开始前记录图片摘要——写回时再次核对，期间换图则结果记 qc_stale，
         # 绝不给新图写有效 PASS。
         pre = frame_identity(frame_path)
@@ -1074,7 +1074,7 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
                     log = []
             log.append({
                 "ts": _time.strftime("%Y-%m-%d %H:%M:%S"),
-                "provider": os.getenv("QC_PROVIDER", "auto"),
+                "provider": qc_provider(),
                 "has_hallucination": result.has_hallucination,
                 "person_count": getattr(result, "person_count", None),
                 "answers": getattr(result, "answers", None),

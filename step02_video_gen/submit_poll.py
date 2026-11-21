@@ -59,7 +59,7 @@ INITIAL_POLL_DELAY = int(os.getenv("INITIAL_POLL_DELAY", "30"))    # Wait after 
 # 零校验，坏视频直接进 step04。现增加两级 QC：
 #   1. 时长校验（always-on，ffprobe 探时长）：实际时长 vs 期望 duration_sec 偏差
 #      > 阈值 → 判定坏视频（短截/黑场/动作没播完）。
-#   2. 视觉质检（VIDEO_QC_ENABLED=1 时，抽取中段帧跑 ds-vision-skill）：检测人物
+#   2. 视觉质检（VIDEO_QC_ENABLED=1 时，抽首/中/尾帧走 image_qc 的 OpenCode 视觉通道）：检测人物
 #      消失/字幕/幻觉。默认 0（视觉质检昂贵，逐镜跑会拖慢全片），时长校验兜底。
 VIDEO_QC_ENABLED = os.getenv("VIDEO_QC_ENABLED", "0").strip() == "1"
 # 时长偏差阈值：实际时长 vs 期望时长的相对偏差（比例）或绝对偏差（秒）任一超限即坏
@@ -1341,7 +1341,7 @@ async def _poll_video(
                     # 时长/内容零校验，坏视频直接进 step04。现做两级 QC：
                     #   1. 时长校验（ffprobe，always-on）：实际 vs 期望 duration 偏差
                     #      超限 → 短截/黑场/动作没播完，删视频标记失败重生成。
-                    #   2. 视觉质检（VIDEO_QC_ENABLED=1 时抽中段帧跑 ds-vision-skill）。
+                    #   2. 视觉质检（VIDEO_QC_ENABLED=1 时抽帧走 image_qc 的 OpenCode 视觉通道）。
                     # QC 失败不写哈希（下次缓存检测不会命中），返回 False 走失败重试。
                     # 期望时长取**冻结后的实际值**（prepare 可能改过时长）：否则首次
                     # 提交按原请求、恢复按冻结值，同一产物两套裁决（复核 P1-4 之二）

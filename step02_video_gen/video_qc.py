@@ -1,7 +1,7 @@
 """step02_video_gen.video_qc - 视频产物视觉质检（A6 修复 08-11）.
 
-对下载成功的视频做内容级质检：抽取中间帧 → 用 ds-vision-skill 检查人物缺失/
-字幕/幻觉/物理逻辑错误。与图片质检（shared/image_qc.py）共用 vision-router.ps1，
+对下载成功的视频做内容级质检：抽取首/中/尾帧 → 检查人物缺失/字幕/幻觉/物理逻辑错误。
+与图片质检共用 shared/image_qc.maybe_qc_sync（OpenCode Go 视觉通道），
 只是输入从单张 PNG 换成视频抽帧。
 
 设计：

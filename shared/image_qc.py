@@ -1,15 +1,13 @@
-"""图片视觉质检 — 封装 ds-vision-skill 的 vision-router.ps1.
+"""图片视觉质检 — OpenCode Go 视觉通道（deepseek-v4.1-flash 直接看图）.
 
-在 step02a 帧生成后对首帧/尾帧做内容级质检（人脸/肢体/多余物体/水印/图文一致性），
-发现问题时仅告警 + 写 sidecar（默认封顶为 warning，不触发 step02b 自动重生成）。
+在 step02a 帧生成后对首帧/尾帧/关键帧做内容级质检（人数/角色复制/锚点问答/图文一致性），
+结果写 sidecar；视频 QC（step02_video_gen/video_qc.py）对抽帧复用同一入口。
 
-调用契约（已实测验证）：
-    powershell -NoProfile -ExecutionPolicy Bypass -File <router> -Path <img> -Prompt <q> -Intent auto -Json
-    - stdout 恒为 JSON（成功/失败都输出 JSON envelope），exit 0=成功 / 1=总失败
-    - 成功 envelope 读 result 字段（分析文本）；失败读 metadata.error / metadata.attempts[]
-    - env：AGNES_API_KEY（必需）、AGNES_BASE_URL、VISION_TIMEOUT_SEC（Agnes 慢，设 300）
+渠道：`QC_PROVIDER` 只支持 `opencode`（默认）与 `off`。2026-11-02 用户决定图片 QC 只走
+OpenCode Go；2026-11-21 删除了旧的 ds-vision-skill router 子进程与 agnes/dashscope/ark
+视觉链（`.agents/skills/ds-vision-skill`），其他取值返回 ok=False 的显式失败结果。
 
-软失败原则：timeout / exit≠0 / 解析失败 → 视为"未检出问题"+ 日志 WARN，绝不阻断流水线。
+软失败原则：调用失败 / 解析失败 → QcResult(ok=False)，不阻断流水线，也不写成 clean。
 
 sidecar 契约（与 step02_video_gen/submit_poll.py 的 _check_keyframe_hallucination 兼容）：
     {"has_hallucination": bool, "issues": [{"category","description","severity"}]}
@@ -23,8 +21,6 @@ import json
 import time
 import os
 import re
-import shutil
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,28 +28,28 @@ import requests
 from PIL import Image
 
 from shared.config import (
-    AGNES_BASE_URL,
-    QC_ARK_MODEL,
-    QC_DASHSCOPE_BASE_URL,
     QC_OPENCODE_MODEL,
     QC_OPENCODE_TIMEOUT_SEC,
-    VOLCENGINE_BASE_URL,
 )
 
 # 图片质检配置（与 shared/config.py 保持一致；此处直接读 env，避免循环依赖）
 QC_ENABLED = os.getenv("IMAGE_QC_ENABLED", "1").strip() == "1"
-QC_TIMEOUT_SEC = int(os.getenv("IMAGE_QC_TIMEOUT_SEC", "300"))
 # 2026-09-13 审计修复：默认值与 shared/config.py 对齐为 "1"（此前这里默认 "0"、
 # config.py 默认 "1"，删显式配置后行为随导入位置漂移）
 QC_WRITE_CRITICAL = os.getenv("IMAGE_QC_WRITE_CRITICAL", "1").strip() == "1"
 
-# OpenCode Go 视觉质检渠道（QC_PROVIDER=opencode 时唯一渠道）
+# OpenCode Go 视觉质检渠道（唯一渠道）
 # 网关要求 x-opencode-session；同一进程内稳定即可（每次运行一个新会话）。
 _QC_SESSION_ID = (os.getenv("AGENT_PLAN_SESSION_ID", "").strip()
                   or f"aivideo-qc-{os.getpid()}")
 
-# ds-vision-skill router 相对项目根的位置
-_ROUTER_REL = Path(".agents") / "skills" / "ds-vision-skill" / "scripts" / "vision-router.ps1"
+#: `QC_PROVIDER` 的合法取值（默认 opencode）。其余取值不再有实现。
+QC_PROVIDERS = ("opencode", "off")
+
+
+def qc_provider() -> str:
+    """生效的 QC 渠道（单源：maybe_qc_sync 与 vimax_bridge 的 QC 日志共用）."""
+    return (os.getenv("QC_PROVIDER", "opencode") or "opencode").strip().lower()
 
 # 质检中"物理逻辑错误"关键词（检测到时自动提升为 critical，对齐现有 image_hallucination_detector）
 _PHYSICS_VIOLATION_KEYWORDS = [
@@ -105,51 +101,6 @@ class QcResult:
     # 不进入 build_repair_plan 决策，仅留痕供 qc_log 审计。理论翻转率 <10%，
     # 出现意味着模型状态异常而非 VLM 噪声
     unstable_flips: list | None = None
-
-
-# ============================================================================
-# 基础定位
-# ============================================================================
-
-def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
-
-
-def find_router_ps1() -> Path:
-    """定位 vision-router.ps1（ds-vision-skill 的入口脚本）."""
-    router = _project_root() / _ROUTER_REL
-    if not router.exists():
-        raise FileNotFoundError(f"ds-vision-skill router 不存在: {router}（未安装？）")
-    return router
-
-
-def find_powershell() -> str:
-    """定位 powershell.exe（本机仅 Windows PowerShell 5.1，无 pwsh）."""
-    exe = os.getenv("POWERSHELL_EXE", "").strip()
-    if exe:
-        return exe
-    path = shutil.which("powershell")
-    if not path:
-        raise FileNotFoundError("未找到 powershell.exe，图像质检无法运行")
-    return path
-
-
-def child_env() -> dict:
-    """构造传给子进程的 env：继承 os.environ，注入 QC 专属变量.
-
-    - VISION_TIMEOUT_SEC：覆盖 router 默认 90s（Agnes 端点响应慢）
-    - AGNES_API_KEY：.env.keys 里裸键未启用（项目用 _9/_10/_11），
-      若进程 env 无裸键则注入第一个可用的 AGNES_API_KEY_n 兜底。
-    """
-    env = dict(os.environ)
-    env["VISION_TIMEOUT_SEC"] = str(QC_TIMEOUT_SEC)
-    if not env.get("AGNES_API_KEY"):
-        for i in range(2, 21):
-            key = env.get(f"AGNES_API_KEY_{i}")
-            if key:
-                env["AGNES_API_KEY"] = key
-                break
-    return env
 
 
 # ============================================================================
@@ -345,46 +296,8 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
 
 
 # ============================================================================
-# 子进程调用
-# ============================================================================
-
-def _invoke_router(frame_path: Path, prompt: str) -> subprocess.CompletedProcess:
-    """调用 vision-router.ps1（一次图片质检）."""
-    cmd = [
-        find_powershell(),
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", str(find_router_ps1()),
-        "-Path", str(frame_path.resolve()),
-        "-Prompt", prompt,
-        "-Intent", "auto",
-        "-Json",
-    ]
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=QC_TIMEOUT_SEC + 40,
-        env=child_env(),
-    )
-
-
-# ============================================================================
 # 解析
 # ============================================================================
-
-def _extract_result_text(stdout: str) -> str:
-    """从 router 的 JSON envelope 中提取 result 字段（成功/失败都返回 envelope）."""
-    try:
-        data = json.loads(stdout)
-        if isinstance(data, dict) and data.get("result"):
-            return str(data["result"])
-    except Exception:
-        pass
-    return ""
-
 
 def _map_category(raw: str) -> str:
     """把模型返回的 category 归一化到白名单."""
@@ -704,78 +617,32 @@ def write_sidecar(frame_path: Path, result: QcResult, *,
 
 
 # ============================================================================
-# 顶层 API
+# 第 3 层：通用语义 QC（OpenCode Go 直接看图）
 # ============================================================================
 
-def qc_image(frame_path: str | Path, prompt: str | None = None,
-             shot: dict | None = None, frame_kind: str = "first_frame",
-             characters: list | None = None, empty_scene: bool = False,
-             kf_index: int | None = None) -> QcResult:
-    """对单张图片执行视觉质检（同步，软失败不抛异常）.
+def _semantic_qc(frame_path: str | Path, prompt: str | None, shot: dict | None,
+                 frame_kind: str, characters: list | None, empty_scene: bool,
+                 kf_index: int | None) -> QcResult:
+    """整体语义质检：画面 vs 实际生成 prompt。失败抛异常（由 maybe_qc_sync 记 ok=False）.
 
-    Args:
-        frame_path: 图片路径
-        prompt: 自定义 prompt（不传则由 shot 自动构建）
-        shot: 镜头 dict（构建 QC prompt 用）
-        frame_kind: first_frame | last_frame
-    Returns:
-        QcResult：ok=False 表示质检本身失败（超时/无路由/解析失败）
+    调用方传了实际生成 prompt 就用它；空串/纯空白视为未提供，按本帧 spec 重建
+    （P4：空 prompt 会让模型无物可比，clean 实为「没查」）。
     """
-    frame = Path(frame_path)
-    if not frame.exists():
-        return QcResult(has_hallucination=False, issues=[], ok=False,
-                        raw_result="", error=f"图片不存在: {frame}")
-
-    # P4 修复：空串/纯空白也算「未提供」——否则视觉模型拿到空的「画面描述」，
-    # prompt_semantics 必然全过（sidecar clean 实为「没查」而非「没问题」）。
-    if not (prompt and prompt.strip()):
-        prompt = build_qc_prompt(shot or {}, frame_kind, characters, empty_scene,
-                                 kf_index=kf_index)
-
-    try:
-        proc = _invoke_router(frame, prompt)
-    except subprocess.TimeoutExpired:
-        return QcResult(has_hallucination=False, issues=[], ok=False,
-                        raw_result="", error=f"质检超时（{QC_TIMEOUT_SEC}s）")
-    except Exception as e:
-        return QcResult(has_hallucination=False, issues=[], ok=False,
-                        raw_result="", error=f"质检调用异常: {e}")
-
-    # stdout 恒为 JSON envelope（成功/失败都解析）；exit 0=成功
-    result_text = _extract_result_text(proc.stdout or "")
-
-    # 失败 envelope（exit≠0 或 result 为空且 metadata 有 error）
-    if proc.returncode != 0 or not result_text:
-        error = proc.stderr.strip() or proc.stdout.strip()[:200]
-        # 尝试读失败 envelope 的 metadata.error
-        try:
-            data = json.loads(proc.stdout or "{}")
-            if isinstance(data, dict):
-                md = data.get("metadata") or {}
-                error = md.get("error") or error
-        except Exception:
-            pass
-        return QcResult(has_hallucination=False, issues=[], ok=False,
-                        raw_result=proc.stdout or "", error=error[:300])
-
-    return parse_verdict(result_text)
+    qc_prompt = prompt if (prompt and str(prompt).strip()) else build_qc_prompt(
+        shot or {}, frame_kind, characters, empty_scene, kf_index=kf_index)
+    return parse_verdict(_opencode_vision_chat(frame_path, qc_prompt))
 
 
 # ============================================================================
-# v6.53 三层架构：第 1/2 层（ARK grounding + 锚点二值问答）
+# v6.53 三层架构：第 1/2 层（grounding 计数 + 锚点二值问答）
 #
-# 背景：免费池视觉模型"判对错"不可救——hook ff 4 人图两次判 0 问题，它不数
+# 背景：视觉模型"判对错"不可靠——hook ff 4 人图两次判 0 问题，它不数
 # 人数、只扫整体像不像。本层把"数数"与"对错"从 LLM 拿回代码：
 #   LLM 只做检测（出实体框+属性行 / 答二值问题——它擅长的）
 #   代码做计数断言 + 属性指纹查重 + 锚点符合性判定（它擅长的）
 # ============================================================================
 
-_ARK_VISION_MODEL = QC_ARK_MODEL  # 默认值单源 shared/config.py（QC_ARK_MODEL）
-# Agnes 视觉响应慢（router 给它配 300s）——检测层默认 150s，单渠道失败自动
-# 落下一个渠道；末渠道重试 1 次。
-_ARK_TIMEOUT_SEC = int(os.getenv("QC_ARK_TIMEOUT_SEC", "150"))
 _ARK_MAX_TOKENS = 1500   # 视觉问答 max_tokens（调优旋钮，勿在调用点内联）
-_AGNES_TRIES = 2         # Agnes 超时重试次数（4xx 不重试）
 # 人数容差（extra_person 判定）：期望人数 ± 容差内不报 critical。默认 0（无容差）。
 _PERSON_TOLERANCE = int(os.getenv("QC_PERSON_TOLERANCE", "0"))
 _COLOR_WORDS = ("白", "黑", "青", "蓝", "红", "绿", "灰", "紫", "金", "银", "粉", "褐")
@@ -822,11 +689,10 @@ def _qc_retry_after(resp) -> float | None:
 
 
 def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
-    """OpenCode Go 视觉通道（QC_PROVIDER=opencode 时唯一渠道）.
+    """OpenCode Go 视觉通道（图片 QC 唯一渠道）.
 
     deepseek-v4.1-flash 在 opencode go /models 声明支持 image/png|jpeg|webp 输入，
-    因此图片 QC 不再绕 ds-vision-skill router（其 agnes 单次超时 300s，是 QC 慢的
-    主因），直接复用文本通道的 key / base_url / 会话头。
+    直接复用文本通道的 key / base_url / 会话头。
 
     2026-11-14 Step B：429/5xx/瞬态 SSL 断开按 `QC_VISION_HTTP_RETRIES`
     （默认 2）退避重试，优先遵循 `Retry-After`，否则 2s → 5s。客户端/鉴权
@@ -887,68 +753,8 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
 
 
 def _vision_chat(frame_path: str | Path, prompt: str) -> str:
-    """检测/问答共用的视觉对话传输层，按可用性链式回落，全失败抛异常.
-
-    2026-11-02（用户决定）：QC_PROVIDER=opencode 时**只走** OpenCode Go，
-    不回落 agnes/dashscope/ark（"不要用其他模型"）。
-    其余 provider 仍按旧链 agnes→dashscope→ark。
-
-    实测（2026-08-29）：
-    - ARK doubao-seed 视觉模型全部 404（该账号仅开通图片/视频生成，未开通
-      视觉 chat）——保留 ark 分支以备开通后自动生效。
-    - agnes-2.5-flash（AGNES_BASE_URL/v1/chat/completions，router 同款）
-      grounding 完美：try2 好图正好 3 人、属性行准确，且免费。
-    - dashscope qwen-vl-max 同样可用（输出偶发 JSON 畸形，_parse_entity_array
-      已做容错修复）。
-    """
-    if os.getenv("QC_PROVIDER", "auto").strip().lower() == "opencode":
-        return _opencode_vision_chat(frame_path, prompt)
-
-    attempts = []
-    agnes_key = os.getenv("AGNES_API_KEY") or ""
-    agnes_base = (AGNES_BASE_URL or "").rstrip("/")
-    if agnes_key and agnes_base:  # AGNES_BASE_URL 未配置时跳过（config 必填语义，不猜端点）
-        attempts.append(("agnes", f"{agnes_base}/v1/chat/completions",
-                         os.getenv("AGNES_VISION_MODEL", "agnes-2.5-flash"), agnes_key))
-    ds_key = os.getenv("DASHSCOPE_API_KEY") or ""
-    if ds_key:
-        attempts.append(("dashscope", f"{QC_DASHSCOPE_BASE_URL.rstrip('/')}/chat/completions",
-                         os.getenv("QC_DASHSCOPE_VISION_MODEL", "qwen-vl-max"), ds_key))
-    ark_key = os.getenv("VOLCENGINE_API_KEY") or os.getenv("ARK_API_KEY") or ""
-    if ark_key:
-        attempts.append(("ark", f"{VOLCENGINE_BASE_URL.rstrip('/')}/chat/completions",
-                         _ARK_VISION_MODEL, ark_key))
-
-    if not attempts:
-        raise RuntimeError("无可用视觉理解渠道（AGNES/DASHSCOPE/VOLCENGINE key 均未配置）")
-    data_url = _ark_image_data_url(frame_path)
-    last_err = ""
-    for name, url, model, key in attempts:
-        # Agnes 响应慢且偶发读超时——超时重试（4xx 不重试）
-        tries = _AGNES_TRIES if name == "agnes" else 1
-        for attempt_i in range(tries):
-            try:
-                resp = requests.post(
-                    url,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json={"model": model, "messages": [{"role": "user", "content": [
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                        {"type": "text", "text": prompt},
-                    ]}], "temperature": 0, "max_tokens": _ARK_MAX_TOKENS,
-                    },
-                    timeout=_ARK_TIMEOUT_SEC,
-                )
-                if resp.status_code != 200:
-                    last_err = f"{name} {resp.status_code}: {resp.text[:120]}"
-                    break
-                data = resp.json()
-                return ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
-            except Exception as e:
-                last_err = f"{name}: {e}"
-                if attempt_i < tries - 1:
-                    continue
-                break
-    raise RuntimeError(f"视觉检测渠道全部失败：{last_err}")
+    """检测/问答共用的视觉对话传输层：只走 OpenCode Go（失败抛异常）."""
+    return _opencode_vision_chat(frame_path, prompt)
 
 
 def _parse_entity_array(text: str) -> list[dict]:
@@ -2002,13 +1808,13 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
                   prompt: str | None = None, kf_index: int | None = None) -> QcResult:
     """同步质检入口（带 should_run_qc 守卫）；由 vimax_bridge 的 async 包装调用.
 
-    v6.53 三层架构（QC_PROVIDER=auto 默认，检测链 agnes→dashscope→ark）：
-      第 1 层  ARK grounding 出实体框+属性行 → **代码**数人数 vs char_layout
+    v6.53 三层架构（三层都走 OpenCode Go 视觉通道）：
+      第 1 层  grounding 出实体框+属性行 → **代码**数人数 vs char_layout
                名单（容差 QC_PERSON_TOLERANCE，默认 0）+ 属性指纹查角色复制
       第 2 层  锚点 → 二值问答（build_targeted_questions），关键锚答错 critical
-      第 3 层  既有 router 整体质检——**只产 warning，无放行权**
-    ark 失败且 provider=ark → 回落 router 全权（legacy 行为，宁可误放不可漏闸全无）；
-    provider=router → 纯 legacy；provider=off → 跳过。
+      第 3 层  整体语义质检（_semantic_qc）——**只产 warning，无放行权**
+    任一层调用失败 → ok=False（不写成 clean）。QC_PROVIDER=off → 跳过；
+    其余取值（旧的 auto / ark / router）→ ok=False 显式失败。
 
     prompt: 自定义质检 prompt（v1.1 传实际生成图片的最终 prompt；None 则由
     build_qc_prompt 自动构建，内部优先取 shot["ff_desc_final"]/["lf_desc_final"]）。
@@ -2025,31 +1831,21 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
     """
     if not should_run_qc(frame_path):
         return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="", error="skipped")
-    provider = os.getenv("QC_PROVIDER", "auto").strip().lower()
+    provider = qc_provider()
     if provider == "off":
         return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="",
                         error="QC_PROVIDER=off")
+    if provider not in QC_PROVIDERS:
+        # 2026-11-21：router / auto / ark 等旧渠道已删除。显式失败，不当成 clean。
+        return QcResult(has_hallucination=False, issues=[], ok=False, raw_result="",
+                        error=f"QC_PROVIDER={provider!r} 不受支持（只支持 opencode / off）")
 
-    if provider == "opencode":
-        # 2026-11-02（用户决定）：图片 QC 只走 OpenCode Go，不再调
-        # ds-vision-skill router（agnes 单次 300s 超时 → QC 比生图还慢）。
-        # 通用语义 QC 这一层也由 deepseek-v4.1-flash 直接看图判定。
-        try:
-            # 调用方传了实际生成 prompt 就用它；否则才按本帧 spec 重建。
-            # 2026-11-08：此前忽略 prompt 参数，KF1/2 的 QC 一直在拿 KF0 的文本比对。
-            _qc_prompt = prompt if (prompt and str(prompt).strip()) else build_qc_prompt(
-                shot, frame_kind, characters, empty_scene, kf_index=kf_index)
-            router_result = parse_verdict(_opencode_vision_chat(frame_path, _qc_prompt))
-        except Exception as e:
-            return QcResult(has_hallucination=False, issues=[], ok=False,
-                            raw_result="", error=f"opencode QC 调用失败: {e}")
-    else:
-        router_result = qc_image(frame_path, prompt=prompt, shot=shot, frame_kind=frame_kind,
-                                 characters=characters, empty_scene=empty_scene,
-                                 kf_index=kf_index)
-
-    if provider not in ("ark", "auto", "opencode"):
-        return router_result
+    try:
+        semantic_result = _semantic_qc(frame_path, prompt, shot, frame_kind,
+                                       characters, empty_scene, kf_index)
+    except Exception as e:
+        return QcResult(has_hallucination=False, issues=[], ok=False,
+                        raw_result="", error=f"opencode QC 调用失败: {e}")
 
     all_issues: list[QcIssue] = []
     person_count: int | None = None
@@ -2137,33 +1933,23 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         ark_ok = False
         ark_error = f"视觉检测层失败: {e}"
 
-    if not ark_ok and provider == "opencode":
-        # 只走 OpenCode Go：检测层失败即本次 QC 失败（不拿其他模型兜底，
+    if not ark_ok:
+        # 检测层失败即本次 QC 失败（不拿其他模型兜底，
         # 也不把"没查成"写成 clean sidecar）。
         return QcResult(has_hallucination=False, issues=[], ok=False, raw_result="",
                         error=ark_error)
-    if not ark_ok and provider == "ark":
-        # ARK 全挂：router 结果全权（legacy），否则本帧完全无闸
-        out = router_result
-        out.person_count = person_count
-        out.answers = answers
-        out.entities = entities
-        if ark_error:
-            out.error = (out.error + "；" + ark_error).strip("；")
-        return out
 
     # 第 3 层：通用语义 QC 强制降级为 warning（无放行权）
-    _source = "opencode" if provider == "opencode" else "router"
-    for issue in router_result.issues:
+    for issue in semantic_result.issues:
         all_issues.append(QcIssue(category=issue.category,
-                                  description=f"[{_source}] {issue.description}",
+                                  description=f"[opencode] {issue.description}",
                                   severity="warning"))
 
     has_critical = any(i.severity == "critical" for i in all_issues)
     warn_n = sum(1 for i in all_issues if i.severity == "warning")
     has_hallucination = has_critical or warn_n >= 2
     return QcResult(has_hallucination=has_hallucination, issues=all_issues, ok=True,
-                    raw_result=router_result.raw_result,
+                    raw_result=semantic_result.raw_result,
                     error=ark_error,
                     person_count=person_count, answers=answers,
                     entities=entities,
