@@ -5379,6 +5379,10 @@ def generate_outline_result(novel_text: str, model: str | None = None,
                                              deadline_at=_plan_deadline,
                                              rule_version=VERIFY_RULE_VERSION,
                                              log=print,
+                                             # S10（2026-11-21 用户裁决·方案1）：生产入口启用
+                                             # 稳定性兜底（单次语义负面复核一次，一致负面才阻断；
+                                             # coherence 轴降为 advisory）。库默认关闭，观察工具不受影响。
+                                             stability_confirmation=True,
                                              # 原文身份由控制器盖章（复核 2026-10-07
                                              # 三轮 ②）：记录必须绑**本次**原文。
                                              novel_digest=_novel_id["digest"],

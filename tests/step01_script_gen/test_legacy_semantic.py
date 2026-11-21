@@ -152,7 +152,7 @@ def verify_through_service(monkeypatch, plan, response):
     controller = VerificationController(
         verify=lambda view, digest: content_verify.verify_view_with_service(
             view, digest, novel_text=NOVEL, novel_digest=identity['digest']),
-        novel_digest=identity['digest'])
+        novel_digest=identity['digest'], stability_confirmation=True)
     assert view_from_plan(plan)[0] is not None
     return content_verify.attach_verification(plan, controller)
 
@@ -466,9 +466,15 @@ def test_negative_semantic_verdict_does_not_trigger_protocol_correction(monkeypa
     monkeypatch.setenv('STEP01_PRESENTATION_MODE', 'legacy_audio')
     result = outline.generate_outline_result(NOVEL, max_revision_calls=0)
     assert not result['executable']
-    assert calls == ['chapter_outline', 'content_verification']
+    # S10（2026-11-21 用户裁决·方案1）：语义负面在生产入口会**复核一次**（稳定性兜底），
+    # 因此多一次 content_verification；两次都 partial ⇒ 一致负面，保持阻断。
+    # 复核不是协议纠正：`corrections` 仍为空，记录 status 仍为 ok。
+    assert calls == ['chapter_outline', 'content_verification', 'content_verification']
     assert result['verification']['corrections'] == []
     assert result['plan']['plan_verification']['status'] == 'ok'
+    _st = result['plan']['plan_verification'].get('stability') or {}
+    assert _st.get('confirmation') == 'performed', _st
+    assert _st.get('advisory_facts') == [], _st
 
 
 def test_distinct_protocol_feedback_keeps_existing_four_call_budget(monkeypatch,tmp_path):

@@ -66,6 +66,21 @@ DEFAULT_RULE_VERSION = "content_verification.v5.background_tier.1"
 #: 一次运行里最多核验几份计划摘要（首版 + 3 次修订）。
 MAX_VERIFICATIONS_PER_RUN = 4
 
+#: 2026-11-21（S10 用户裁决·方案1）：核验判据**单次负面结论不足以硬阻断**——
+#: 只有在同一候选上**复核一次仍给同一负面结论**时才阻断（confirmed negative）；
+#: 单次负面记入记录诊断并降为 advisory（进反馈/报告，不进硬门）。coherence 轴本轮
+#: **整体降为 advisory**（A/B 样本三判不稳定，先不让它触发停稿）。
+#: 复核调用使用**独立的小额度**（不改既有 `max_verifications` 语义），每次运行最多
+#: `STABILITY_CONFIRMATIONS_PER_RUN` 次；额度/截止不足时**fail-closed**：保留原负面
+#: 结论继续阻断（"确认不了"不当作"可以放行"）。
+STABILITY_POLICY = "verify_stability.confirmed_negative.v1"
+STABILITY_CONFIRMATIONS_PER_RUN = 2
+
+#: 语义负面结论对应的 code（只降级这些；证据/引文/身份等协议问题照旧阻断）。
+_ADVISORY_FACT_CODES = ("verify_fact_unsupported", "verify_fact_unknown")
+_ADVISORY_VOICE_CODES = ("verify_voice_unsupported", "verify_voice_not_speech")
+_ADVISORY_COHERENCE_CODES = ("verify_plan_coherence",)
+
 #: 核验失败的原因码（与"内容不支持"**分账**：失败是"没验成"，不是"验出来不行"）。
 FAIL_CALL = "call_failed"
 FAIL_BAD_RESPONSE = "bad_response"
@@ -1656,6 +1671,65 @@ def combine_axes_record(view, *, source_voice, display, decomposition=None,
     return (None, _axes_bad) if _axes_bad else (_out, [])
 
 
+def _semantic_negative_items(record) -> dict:
+    """记录里的**语义负面**项（与证据/协议问题分账；S10 稳定性确认只看这些）."""
+    facts = [str(r.get("fact_uid") or "") for r in fact_results(record)
+             if str(r.get("verdict") or "") not in EXECUTABLE_VERDICTS]
+    voices = [str(r.get("unit_uid") or "") for r in (record.get("voice_units") or [])
+              if isinstance(r, dict)
+              and str(r.get("verdict") or "") not in EXECUTABLE_VERDICTS]
+    _coh = record.get("coherence")
+    coherence = (isinstance(_coh, dict)
+                 and str(_coh.get("verdict") or "") not in EXECUTABLE_VERDICTS)
+    return {"facts": [x for x in facts if x],
+            "voices": [x for x in voices if x], "coherence": bool(coherence)}
+
+
+def _verdict_map(record) -> dict:
+    """`("fact", uid)` / `("voice", uid)` / `("coherence", "")` → verdict."""
+    _out = {}
+    for r in fact_results(record):
+        _u = str(r.get("fact_uid") or "")
+        if _u:
+            _out[("fact", _u)] = str(r.get("verdict") or "")
+    for r in (record.get("voice_units") or []):
+        if isinstance(r, dict):
+            _u = str(r.get("unit_uid") or "")
+            if _u:
+                _out[("voice", _u)] = str(r.get("verdict") or "")
+    _coh = record.get("coherence")
+    if isinstance(_coh, dict):
+        _out[("coherence", "")] = str(_coh.get("verdict") or "")
+    return _out
+
+
+def _apply_stability_advisory(problems, record) -> list:
+    """把**不稳定/暂缓**的语义负面结论从阻断列表中降级（仍保留在记录诊断里）.
+
+    只过滤语义负面 code；协议/证据/身份类问题一律保留——它们与判据稳定性无关。
+    """
+    _st = record.get("stability") if isinstance(record, dict) else None
+    if not isinstance(_st, dict):
+        return list(problems)
+    _adv_facts = set(str(x) for x in (_st.get("advisory_facts") or []))
+    _adv_voices = set(str(x) for x in (_st.get("advisory_voices") or []))
+    _adv_coh = bool(_st.get("advisory_coherence"))
+    _out = []
+    for p in problems or []:
+        if not isinstance(p, dict):
+            continue
+        _code = str(p.get("code") or "")
+        _uid = str(p.get("uid") or p.get("ref") or "")
+        if _code in _ADVISORY_FACT_CODES and _uid in _adv_facts:
+            continue
+        if _code in _ADVISORY_VOICE_CODES and _uid in _adv_voices:
+            continue
+        if _adv_coh and _code in _ADVISORY_COHERENCE_CODES:
+            continue
+        _out.append(p)
+    return _out
+
+
 def verification_problems(record, view, *, decomposition=None,
                           plan_digest=None, plan=None,
                           rule_version=DEFAULT_RULE_VERSION,
@@ -1861,7 +1935,9 @@ def verification_problems(record, view, *, decomposition=None,
     _p.extend(coherence_problems(record, view, novel_text))
     from step01_script_gen.source_revision import problems as preservation_problems
     _p.extend(preservation_problems(record, view, novel_text=novel_text,novel_digest=novel_digest))
-    return _p
+    # S10（2026-11-21 用户裁决·方案1）：单次语义负面/coherence 轴降为 advisory，
+    # 只有**复核一致负面**才继续出现在阻断列表里。协议/证据/身份问题不在此列。
+    return _apply_stability_advisory(_p, record)
 
 
 def unsupported_facts(record) -> list:
@@ -1913,9 +1989,13 @@ class VerificationController:
     def __init__(self, *, verify, deadline_at=None, clock=None,
                  max_verifications: int = MAX_VERIFICATIONS_PER_RUN,
                  rule_version: str = DEFAULT_RULE_VERSION, log=None, on_record=None,
-                 novel_digest=None, validate_record=None, repair=None, require_coherence=False):
+                 novel_digest=None, validate_record=None, repair=None, require_coherence=False,
+                 stability_confirmation: bool = False):
         import time as _time
         self.require_coherence = bool(require_coherence)
+        #: S10 稳定性兜底开关：**生产入口显式开启**（`outline.run_plan_revision`）；
+        #: 库默认关闭，研究/观察工具（p4、回放等）的"每轮一次发送"语义保持不变。
+        self.stability_confirmation = bool(stability_confirmation)
         self._verify = verify
         self._validate_record = validate_record
         self._repair = repair
@@ -1933,6 +2013,8 @@ class VerificationController:
         self.records: dict = {}
         self.corrections: list = []
         self.used = 0
+        #: S10 稳定性复核的独立小额度（不计入 `used`；`used` 仍是"主核验"发送数）.
+        self.stability_used = 0
 
     def remaining(self):
         """**剩余秒数**（不是可用次数！）——`deadline_at` 缺席时返回 `None`."""
@@ -2189,9 +2271,69 @@ class VerificationController:
                     return _corrected
                 self.records[_dig] = _r
                 return _r
+        # S10（2026-11-21 用户裁决·方案1）：单次语义负面先做一次**独立复核**，
+        # 只有复核一致负面才继续阻断；单次负面/coherence 轴降为 advisory（进诊断）。
+        _rec = self._adjudicate_stability(view, _dig, _rec, _fn)
         self.records[_dig] = _rec
         self._emit(_rec)
         return _rec
+
+    def _adjudicate_stability(self, view, digest, rec, verify_fn):
+        """S10 稳定性兜底：语义负面需二次独立结论一致才阻断（fail-closed on 不可用）."""
+        if not self.stability_confirmation:
+            return rec
+        _neg = _semantic_negative_items(rec)
+        _st = {"policy": STABILITY_POLICY, "confirmation": "not_needed",
+               "advisory_facts": [], "advisory_voices": [],
+               # 本轮用户裁决：coherence 轴整体先降为 advisory（进反馈/报告，不进硬门）。
+               "advisory_coherence": True, "axis_samples": {}}
+        _need = bool(_neg["facts"] or _neg["voices"])
+        if not _need:
+            rec["stability"] = _st
+            return rec
+        if self.expired() or self.stability_used >= STABILITY_CONFIRMATIONS_PER_RUN:
+            _st["confirmation"] = "unavailable"
+            rec["stability"] = _st
+            self.log("[VERIFY] 稳定性确认不可用（额度 %d/%d 或已过截止）⇒ 负面结论保持阻断"
+                     % (self.stability_used, STABILITY_CONFIRMATIONS_PER_RUN))
+            return rec
+        self.stability_used += 1
+        try:
+            _rec2 = verify_fn(view, digest) if verify_fn is not None else None
+        except Exception as exc:                                       # noqa: BLE001
+            _st["confirmation"] = "unavailable"
+            _st["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+            rec["stability"] = _st
+            self.log("[VERIFY] 稳定性确认调用失败 ⇒ 负面结论保持阻断：%s"
+                     % _st["error"][:120])
+            return rec
+        _bad2 = record_shape_problems(_rec2, where="核验确认响应")
+        if _bad2:
+            _st["confirmation"] = "unavailable"
+            _st["error"] = "确认响应不满足记录契约"
+            rec["stability"] = _st
+            self.log("[VERIFY] 稳定性确认响应不合格 ⇒ 负面结论保持阻断")
+            return rec
+        _v1 = _verdict_map(rec)
+        _v2 = _verdict_map(_rec2)
+        _st["confirmation"] = "performed"
+        _st["confirmation_call_id"] = str((_rec2 or {}).get("call_id") or "")
+        for _kind, _uids in (("fact", _neg["facts"]), ("voice", _neg["voices"])):
+            for _u in _uids:
+                _a = _v1.get((_kind, _u), "")
+                _b = _v2.get((_kind, _u), "")
+                _st["axis_samples"].setdefault(
+                    "facts" if _kind == "fact" else "voices", {})[_u] = [_a, _b]
+                if _b and _b not in EXECUTABLE_VERDICTS:
+                    continue          # 两次一致负面 ⇒ 保持硬阻断
+                if _kind == "fact":
+                    _st["advisory_facts"].append(_u)
+                else:
+                    _st["advisory_voices"].append(_u)
+        rec["stability"] = _st
+        self.log("[VERIFY] 稳定性确认：%d 项单次负面降为 advisory（复核一致负面的保持阻断）"
+                 % (len(_st["advisory_facts"]) + len(_st["advisory_voices"])))
+        return rec
 
     def record_axes_for(self, view, plan_digest=None, *, verify_axes,
                         decomposition=None):
