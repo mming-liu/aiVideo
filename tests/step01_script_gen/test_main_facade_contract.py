@@ -171,3 +171,37 @@ def test_nested_patch_keeps_cache_until_outermost_exit(fake):
         assert fake.rt.COUNTER == 0
         fake.front.COUNTER = 1              # 让 mock 退出时的 setattr 正常进行
     assert fake.rt.COUNTER == 0
+
+
+
+def test_nested_patch_whose_outer_value_equals_original_leaves_no_stale_cache(fake):
+    """复核二轮反例：外层 patch=原值 0、内层=1，两层退出后模块更新为 10，再覆盖 20 并删除."""
+    assert fake.rt.COUNTER == 0
+    with mock.patch(_PKG + ".front.COUNTER", 0):
+        with mock.patch(_PKG + ".front.COUNTER", 1):
+            assert fake.rt.COUNTER == 1
+        assert fake.rt.COUNTER == 0
+    assert fake.rt.COUNTER == 0
+    fake.rt.COUNTER = 10
+    fake.front.COUNTER = 20
+    del fake.front.COUNTER
+    assert fake.rt.COUNTER == 10
+
+
+def test_no_change_write_does_not_open_cache_session(fake):
+    fake.front.COUNTER = 0                  # 与当前值相同：不是覆盖
+    fake.rt.COUNTER = 3
+    fake.front.COUNTER = 4
+    del fake.front.COUNTER
+    assert fake.rt.COUNTER == 3
+
+
+def test_monkeypatch_with_same_value_then_update(fake):
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fake.front, "COUNTER", 0)
+        mp.setattr(fake.front, "COUNTER", 5)
+    assert fake.rt.COUNTER == 0
+    fake.rt.COUNTER = 8
+    fake.front.COUNTER = 9
+    del fake.front.COUNTER
+    assert fake.rt.COUNTER == 8

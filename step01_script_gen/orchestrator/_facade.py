@@ -15,9 +15,10 @@
   `main.__dict__` 前先按所属模块刷新镜像，避免所属模块内部改写全局后镜像过期；
 * **删**：`del main.X`（如 `monkeypatch.delattr`、或未判为本地属性的 patch 退出）
   → 把**首次覆盖前缓存的原值**写回所属模块，不做真删除，避免把真实函数删掉。
-* **缓存生命周期**：经门面第一次覆盖 X 时缓存所属模块的当前值；之后只要有一次写入
-  把 X 写回这个原值（`mock.patch` 正常退出、monkeypatch 撤销），或经删除恢复，
-  缓存就清除。下一次覆盖重新以所属模块**当时**的值为原值。
+* **缓存生命周期**：经门面第一次把 X 改成**不同的**值时，缓存所属模块的当前值；
+  写入值与当前值相同（无变化的写入、patch 退出时的恢复写）不开启缓存会话。之后
+  只要有一次写入把 X 写回这个原值（`mock.patch` 正常退出、monkeypatch 撤销），
+  或经删除恢复，缓存就清除。下一次覆盖重新以所属模块**当时**的值为原值。
 
 不在所属表里的名字（main.py 自己定义的 `main()` 等）保持普通模块行为。
 """
@@ -69,8 +70,12 @@ class _FacadeModule(types.ModuleType):
             types.ModuleType.__setattr__(self, name, value)
             return
         originals = d.setdefault(_ORIG_KEY, {})
+        current = mod.__dict__.get(name, _MISSING)
         if name not in originals:
-            originals[name] = mod.__dict__.get(name, _MISSING)
+            # 无变化的写入（例如外层 patch 的值恰好等于当前值，或 patch 退出时的
+            # 恢复写）不算覆盖，不开启缓存会话（2026-11-19 复核二轮 P2-5）。
+            if not _same(value, current):
+                originals[name] = current
         elif _same(value, originals[name]):
             # 写回的正是首次覆盖前的原值（mock.patch 退出 / monkeypatch 撤销）：
             # 本次覆盖会话结束，清掉缓存。否则所属模块之后自己更新了值，下一次

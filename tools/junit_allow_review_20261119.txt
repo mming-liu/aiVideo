@@ -1,0 +1,10 @@
+# compare_junit.py --allow：2026-11-19 第 1 包 / 拆分 / 复核修正的已解释差异（每行一个 nodeid）
+#
+# ① 基线中 setup 阶段 error（依赖 .pytest_tmp 里其他用例写出的 chapter_001_scenes.json，测试隔离问题），
+#    之后转为 passed，与改动无关：
+tests.step01_script_gen.test_plan_phase_m_composition::test_m01_the_real_ch2_baseline_closes_within_two_rounds
+tests.step01_script_gen.test_plan_phase_m_composition::test_m02_round_one_keeps_beats_and_facts_verbatim
+tests.step01_script_gen.test_plan_phase_m_composition::test_m03_round_two_only_inserts_beats_in_order
+# ② 复核 P2-1：r2v 兜底用例重写，旧 nodeid 由
+#    test_missing_first_frame_keeps_scene_and_adds_portrait + test_real_first_frame_still_replaces_scene 替代：
+tests.step02_video_gen.test_pkg1_r2v_fallback::test_missing_first_frame_uses_fallback_reference
