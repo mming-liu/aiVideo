@@ -148,6 +148,38 @@
   而不是让模型反复给出必被拒的答案），已登记为后续工作包候选（见 §六.8），不改变
   S01–S09/S12 的离线交付结论。
 
+## 五·补、S11 扩展批次（第 1 章 ×20 + 第 2 章 ×20，进行中）
+
+用户 2026-11-21 追加指令：S11 扩展为**第一章、第二章各 20 轮**真实隔离运行，逐条记录
+BLOCK 与失败原因。批次脚本 `.tmp/s11_batch_runs.py`：
+
+- **代码钉定**：`git archive 744ad2c98dfda…` 物化到 `.tmp/s11_batch/code_744ad2c/`，
+  所有 run 从快照启动（批次期间主工作树可继续改代码，不污染样本）；
+- **隔离**：每轮独立 `OUTPUT_BASE` / `TEXT_CALL_LEDGER` / `STEP01_RUN_ID`，
+  `TEXT_PROVIDER=agent_plan`；冻结候选写快照内 `.dsh/`，不碰正式产物；
+- **分类**：`COMMITTED` / `COMMIT_BLOCK(budget_guard|audit_or_quality)` /
+  `PLAN_INFEASIBLE` / `PLAN_CONTRACT_INVALID` / `ERROR` / `NO_ARTIFACT` / `TIMEOUT`；
+- **落盘与续跑**：每轮即时写 `.tmp/s11_batch/summary.jsonl`、聚合
+  `summary.json`，并同步 `.tmp/step01_plan_corpus_20261121/acceptance/
+  s11_batch_40runs.json`；断点续跑按 tag 跳过已完成轮次。
+
+（批次运行中，完成后回填 40 轮终局/原因直方图与分章统计。）
+
+## 五·补二、S11 首轮发现的修复：S13（已提交）
+
+S11 的 5 轮小样本里，`ch2_run2` 在计划层耗尽额度：`slot:fact:f11` 的答案
+`create_voice placement=existing beat_uid=b09` 被 `repair_answer_target_not_allowed`
+连续拒收——所选片段在基线里**没有任何已有落点**（`voice_landings.beat_uids=[]`），
+而槽位只给整槽 aggregate 并集，模型无法知道"所选这一段的落点集合"。
+
+- 修复（提交 `841d5a7`）：槽位新增 `voice_span_landings`（逐片段
+  `existing_beat_uids` / `existing_allowed` / `placement_required`）；`create_voice`
+  规则与槽位提示改为**按所选整段**判断 placement；拒绝文案在"片段无落点"时明确提示
+  改用 `placement=new` 并给插入方向；不改校验语义、不猜改绑。
+- 验收：`tests/step01_script_gen/test_create_voice.py` 新增 3 项用例；相关回归 180 项通过。
+- 注意：扩展批次钉在 `744ad2c`（S13 之前），因此批次中的槽位落点失败**仍会出现**；
+  它们正是 S13 的现场样本，批次完成后按代码版本分别记账。
+
 ## 六、已知限制与未决
 
 1. **R7.2 冻结包**：仍停在 `binding_digest=afc80619b4201fb273ff295d380b46b6`，单次
