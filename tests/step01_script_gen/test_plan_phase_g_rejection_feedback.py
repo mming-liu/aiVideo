@@ -883,3 +883,111 @@ def test_g21_a_failed_temp_write_cleans_up_and_degrades_only_the_cache(tmp_path,
     assert _r["cache"]["written"] is False and _r["cache"]["write_error"], _r["cache"]
     assert _cache.read_bytes() == _before, "旧缓存逐字节保留"
     assert not _tmp.exists(), "半截临时文件必须被清掉"
+
+
+# ---------------------------------------------------------------------------
+# ⑩ S03（2026-11-21）：拒收反馈只回灌**最后一次成功应用之后**的轮次
+# ---------------------------------------------------------------------------
+def test_g23_the_request_after_an_applied_round_labels_applied_and_recent_rejections():
+    """已应用轮次存在时：标题不再写"上一轮一个字节没改"，并列出已生效修订."""
+    _rows = pr.RevisionRejections(
+        [{"round": 4, "detail": "invalid_result: 未知键 delta.ops"}],
+        applied_rounds=[
+            {"round": 2, "kind": "applied", "label": "view_applied"},
+            {"round": 3, "kind": "applied", "label": "source_basis_revision"},
+        ])
+    # 列表本体与旧接口同构（消费方仍可按 list 迭代/拷贝）
+    assert isinstance(_rows, list) and [x["round"] for x in _rows] == [4]
+    _block = o._rejection_feedback_block(_rows)
+    assert "被本地校验拒收" in _block, _block
+    assert "已生效的修订：第 2 轮（view_applied）、第 3 轮（source_basis_revision）" in _block, _block
+    assert "这些改动已经应用，不要回退" in _block, _block
+    assert "- 第 4 轮：invalid_result: 未知键 delta.ops" in _block, _block
+    # 过时标题（"上一轮……一个字节没改"）对第 4 轮是假的，不许出现
+    assert "上一轮你的回复被本地校验拒收" not in _block, _block
+    # 合法对照：没有已应用轮次时，旧标题与旧排版逐字保留
+    _plain = o._rejection_feedback_block([{"round": 2, "detail": "invalid_result: x"}])
+    assert "上一轮你的回复被本地校验拒收：**计划一个字节都没有改**" in _plain, _plain
+    # 仅一条时不需要条数说明；超过 3 条时显式说明只列最近 3 条
+    assert "共 1 条" not in _block and "以下按轮次列出最近" not in _block, _block
+    _many = o._rejection_feedback_block(
+        [{"round": i, "detail": "invalid_result: r%d" % i} for i in range(1, 6)])
+    assert "共 5 条，以下按轮次列出最近 3 条" in _many, _many
+    assert "- 第 5 轮" in _many and "- 第 1 轮" not in _many, _many
+
+
+def test_g24_the_controller_feeds_back_only_rejections_since_the_last_applied_round():
+    """控制器：第 2 轮 applied 之后，第 3 轮请求不再看到第 1 轮拒收；已应用轮次要标明."""
+    _base = {"ok": False, "shot_beats": ["B1"]}
+    _fixed = {"ok": False, "shot_beats": ["B1", "B2"]}
+    _final = {"ok": True, "shot_beats": ["B1", "B2", "B3"]}
+    _seen = []
+
+    def _accept(plan, novel_text=""):
+        if plan.get("ok"):
+            return []
+        return [{"code": "carrier_fact_line_mismatch", "path": "required_facts[0]",
+                 "reason": "承载错位", "detail": "承载错位", "basis": "统一验收"}]
+
+    def _revise(plan, problems, budget, rejections):
+        _seen.append({"rejections": [dict(x) for x in rejections],
+                      "applied": list(getattr(rejections, "applied_rounds", []) or [])})
+        _n = len(_seen)
+        if _n == 1:
+            return {"kind": "illegal", "detail": "invalid_result: 第 1 轮错误"}
+        if _n == 2:
+            return {"kind": "applied", "plan": _fixed,
+                    "detail": "view_applied: 2 条残余"}
+        if _n == 3:
+            return {"kind": "illegal", "detail": "invalid_result: 第 3 轮错误"}
+        return {"kind": "applied", "plan": _final, "detail": "view_applied: 0 条残余"}
+
+    _b = pr.RevisionBudget(max_calls=4, deadline_sec=600.0)
+    _r = pr.RevisionController(accept=_accept, revise=_revise, budget=_b).run(_base)
+    assert _r["stop_reason"] == pr.STOP_OK and _r["plan"] is _final, _r
+    # 第 2 轮请求：还没有应用过，第 1 轮拒收照旧回灌
+    assert [x["round"] for x in _seen[1]["rejections"]] == [1], _seen[1]
+    assert _seen[1]["applied"] == [], _seen[1]
+    # 第 3 轮请求：第 2 轮已应用 ⇒ 第 1 轮拒收不再出现，并标明已应用轮次
+    assert _seen[2]["rejections"] == [], _seen[2]
+    assert [(x["round"], x["label"]) for x in _seen[2]["applied"]] == [(2, "view_applied")], \
+        _seen[2]
+    # 第 4 轮请求：第 3 轮刚被拒收（在第 2 轮应用之后）⇒ 只回灌这一条
+    assert [x["round"] for x in _seen[3]["rejections"]] == [3], _seen[3]
+    assert [(x["round"], x["label"]) for x in _seen[3]["applied"]] == [(2, "view_applied")], \
+        _seen[3]
+    # **留档不缩减**：结果里完整拒收记录（第 1、3 轮）与已应用轮次（第 2、4 轮）都在
+    assert [x["round"] for x in _r["rejections"]] == [1, 3], _r["rejections"]
+    assert [(x["round"], x["label"]) for x in _r["applied_rounds"]] == \
+        [(2, "view_applied"), (4, "view_applied")], _r["applied_rounds"]
+
+
+def test_g25_the_consecutive_rejection_count_starts_after_the_last_applied_round():
+    """额度耗尽文案的"连续 N 次"只数最后一次应用之后的拒收；完整留档照旧全给."""
+    _base = {"ok": False, "shot_beats": ["B1"]}
+    _fixed = {"ok": False, "shot_beats": ["B1", "B2"]}
+    _seen = []
+
+    def _accept(plan, novel_text=""):
+        return [{"code": "carrier_fact_line_mismatch", "path": "required_facts[0]",
+                 "reason": "承载错位", "detail": "承载错位", "basis": "统一验收"}]
+
+    def _revise(plan, problems, budget, rejections):
+        _seen.append([dict(x) for x in rejections])
+        _n = len(_seen)
+        if _n == 1:
+            return {"kind": "illegal", "detail": "invalid_result: 首轮违约"}
+        if _n == 2:
+            return {"kind": "applied", "plan": _fixed, "detail": "view_applied: 1 条残余"}
+        return {"kind": "illegal", "detail": "invalid_result: 第 %d 轮违约" % _n}
+
+    _b = pr.RevisionBudget(max_calls=4, deadline_sec=600.0)
+    _r = pr.RevisionController(accept=_accept, revise=_revise, budget=_b).run(_base)
+    assert _r["stop_reason"] == pr.STOP_ILLEGAL, _r["stop_reason"]
+    # 完整留档：3 条拒收（第 1 轮 + 应用后的第 3、4 轮）都在
+    assert [x["round"] for x in _r["rejections"]] == [1, 3, 4], _r["rejections"]
+    _note = _r["history"][-1]["detail"]
+    # 应用之后只有 2 次连续拒收 ⇒ 文案必须是 2，不是 3（过时计数会误导归因")
+    assert "连续 2 次响应被拒收" in _note, _note
+    assert "连续 3 次响应被拒收" not in _note, _note
+    assert _r["applied_rounds"] and _r["applied_rounds"][0]["round"] == 2, _r["applied_rounds"]

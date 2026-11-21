@@ -33,6 +33,20 @@ def test_source_only_problems_stay_source():
     assert "fact_bindings" not in d["allowed_fields"]
 
 
+def test_source_route_records_the_other_codes_as_deferred():
+    """S04/D3：来源分流不处理的核验类问题必须**记账**（旧实现它们既不处理也不留痕）."""
+    d = rr.route_decision([_p("fact_basis_invalid"), _p("verify_fact_unsupported"),
+                           _p("verify_plan_coherence")])
+    assert d["route"] == rr.ROUTE_SOURCE
+    assert d["deferred_codes"] == ["verify_fact_unsupported", "verify_plan_coherence"], d
+
+
+def test_carrier_route_records_all_non_carrier_codes_as_deferred():
+    d = rr.route_decision(R26)
+    assert d["route"] == rr.ROUTE_CARRIER
+    assert set(d["deferred_codes"]) == {"fact_basis_invalid", "verify_fact_unsupported"}, d
+
+
 def test_no_special_problem_falls_back():
     assert rr.route_decision([_p("time_budget")])["route"] == rr.ROUTE_DEFAULT
 

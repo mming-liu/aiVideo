@@ -37,7 +37,13 @@ def _code(p):
 
 
 def route_decision(problems) -> dict:
-    """按问题集选通道；carrier 类优先于 source 类（R2-6 的错选根因）."""
+    """按问题集选通道；carrier 类优先于 source 类（R2-6 的错选根因）.
+
+    `deferred_codes`（S04，2026-11-21）记录**本轮通道不处理、留待后续轮次**的问题 code：
+    旧实现只在 carrier 分支列 `deferred_source_codes`，来源分支把同轮的核验类问题
+    既不处理也不记账（D3）——11-21 run 第 3 轮走 source_basis_revision，2×
+    `verify_fact_unsupported` + `verify_plan_coherence` 就此消失，直到最后才重新出现。
+    """
     codes = [c for c in (_code(p) for p in (problems or [])) if c]
     carrier = [c for c in codes if c.startswith(_CARRIER_PREFIXES)]
     source = [c for c in codes if c in _SOURCE_CODES]
@@ -49,6 +55,7 @@ def route_decision(problems) -> dict:
             "carrier_codes": carrier,
             "source_codes": source,
             "deferred_source_codes": source,
+            "deferred_codes": sorted(set(codes) - set(carrier)),
             "allowed_fields": list(CARRIER_FIELDS),
             "reason": ("问题集含 carrier/orphan/voice 类（%s）⇒ 先修承载绑定与节拍；"
                        "source 类（%s）留到承载闭合后再处理"
@@ -62,9 +69,12 @@ def route_decision(problems) -> dict:
             "carrier_codes": [],
             "source_codes": source,
             "deferred_source_codes": [],
+            "deferred_codes": sorted(set(codes) - set(source)),
             "allowed_fields": list(SOURCE_FIELDS),
             "reason": ("问题集只有来源证据类（%s）⇒ source_basis_revision；"
-                       "不得改承载/节拍/声音" % "、".join(source)),
+                       "不得改承载/节拍/声音；其余 %s 记 deferred 留待后续轮次"
+                       % ("、".join(source),
+                          "、".join(sorted(set(codes) - set(source))) or "无")),
         }
     return {
         "version": VERSION,
@@ -73,6 +83,7 @@ def route_decision(problems) -> dict:
         "carrier_codes": [],
         "source_codes": [],
         "deferred_source_codes": [],
+        "deferred_codes": [],
         "allowed_fields": None,
         "reason": "无 carrier/source 专属问题，交既有 _replan_route",
     }

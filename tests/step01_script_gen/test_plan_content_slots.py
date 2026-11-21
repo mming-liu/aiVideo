@@ -239,16 +239,40 @@ def test_slots_are_generated_from_the_real_residuals_by_stable_uid():
         assert set(_s["problem_codes"]) == {"verify_fact_unsupported"}, _s
 
 
-def test_a_code_the_adapter_cannot_express_falls_back_to_the_existing_route(monkeypatch):
-    """**能表达才接入**（§5.6 第 4 条）：有一条表达不了 ⇒ 整轮走既有的非槽位 v2 路.
+def test_a_deferrable_code_does_not_block_slots_and_is_recorded_deferred(monkeypatch):
+    """S04（2026-11-21）：槽位表达不了的**可 defer 能力类别**（view/ops/核验/声音）只记录，
+    不再拖整轮回退；本轮先把能表达的事实修掉，残余由完整验收下一轮继续报告.
 
-    hybrid 的非槽位路是**完整视图**（`ROUTE_VIEW`，2026-10-11 隔离对照的裁决）；
-    这里回一份**形状合法**的完整视图，证明"落回"真的被走到（不是被拒收掩盖）。
+    `presentation_beat_events_shape` 能力是 `view`（视图协议表达得了，但槽位没有适配器）
+    ——按能力类别归 deferred，不是"整轮落回完整视图"。合法对照是 `content` 档的
+    计划级聚合问题（`presentation_reading_budget_exceeded`）：它仍会挡路（见下一个用例）。
     """
     _f = _fixture()
     _probs = list(_f["problems"]) + [{"code": "presentation_beat_events_shape",
                                       "uid": "b01", "path": "presentation.beat_events",
                                       "reason": "形状违约"}]
+    _view, _ = pc.view_from_plan(_f["plan"])
+    _calls = _stub(monkeypatch, _legal_answer(_view))
+    _out = o.revise_plan_once(_f["plan"], _probs, _Budget(), None, novel_text=_novel(),
+                              verification=_controller())
+    _slots_ev = _out["evidence"]["content_slots"]
+    assert _slots_ev["applicable"] is True, _slots_ev
+    assert _slots_ev["state"] == pcr.STATE_OK, _slots_ev
+    assert "presentation_beat_events_shape" in _slots_ev["deferred"], _slots_ev
+    assert _out["evidence"]["route"] == "content_slots", _out["evidence"].get("route")
+    assert len(_calls) == 1, "槽位路：一轮一次调用"
+    # 候选已按槽位装配（两条事实的槽都在，且 defer 项不参与本轮装配）
+    assert _out["kind"] == "applied", _out.get("detail")
+
+
+def test_a_content_capability_still_falls_back_to_the_existing_route(monkeypatch):
+    """**能表达才接入**的边界（S04 后仍成立）：`content` 档（须增删内容）没有被 defer
+    ——槽位修不了它，整轮仍走既有非槽位 v2 路（这里回形状合法的完整视图，证明真的走到）.
+    """
+    _f = _fixture()
+    _probs = list(_f["problems"]) + [{"code": "presentation_reading_budget_exceeded",
+                                      "uid": "", "path": "presentation.screen_cards",
+                                      "reason": "文字卡合计阅读需求超预算"}]
     _calls = _stub_view_echo(monkeypatch)
     _out = o.revise_plan_once(_f["plan"], _probs, _Budget(), None, novel_text=_novel(),
                               verification=_controller())
@@ -256,6 +280,25 @@ def test_a_code_the_adapter_cannot_express_falls_back_to_the_existing_route(monk
     assert _out["evidence"]["route"] == o.ROUTE_VIEW
     assert "slots_applied" not in str(_out.get("detail") or "")
     assert len(_calls) == 1
+
+
+def test_verify_plan_coherence_is_deferred_while_fact_slots_proceed():
+    """S04 验收形态（11-21 run 第 4 轮）：f03/f06 可落槽位，`verify_plan_coherence`
+    表达不了但属 view 能力 ⇒ 槽位部分适用，coherence 记 deferred，不整轮回退."""
+    _f = _fixture()
+    _probs = list(_f["problems"]) + [{"code": "verify_plan_coherence", "uid": "b01",
+                                      "kind": "beat", "path": "shot_beats",
+                                      "reason": "先后关系颠倒"}]
+    _ok, _why, _ctx = o._content_slots_applicable(_f["plan"], _probs)
+    assert _ok is True and _ctx["state"] == pcr.STATE_OK, (_ok, _why, _ctx)
+    assert "verify_plan_coherence" in _ctx["deferred"], _ctx["deferred"]
+    assert [str(_s["slot_id"]) for _s in _ctx["found"]["slots"]] == \
+        ["slot:fact:f02", "slot:fact:f08"]
+    # 只有这一条表达不了、没有可表达槽位时 ⇒ 仍走增量备用路（不是零调用）
+    _ok2, _why2, _ctx2 = o._content_slots_applicable(
+        _f["plan"], [{"code": "verify_plan_coherence", "uid": "b01"}])
+    assert _ok2 is False and _ctx2["state"] == pcr.STATE_UNSUPPORTED, (_ok2, _ctx2)
+    assert "verify_plan_coherence" in _ctx2["deferred"], _ctx2
 
 
 # ---------------------------------------------------------------------------

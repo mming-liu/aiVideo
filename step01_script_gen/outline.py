@@ -1734,7 +1734,7 @@ def _revision_feedback_block(problems, plan) -> str:
 
 
 def _rejection_feedback_block(rejections) -> str:
-    """把**上一轮被拒收的响应**（具体字段 + 原因）反馈给规划器（复核 2026-10-02 之五）.
+    """把**仍有效的被拒收响应**（具体字段 + 原因）反馈给规划器（复核 2026-10-02 之五）.
 
     与 `_revision_feedback_block` **分账**且**都要给**：那里说的是"这份计划哪里不合格"
     （验收结论），这里说的是"你上一次回的东西为什么不合法"（响应违约）。只反馈前者，
@@ -1742,13 +1742,33 @@ def _rejection_feedback_block(rejections) -> str:
 
     原因**原样取自生产者**（`apply_replan_ops` 的 `why`，已含字段路径与判据），本函数
     只排版：不解释、不归纳、不把"哪一处"换成"响应不合法"这类没有可操作信息的话。
+
+    2026-11-21（S03）：控制器只传**最后一次成功应用之后**的拒收（`RevisionRejections`），
+    并携带 `applied_rounds`。有已应用轮次时标题不再写"上一轮……一个字节没改"（那对
+    第 4 轮是假的——第 2/3 轮真的改了），改为"此前的回复被拒收"并显式列出已生效的
+    修订，避免模型把已应用的改动回退。完整历史仍在结果对象与诊断里，不在请求里。
     """
     _items = [x for x in (rejections or []) if isinstance(x, dict)]
     if not _items:
         return ""
-    _lines = ["", "【上一轮你的回复被本地校验拒收：**计划一个字节都没有改**】",
-              "被拒收的具体位置与原因（照原样引用）："]
-    for _x in _items[-3:]:
+    _applied = [x for x in (getattr(rejections, "applied_rounds", None) or [])
+                if isinstance(x, dict)]
+    if _applied:
+        _head = ["", "【此前的回复被本地校验拒收：**计划一个字节都没有改**】"]
+        _labels = []
+        for _a in _applied:
+            _label = str(_a.get("label") or _a.get("kind") or "applied")
+            _labels.append("第 %s 轮（%s）" % (_a.get("round"), _label))
+        _head.append("已生效的修订：%s——这些改动已经应用，不要回退；"
+                     "只需处理下面被拒收的回复。" % "、".join(_labels))
+    else:
+        _head = ["", "【上一轮你的回复被本地校验拒收：**计划一个字节都没有改**】"]
+    _lines = _head + ["被拒收的具体位置与原因（照原样引用）："]
+    _shown = _items[-3:]
+    if len(_items) > len(_shown):
+        _lines.append("（共 %d 条，以下按轮次列出最近 %d 条。）"
+                      % (len(_items), len(_shown)))
+    for _x in _shown:
         # **原样给全，不再截断**（复核 2026-10-04 P1-1）。
         # 旧写法是 `[:300]`：章 1 第 3 轮的拒收原因实测 533 字（6 条问题），截到 300 就把
         # 后 3 条（`F6`/`F8`/`F9`）**无声丢掉**；随后我改成"上限 1200 + 显式标注"——
@@ -2858,6 +2878,61 @@ def _verification_record_for(verification, plan):
     return _recs.get(plan_digest_of(plan)) or None
 
 
+#: 内容槽位可 **defer**（下一轮继续处理）的能力档（S04，2026-11-21）：
+#: `ops`（delta 操作协议表达得了）与 `view`（视图协议表达得了）。
+#: `content`（须增删内容）与 `plan_field`（结构/计划字段）仍挡路——本轮槽位修不了它们，
+#: 硬塞进槽位轮只会白花一次调用；未登记能力同样 fail-closed 挡路。
+_SLOT_DEFER_ACTIONS = ("ops", "view")
+
+
+def _slot_deferral(unexpressible, problems) -> tuple:
+    """把槽位**表达不了**的问题按**能力类别**分成 `deferred` / `blocking`（S04）.
+
+    背景（2026-11-21 D2）：旧实现只要有一条表达不了的 code 就整轮退回 36K 通用增量请求
+    ——11-21 run 第 4 轮本来只有 `verify_plan_coherence` 一条表达不了，f03/f06 两条事实
+    已经能落成槽位，却整轮被它拖走。这里改为按**修法能力类别**判断，不再逐个列 code：
+
+    - `verify_*` / `view_voice*` / `voice_*`：核验结论与声音轴——槽位没有对应适配器，
+      下一轮由新核验记录/视图协议继续报告（与旧实现豁免 `verify_voice_speaker_missing`
+      同一口径，只是改用类别而非单个 code）；
+    - 能力表动作为 `ops` / `view`：delta 或视图协议表达得了，留到下一轮；
+    - 其余（`content` 增删内容、`plan_field` 结构/计划字段、未登记 fail-closed）：
+      **仍挡路**——它们要么需要更强的接口，要么本轮无从证明可修。
+
+    返回 `(deferred, blocking)`，元素保留原始展示文本（可能带"（缺稳定 UID）"等后缀）。
+
+    边界（2026-11-21 实测校准）：**已有槽位适配器**（`SLOT_CODE_KIND` 覆盖）的 code
+    出现在 `unexpressible` 里，说明适配器本可表达但这次缺记录/身份/权限（例如
+    `verify_voice_not_speech` 缺可迁移来源类型）——这不是"本轮不归槽位管"，而是
+    **证据不足**，仍走既有非槽位备用路（blocking），不能把这类残余 defer 掉。
+    只有"槽位适配器根本不接"的能力类别（核验轴/声音轴/ops/view）才 defer。
+    """
+    from step01_script_gen.plan_content_repair import SLOT_CODE_KIND as _slot_kinds
+    _marks: dict = {}
+    for _p in (problems or []):
+        if isinstance(_p, dict):
+            _marks.setdefault(str(_p.get("code") or ""), str(_p.get("fix") or ""))
+    _deferred: list = []
+    _blocking: list = []
+    for _item in (unexpressible or []):
+        _text = str(_item)
+        _code = _text.split("（", 1)[0].strip()
+        _mark = _marks.get(_code, "")
+        _cap = (_FIX_MARK_TO_CAPABILITY.get(_mark) if _mark
+                else PLAN_FIX_CAPABILITY.get(_code))
+        _action = _cap[0] if _cap else ""
+        if _code in _slot_kinds:
+            # 适配器覆盖但未能表达 ⇒ 证据/身份不足，保留非槽位备用路（fail-closed）
+            _blocking.append(_text)
+        elif _code.startswith(("verify_", "view_voice", "voice_")):
+            _deferred.append(_text)
+        elif _action in _SLOT_DEFER_ACTIONS:
+            _deferred.append(_text)
+        else:
+            _blocking.append(_text)
+    return _deferred, _blocking
+
+
 def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
                               target_fact_uids=None, verification=None,
                               novel_text: str = "",
@@ -2947,21 +3022,25 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
                                           for _x in _ctx["blocked"]), \
             dict(_ctx, state=_pcr.STATE_UNKNOWN_TARGET)
     if _found["unexpressible"]:
-        # 2026-10-23（v5 第一包）：**声音类残余不挡窄槽位**。本包只覆盖事实绑定与画面改写，
-        # 声音修复明确留到后续；若因为"有一条声音问题"就整轮退回完整计划修订，事实目标
-        # 反而拿不到最小编辑面。声音问题留在 `problems` 里，由最终验收继续报告。
-        _deferred = {"verify_voice_speaker_missing"}
-        _blocking = [c for c in _found["unexpressible"] if str(c) not in _deferred]
-        if _blocking:
-            return False, "这些修法内容槽位表达不了（%s）" % "、".join(_blocking), \
-                dict(_ctx, state=_pcr.STATE_UNSUPPORTED)
+        # S04（2026-11-21）：按**能力类别**决定"留到下一轮"还是"挡路"，不再逐个 code 豁免。
+        # 可 defer 的问题不改变最终验收——完整验收下一轮照旧报告它们；这里只决定**本轮
+        # 先修哪些**。全部表达不了时仍走既有非槽位备用路（一次调用，不是零调用）。
+        _deferred_codes, _blocking_codes = _slot_deferral(
+            _found["unexpressible"], problems)
+        if _blocking_codes:
+            return False, "这些修法内容槽位表达不了（%s）" % "、".join(_blocking_codes), \
+                dict(_ctx, state=_pcr.STATE_UNSUPPORTED,
+                     deferred=sorted(set(_ctx.get("deferred") or [])
+                                     | set(_deferred_codes)))
         if not _found["slots"]:
-            return False, "本轮只剩声音类残余（内容槽位不适用：%s）" \
-                % "、".join(_found["unexpressible"]), \
-                dict(_ctx, state=_pcr.STATE_NO_SLOTS)
+            return False, "本轮只剩槽位表达不了的项（内容槽位不适用：%s）" \
+                % "、".join(_deferred_codes), \
+                dict(_ctx, state=_pcr.STATE_UNSUPPORTED,
+                     deferred=sorted(set(_ctx.get("deferred") or [])
+                                     | set(_deferred_codes)))
         return True, "", dict(_ctx, state=_pcr.STATE_OK,
                               deferred=sorted(set(_ctx.get("deferred") or [])
-                                              | set(_found["unexpressible"])))
+                                              | set(_deferred_codes)))
     if not _found["slots"]:
         return False, "本轮没有问题能落成内容槽位", \
             dict(_ctx, state=_pcr.STATE_NO_SLOTS)
@@ -3156,7 +3235,7 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
     _prompt = chr(10).join([
         _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS]),
         _view_feedback_block(problems, _base_view),
-        _rejection_feedback_block(rejections or []),
+        _rejection_feedback_block(rejections),
         # **形状规格最后说**（槽位表 + 选择规则）——请求里已经带了允许集合
         _pcr.slot_prompt(_req),
         "请现在逐槽给出选择；不要返回示例或空回答。",
@@ -3591,7 +3670,7 @@ def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
         ("请按该契约生成实际正文、删除表和完整顺序。" if _is_delta else
          "请按本次 mode 的字段契约回带整份 view；不输出 delete/order 增量块。"),
         _view_feedback_block(problems, _base_view),
-        _rejection_feedback_block(rejections or []),
+        _rejection_feedback_block(rejections),
         "请现在实际修复上面的计划问题，并提交完成的 %s 改动；不要返回示例或空修改。"
         % (DELTA_SCHEMA if _is_delta else REVISION_SCHEMA),
     ])
@@ -4094,11 +4173,21 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                 continue
             for _f in (_p.get("core_fields") or []):
                 _allowed_core[str(_f)] = _dep
-        return _source_revision.revise_with_service(
+        _src_res = _source_revision.revise_with_service(
             plan, problems, novel_text=novel_text, service=create_service(),
             model=model, timeout_sec=_timeout, deadline_monotonic=_deadline_at,
             verification=verification,
             allowed_core_updates=(_allowed_core or None))
+        # S04（2026-11-21 D3）：来源分流**必须把本轮不处理的 code 记成 deferred**——
+        # 旧实现只发 source 修法，同轮的核验类问题既不处理也不记账，直到终局才重新出现。
+        # 这是一条只读证据（不改变修法），供轮次留档与后续归因消费。
+        if isinstance(_src_res, dict):
+            _src_res.setdefault("evidence", {})
+            if isinstance(_src_res["evidence"], dict):
+                _src_res["evidence"].setdefault("route_decision", _route_dec)
+                _src_res["evidence"].setdefault(
+                    "deferred_codes", list(_route_dec.get("deferred_codes") or []))
+        return _src_res
     _budget_ctx = bool(problems) and all(
         str((p or {}).get("code") or "").startswith("budget") for p in problems)
     # **按修法能力分流**（复核 2026-10-02 之九 P1）：问题记录自带 `fix`（生产者给）——
@@ -4212,7 +4301,8 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
             allowed_repair_actions=allowed_repair_actions)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
-                                "blocked": list((_slot_ctx or {}).get("blocked") or [])}
+                                "blocked": list((_slot_ctx or {}).get("blocked") or []),
+                                "deferred": list((_slot_ctx or {}).get("deferred") or [])}
         if not _slot_ok and str((_slot_ctx or {}).get("state") or "") \
                 == _pcr_state.STATE_UNKNOWN_TARGET:
             # **零调用**：本次诊断指向的实体不存在/身份写错 ⇒ 上游记录契约失效。
@@ -4274,7 +4364,8 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
             allowed_repair_actions=allowed_repair_actions)
         _ev["content_slots"] = {"applicable": bool(_slot_ok), "why": str(_slot_why),
                                 "state": str((_slot_ctx or {}).get("state") or ""),
-                                "blocked": list((_slot_ctx or {}).get("blocked") or [])}
+                                "blocked": list((_slot_ctx or {}).get("blocked") or []),
+                                "deferred": list((_slot_ctx or {}).get("deferred") or [])}
         if not _slot_ok and str((_slot_ctx or {}).get("state") or "") == _pcr_state.STATE_UNKNOWN_TARGET:
             print("[PLAN] ⇒ **目标身份失效**：本次诊断指向的实体不在基线视图里 ⇒ "
                   "零调用、保留基线；责任在**问题记录的生产者**（不是模型）")

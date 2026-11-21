@@ -275,6 +275,23 @@ def residual_class(problems) -> str:
     return RESIDUAL_MIXED
 
 
+class RevisionRejections(list):
+    """本轮修订请求可见的**拒收反馈**（列表本体与旧接口逐字同构，元素是 `rejection_record`）.
+
+    2026-11-21（S03）：控制器只回灌**最近一次成功应用之后**的拒收——此前那些拒收已经被
+    后续应用覆盖，再把它们塞进请求会让模型看到"上一轮被拒收……计划一个字节没改"的过时
+    描述（实测 11-21 run：第 4 轮请求仍带第 1 轮的 n02 拒收）。列表额外携带
+    `applied_rounds`：本次运行里**已成功应用**的轮次 `[{round, kind, detail}]`，供渲染
+    端显式告诉模型"哪些改动已经生效、不要回退"，而不是靠标题猜生命周期。
+    控制器结果里的 `rejections` 仍是**完整留档**（不缩减证据），两者分账。
+    """
+
+    def __init__(self, rows=(), *, applied_rounds=None):
+        super().__init__(rows or ())
+        self.applied_rounds = [dict(x) for x in (applied_rounds or [])
+                               if isinstance(x, dict)]
+
+
 class RevisionController:
     """「反馈 → 修订 → 应用 → 重验」的有界循环（纯状态机，IO 由调用方注入）.
 
@@ -282,8 +299,8 @@ class RevisionController:
       每项是 `{"code", "path", "detail", "basis"}`；空表 = 通过。
     - `revise(plan, problems, budget, rejections) -> {"kind", "plan", "detail"}`：**一轮**
       修订；`kind` 取 `applied` / `no_change` / `call_failed` / `illegal`，`applied`
-      必须给出新计划。`rejections` 是**此前被拒收的响应记录**（`rejection_record`，
-      只读；复核 2026-10-02 之五：拒收原因要**一并反馈**给下一轮请求）。
+      必须给出新计划。`rejections` 是**当前仍有效的拒收记录**：只含最近一次成功应用
+      之后的轮次，且携带 `applied_rounds`（`RevisionRejections`）；完整历史走结果对象。
       实现方每次模型调用都要用 `budget.remaining_sec()` 作单次超时。
     """
 
@@ -297,6 +314,10 @@ class RevisionController:
         #: 每一轮的**完整证据**钩子（复核 2026-10-02 之七）。控制器不做 IO：
         #: 生产入口把它接到 `<章节目录>/step01_replan_rounds.jsonl`。
         self.on_round = on_round
+        #: 2026-11-21（S03）：本轮请求**可见**的拒收（只含最后一次成功应用之后的轮次）
+        #: 与已应用轮次分账维护；`_rej`（完整留档）在 `_result` 里照旧全给。
+        self._rej_visible: list = []
+        self._applied_rounds: list = []
 
     def _emit(self, rec, *, plan_in=None, problems_in=None, plan_out=None,
               problems_out=None, rejection=None):
@@ -336,6 +357,28 @@ class RevisionController:
             print("[WARN] 修订轮留档失败（**证据缺失**，裁决不受影响）：%s: %s"
                   % (type(exc).__name__, exc))
 
+    def _note_applied(self, hist) -> None:
+        """记录一次**成功应用**（S03）：清空请求可见的旧拒收，并把"已应用"写进轮次历史.
+
+        只清 `_rej_visible`（下一轮请求的反馈面）；`_rej` 是完整留档，不动。`label` 取
+        本轮应用器的真实标签（`view_applied` / `source_basis_revision` /
+        `budget_reselect:*` 等），渲染端据此写"已应用：第 2 轮（view_applied）"。
+        """
+        if not hist:
+            return
+        rec = hist[-1]
+        _detail = str(rec.get("detail") or "")
+        _label = _detail.split(":")[0].split("：")[0].strip() \
+            or str(rec.get("kind") or "applied")
+        self._applied_rounds.append({
+            "round": int(rec.get("round") or len(hist)),
+            "kind": str(rec.get("kind") or "applied"),
+            "label": _label,
+            "detail": _detail[:120],
+        })
+        rec["applied"] = True
+        self._rej_visible = []
+
     def _result(self, plan, stop, problems, history, rejections=None):
         _res = residual_class(problems)
         return {"plan": plan, "stop_reason": stop, "problems": list(problems or []),
@@ -349,13 +392,16 @@ class RevisionController:
                 "plan_level_conclusion": bool(stop in PLAN_LEVEL_STOPS
                                               and _res != RESIDUAL_NONE),
                 #: **拒收记录**（与 `problems` 分账）：模型哪几轮回的东西不合法、具体
-                #: 是哪个字段。诊断与下一轮请求都从这里取。
+                #: 是哪个字段。诊断与下一轮请求都从这里取；**完整留档**（S03 起请求侧
+                #: 只回灌最后一次成功应用之后的轮次，二者分账）。
                 "rejections": list(rejections or []),
+                #: 已成功应用的轮次（S03）：供诊断与请求渲染写"哪些改动已生效"。
+                "applied_rounds": list(self._applied_rounds),
                 #: 额度是否已用尽——"连续非法直到额度耗尽"要**两个事实都记**
                 #: （主终局是响应违约，额度耗尽是附带事实）。
                 "quota_exhausted": bool(self.budget.calls_left <= 0)}
 
-    def _stop_result(self, plan, stop, problems, hist, rejections):
+    def _stop_result(self, plan, stop, problems, hist, rejections, visible=None):
         """停止原因的**主次分账**（复核 2026-10-02 之五）.
 
         额度耗尽（`calls_exhausted`）**本身不是**"这份计划不行"的结论：如果最后一轮回的是
@@ -364,11 +410,16 @@ class RevisionController:
         "模型三次都没按契约回答"读成"故事装不下"。主原因取**最后一轮的真实详情**
         （`failure_detail` 同一条口径）：这一次是"响应违约"还是"额度耗尽"，差别就在这里。
 
+        `visible` 是**最近一次成功应用之后**的拒收（S03）：连续计数与"最后一次"都按它算，
+        否则"第 2 轮已应用、第 3 轮被拒"会被写成"连续 2 次被拒收"；完整 `rejections`
+        仍照旧进结果留档。
+
         截止时刻（`deadline_exhausted`）优先，不改：过点后不再发 POST、不采纳、不写缓存
         ——它是**时间门**的结论，与"模型答得对不对"是两条轴。
         """
         _last = hist[-1] if hist and isinstance(hist[-1], dict) else {}
-        if (stop == STOP_CALLS and rejections
+        _visible = rejections if visible is None else visible
+        if (stop == STOP_CALLS and _visible
                 and str(_last.get("kind") or "") == "illegal"):
             # 复核 2026-10-04：这里原来直接 `[:160]` 硬切，再把 `）——额度已耗尽…`
             # 接在**切了一半的句子**后面 ⇒ 事故现场读起来像"一条节拍）——额度已耗尽"
@@ -383,7 +434,7 @@ class RevisionController:
             _note = ("连续 %d 次响应被拒收——主终局是**响应违约**（模型没按契约回答），"
                      "不是「故事不可行」；额度已耗尽（最后一次：%s）；"
                      "修订响应或编译结果未通过约束；须核对拒收阶段与原因"
-                     % (len(rejections),
+                     % (len(_visible),
                         rejection_display(_last.get("detail"), limit=160)))
             if hist:
                 hist[-1] = dict(_last, detail=_note, quota_exhausted=True)
@@ -410,20 +461,26 @@ class RevisionController:
             return self._result(plan, STOP_OK, [], [])
         _seen = {self.fingerprint(plan)}
         _hist = []
-        #: 被拒收的响应（第几轮、什么类型、具体字段与原因）——**与 `_problems` 分账**，
-        #: 下一轮请求把它一并反馈（复核 2026-10-02 之五）。
+        #: 被拒收的响应（第几轮、什么类型、具体字段与原因）——**与 `_problems` 分账**。
+        #: `_rej` 是**完整留档**（结果与诊断照旧全给）；`self._rej_visible` 只保留
+        #: **最近一次成功应用之后**的轮次，才是下一轮请求该看到的拒收反馈（S03）。
         _rej = []
+        self._rej_visible = []
+        self._applied_rounds = []
         while True:
             _stop = self.budget.stop_reason()
             if _stop:
                 self.log("[REVISION] 停止：%s（已用 %d/%d 次）"
                          % (_stop, self.budget.calls_used, self.budget.max_calls))
-                return self._stop_result(plan, _stop, _problems, _hist, _rej)
+                return self._stop_result(plan, _stop, _problems, _hist, _rej,
+                                         self._rej_visible)
             self.budget.spend()
             # 这一轮的**输入**（留档要能重放：`plan_in` + 归档响应 → 真实应用器）
             _plan_in = plan
             _probs_in = list(_problems)
-            _out = self.revise(plan, _problems, self.budget, _rej) or {}
+            _visible = RevisionRejections(self._rej_visible,
+                                          applied_rounds=self._applied_rounds)
+            _out = self.revise(plan, _problems, self.budget, _visible) or {}
             _kind = str(_out.get("kind") or STOP_CALL_FAILED)
             _hist.append({"round": len(_hist) + 1, "kind": _kind,
                           "detail": str(_out.get("detail") or "")[:200],
@@ -491,6 +548,7 @@ class RevisionController:
                 # 额度/截止这时若已用尽，下一轮开头就会带着这条记录收口（`_stop_result`
                 # 会把主终局改回响应违约）。
                 _rej.append(rejection_record(len(_hist), _kind, _out.get("detail")))
+                self._rej_visible.append(_rej[-1])
                 _hist[-1]["rejected"] = True
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in,
                            rejection=_rej[-1])
@@ -509,6 +567,7 @@ class RevisionController:
                 _hist[-1]["detail"] = "applied 却没给出计划：%s" % _hist[-1]["detail"]
                 _hist[-1]["kind"] = "illegal"
                 _rej.append(rejection_record(len(_hist), "illegal", _hist[-1]["detail"]))
+                self._rej_visible.append(_rej[-1])
                 _hist[-1]["rejected"] = True
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in,
                            rejection=_rej[-1])
@@ -545,6 +604,7 @@ class RevisionController:
                 # 完整验收为空时成立；有合法 deferred 则返回候选 + 完整残余。
                 _stop = STOP_OK if not _problems else _term_stop
                 _hist[-1]["terminal"] = dict(_term)
+                self._note_applied(_hist)
                 self._emit(_hist[-1], plan_in=_plan_in, problems_in=_probs_in,
                            plan_out=_new, problems_out=_problems)
                 self.log("[REVISION] 拆分终局：%s（候选已完整验收，残余 %d 项）"
@@ -552,6 +612,7 @@ class RevisionController:
                 return self._result(_new, _stop, _problems, _hist, _rej)
             _plan_out, _probs_out = _new, list(_problems)
             plan = _new
+            self._note_applied(_hist)
             _emit_rec = _hist[-1]
             _emit_kw = {"plan_in": _plan_in, "problems_in": _probs_in,
                         "plan_out": _plan_out, "problems_out": _probs_out}
