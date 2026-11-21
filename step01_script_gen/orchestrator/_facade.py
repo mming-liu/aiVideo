@@ -5,20 +5,18 @@
 测试与工具对 `step01_script_gen.main.X` 的读写，需要落到 X 实际所在的模块，
 否则打桩只改了 main 的属性、真实代码照旧调用原函数。
 
-`install(module, owners)` 把 main 模块的类换成 `_FacadeModule`：
+`install(module, owners)` 把 main 模块的类换成 `_FacadeModule`。契约只有三条：
 
 * **读**：`main.X`（含 `from step01_script_gen.main import X`）→ 所属模块的当前值；
-* **写**：`main.X = v`（`monkeypatch.setattr` / `mock.patch` 进入与退出）→ 写到所属模块，
-  同时更新 main 自身 `__dict__` 里的镜像；
-* **镜像**：所属名字在 main 的 `__dict__` 里都有一份，`mock.patch` 据此判定为
-  “本地属性”、退出时用 setattr 恢复原值（嵌套 patch 逐层恢复）；每次访问
-  `main.__dict__` 前先按所属模块刷新镜像，避免所属模块内部改写全局后镜像过期；
-* **删**：`del main.X`（如 `monkeypatch.delattr`、或未判为本地属性的 patch 退出）
-  → 把**首次覆盖前缓存的原值**写回所属模块，不做真删除，避免把真实函数删掉。
-* **缓存生命周期**：经门面第一次把 X 改成**不同的**值时，缓存所属模块的当前值；
-  写入值与当前值相同（无变化的写入、patch 退出时的恢复写）不开启缓存会话。之后
-  只要有一次写入把 X 写回这个原值（`mock.patch` 正常退出、monkeypatch 撤销），
-  或经删除恢复，缓存就清除。下一次覆盖重新以所属模块**当时**的值为原值。
+* **写**：`main.X = v` → 写到所属模块，同时更新 main 自身 `__dict__` 里的镜像。
+  镜像让 `mock.patch` 判定为本地属性、退出时用 setattr 写回它保存的原对象；
+  每次访问 `main.__dict__` 前先按所属模块刷新镜像，避免镜像过期；
+* **删**：受管理的名字**拒绝删除**（抛 `AttributeError`）。门面不猜测补丁会话、
+  不缓存原值：临时覆盖由调用方（`finally` 写回）或测试框架（`mock.patch` /
+  `monkeypatch` 保存原对象再 setattr）负责恢复。
+
+2026-11-19 复核收口：原方案的「删除即恢复」需要原值缓存与会话判断，没有实际
+消费者，却反复产生过期恢复问题，已撤回。
 
 不在所属表里的名字（main.py 自己定义的 `main()` 等）保持普通模块行为。
 """
@@ -28,17 +26,6 @@ import types
 
 _MISSING = object()
 _OWNER_KEY = "__facade_owner__"
-_ORIG_KEY = "__facade_originals__"
-
-
-def _same(a, b) -> bool:
-    """同一对象，或同类型且相等（比较本身出错按不同处理）."""
-    if a is b:
-        return True
-    try:
-        return type(a) is type(b) and bool(a == b)
-    except Exception:
-        return False
 
 
 def _plain_dict(module) -> dict:
@@ -64,41 +51,22 @@ class _FacadeModule(types.ModuleType):
 
     def __setattr__(self, name, value):
         d = _plain_dict(self)
-        owner = d.get(_OWNER_KEY) or {}
-        mod = owner.get(name)
+        mod = (d.get(_OWNER_KEY) or {}).get(name)
         if mod is None:
             types.ModuleType.__setattr__(self, name, value)
             return
-        originals = d.setdefault(_ORIG_KEY, {})
-        current = mod.__dict__.get(name, _MISSING)
-        if name not in originals:
-            # 无变化的写入（例如外层 patch 的值恰好等于当前值，或 patch 退出时的
-            # 恢复写）不算覆盖，不开启缓存会话（2026-11-19 复核二轮 P2-5）。
-            if not _same(value, current):
-                originals[name] = current
-        elif _same(value, originals[name]):
-            # 写回的正是首次覆盖前的原值（mock.patch 退出 / monkeypatch 撤销）：
-            # 本次覆盖会话结束，清掉缓存。否则所属模块之后自己更新了值，下一次
-            # 经门面覆盖再删除时会恢复成过期的旧原值（2026-11-19 复核 P2-5）。
-            del originals[name]
         setattr(mod, name, value)
         d[name] = value
 
     def __delattr__(self, name):
         d = _plain_dict(self)
-        owner = d.get(_OWNER_KEY) or {}
-        mod = owner.get(name)
+        mod = (d.get(_OWNER_KEY) or {}).get(name)
         if mod is None:
             types.ModuleType.__delattr__(self, name)
             return
-        originals = d.setdefault(_ORIG_KEY, {})
-        original = originals.pop(name, mod.__dict__.get(name, _MISSING))
-        if original is _MISSING:
-            mod.__dict__.pop(name, None)
-            d.pop(name, None)
-            return
-        setattr(mod, name, original)
-        d[name] = original
+        raise AttributeError(
+            f"{self.__name__}.{name} 由门面转发到 {mod.__name__}，不支持删除；"
+            f"临时覆盖请由调用方或测试框架写回原对象")
 
 
 def _is_alias(value, package: str) -> bool:
@@ -124,7 +92,6 @@ def install(module, owners) -> None:
     table = build_owner_table(owners)
     d = _plain_dict(module)
     d[_OWNER_KEY] = table
-    d[_ORIG_KEY] = {}
     for name, mod in table.items():
         d[name] = mod.__dict__[name]
     module.__class__ = _FacadeModule
