@@ -201,17 +201,29 @@ def _code_source_meta() -> dict:
 
 def _git_head_ref() -> str:
     """只读取 `git rev-parse HEAD`（不提交、不改索引/工作树）。"""
+    return _git_resolve_ref("HEAD")
+
+
+def _git_resolve_ref(name: str) -> str:
+    """把任意安全 ref/commit（含 `HEAD`）解析成完整 commit hash（只读 git）."""
     import subprocess
 
+    _ref = str(name or "").strip()
+    if not _ref:
+        raise ReplayError("--code-source 的 git ref 不能为空")
+    if _ref.startswith("-"):
+        raise ReplayError("--code-source 不接受以 '-' 开头的 ref：%r" % _ref)
     try:
-        done = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, timeout=60)
+        done = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", _ref + "^{commit}"],
+            capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ReplayError("无法读取 git HEAD（--code-source head 需要）: %s" % exc)
+        raise ReplayError("无法解析 git ref %r（--code-source 快照需要）: %s"
+                          % (_ref, exc))
     ref = str(done.stdout or "").strip()
     if done.returncode != 0 or not ref:
-        raise ReplayError("无法读取 git HEAD（--code-source head 需要）: %s"
-                          % str(done.stderr or "").strip()[:300])
+        raise ReplayError("无法解析 git ref %r（--code-source 快照需要）: %s"
+                          % (_ref, str(done.stderr or "").strip()[:300]))
     return ref
 
 
@@ -1158,28 +1170,32 @@ def main(argv=None) -> int:
                         help="显式替换的回复正文文件（utf-8）；缺省用冻结回复")
     parser.add_argument("--output-base", default="",
                         help="隔离回放根（默认 .tmp/s02_replay_work/output）")
-    parser.add_argument("--code-source", choices=("worktree", "head"), default="worktree",
+    parser.add_argument("--code-source", default="worktree",
                         help="回放用哪份代码：worktree=当前工作树（默认）；"
-                             "head=git HEAD 只读快照（冻结语料对应的代码基线，"
-                             "共享脏树有并行改动时用它做确定性回放）")
+                             "head=git HEAD 只读快照；或任意 git ref/commit（用于钉住 "
+                             "冻结语料对应的代码基线，如 <commit>）。共享脏树有并行改动时"
+                             "用快照做确定性回放")
     parser.add_argument("--include-log", action="store_true",
                         help="输出里带上被捕获的生产日志行")
     raw_argv = list(argv) if argv is not None else list(sys.argv[1:])
     args = parser.parse_args(raw_argv)
 
-    # `--code-source head`：在隔离根物化 git HEAD 快照，再用子进程回放。
+    # `--code-source head|<ref>`：在隔离根物化 git 快照，再用子进程回放。
     # 子进程从快照加载项目包（工作树一行不改）；父进程只负责转发 stdout/退出码。
-    if (args.code_source == "head"
+    _cs = str(args.code_source or "worktree")
+    if (_cs not in ("worktree", "")
             and not os.environ.get(_SNAPSHOT_ENV, "").strip()):
         import subprocess
 
         output_dir = _isolated_output_base(args.output_base or None)
-        ref = _git_head_ref()
+        ref = _git_resolve_ref("HEAD" if _cs == "head" else _cs)
+        _label = "HEAD" if _cs == "head" else "".join(
+            ch if ch.isalnum() else "-" for ch in _cs)[:40]
         snapshot = _materialize_head_snapshot(
-            output_dir / "code_snapshot" / ("HEAD-%s" % ref[:12]), ref)
+            output_dir / "code_snapshot" / ("%s-%s" % (_label, ref[:12])), ref)
         env = dict(os.environ)
         env[_SNAPSHOT_ENV] = str(snapshot)
-        env[_CODE_SOURCE_ENV] = "head"
+        env[_CODE_SOURCE_ENV] = _cs
         env["PYTHONIOENCODING"] = "utf-8"
         try:
             done = subprocess.run(

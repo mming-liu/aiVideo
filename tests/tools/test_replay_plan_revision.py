@@ -307,30 +307,48 @@ def test_unknown_round_fails(tmp_path):
 # ---------------------------------------------------------------------------
 # 外部冻结语料回归项（显式声明数据集；缺失时 skip 并注明，不冒充通过）
 # ---------------------------------------------------------------------------
-def _run_replay_cli(manifest: Path, round_id: int, output_base: Path) -> dict:
-    """以**钉住 HEAD 代码快照**的方式跑 CLI（共享工作树可能有并行包改动）。
+def _run_replay_cli(manifest: Path, round_id: int, output_base: Path,
+                    *, code_ref: str) -> dict:
+    """以**钉住冻结语料代码基线**的方式跑 CLI（共享工作树可能有并行包改动）.
 
-    冻结语料是和某个代码版本一起冻结的；`--code-source head` 在隔离根物化
-    `git archive HEAD` 快照并在子进程里回放，保证「语料 + 代码」一起固定。
+    冻结语料是和某个代码版本一起冻结的：清单里的 `code_baseline` 必须是当时能逐字
+    复现请求的提交。`--code-source <commit>` 在隔离根物化 `git archive <commit>` 快照
+    并在子进程里回放，保证「语料 + 代码」一起固定——否则后续提示/协议改动会让外部
+    回归项按预期漂移失败（那不是语料坏了）。
     """
     import subprocess
 
     done = subprocess.run(
         [sys.executable, str(ROOT / "tools" / "replay_plan_revision.py"),
          "--manifest", str(manifest), "--round", str(int(round_id)),
-         "--code-source", "head", "--output-base", str(output_base)],
+         "--code-source", str(code_ref), "--output-base", str(output_base)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         cwd=str(ROOT))
     assert done.returncode == 0, (done.returncode, done.stdout[-2000:], done.stderr[-2000:])
     return json.loads(done.stdout)
 
 
+def _external_code_baseline():
+    """外部语料的代码基线（缺失时返回 None ⇒ 该回归项**未运行**，不冒充通过）."""
+    try:
+        _m = json.loads(EXTERNAL_CORPUS.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    _ref = str(_m.get("code_baseline") or "").strip()
+    return _ref or None
+
+
 @pytest.mark.skipif(not EXTERNAL_CORPUS.is_file(), reason=EXTERNAL_SKIP_REASON)
 def test_external_corpus_replays_round2_and_round4(tmp_path):
-    """外部数据集：11-21 真实运行 round 2（applied）/ round 4（no_change）回放。"""
-    round2 = _run_replay_cli(EXTERNAL_CORPUS, 2, tmp_path / "external")
+    """外部数据集：11-21 真实运行 round 2（applied）/ round 4（no_change）回放."""
+    _ref = _external_code_baseline()
+    if not _ref:
+        pytest.skip("外部语料未声明 code_baseline：无法钉住代码版本，回放**未运行**"
+                    "（不是通过）")
+    round2 = _run_replay_cli(EXTERNAL_CORPUS, 2, tmp_path / "external",
+                             code_ref=_ref)
     assert round2["ok"] is True, round2["conformance"]
-    assert round2["code_source"]["mode"] == "head"
+    assert round2["code_source"]["mode"] == _ref
     assert all(round2["code_identity"].values())
     assert round2["result"]["kind"] == "applied"
     assert round2["result"]["fingerprint_in"] == "76231a28244d5280427f8dc8659ba1afda919ec6"
@@ -345,8 +363,10 @@ def test_external_corpus_replays_round2_and_round4(tmp_path):
     assert round2["conformance"]["plan_matches_archive"] is True
     assert round2["conformance"]["residuals"] is True
 
-    round4 = _run_replay_cli(EXTERNAL_CORPUS, 4, tmp_path / "external")
+    round4 = _run_replay_cli(EXTERNAL_CORPUS, 4, tmp_path / "external",
+                             code_ref=_ref)
     assert round4["ok"] is True, round4["conformance"]
+    assert round4["code_source"]["mode"] == _ref
     assert round4["result"]["kind"] == "no_change"
     assert round4["result"]["fingerprint_in"] == "ecc6b6e4647230d21d7a1017fbddf6a7116fc73f"
     assert round4["result"]["plan_unchanged"] is True
