@@ -502,3 +502,52 @@ def test_create_voice_reaches_the_revision_entry(monkeypatch, nested):
     assert _rv["final_accepted"] is True, (
         _rv, (_cand.get("plan_revision") or {}).get("residuals"))
 
+
+# ---------------------------------------------------------------------------
+# S13（2026-11-21 S11 实跑发现）：逐片段落点契约
+# ---------------------------------------------------------------------------
+def test_slot_exposes_per_span_placement_contract():
+    """槽位必须逐片段给出""是否已有落点/必须用哪个 placement""，不能只给整槽并集."""
+    v = _view_for(existing=True)
+    slot = _slot(v)
+    spans = [x for x in (slot.get("voice_span_landings") or [])
+             if isinstance(x, dict)]
+    assert spans, slot
+    for x in spans:
+        assert {"text", "existing_beat_uids", "existing_allowed",
+                "placement_required"} <= set(x)
+    _hit = [x for x in spans if x["text"] == "甲留在门外。"]
+    assert _hit, [x["text"] for x in spans]
+    assert _hit[0]["existing_beat_uids"] == ["b02"]
+    assert _hit[0]["existing_allowed"] is True
+    assert _hit[0]["placement_required"] == "existing"
+    assert slot["voice_existing_beat_uids"] == ["b02"]
+
+
+def test_span_without_existing_landing_requires_new_placement():
+    """所选片段没有已有落点时：existing 必须被拒，并明确指向 placement=new."""
+    v = _view_for(existing=False)
+    slot = _slot(v)
+    _hit = [x for x in (slot.get("voice_span_landings") or [])
+            if isinstance(x, dict) and x["text"] == "甲留在门外。"]
+    assert _hit and _hit[0]["existing_allowed"] is False
+    assert _hit[0]["placement_required"] == "new"
+    ans = _answer(slot, placement="existing", beat_uid="b02")
+    probs = pcr.answer_problems(ans, [slot])
+    bad = [p for p in probs if p["code"] == "repair_answer_target_not_allowed"]
+    assert bad, probs
+    assert "没有任何已有落点" in bad[0]["reason"], bad[0]
+    assert "placement=new" in bad[0]["reason"], bad[0]
+    # 合法方向：placement=new（插入位置从 insert_positions 选）
+    ok = _answer(slot, placement="new", insert_after_uid="", event_index=0,
+                 beat_text="甲留在门外")
+    assert pcr.answer_problems(ok, [slot]) == []
+
+
+def test_slot_prompt_states_per_span_placement_rule():
+    v = _view_for(existing=True)
+    slot = _slot(v)
+    prompt = pcr.slot_prompt(pcr.slot_request(v, [slot]), novel_text=NOVEL)
+    assert "voice_span_landings" in prompt
+    assert "existing_allowed" in prompt
+    assert "placement=new" in prompt

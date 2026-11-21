@@ -621,6 +621,18 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             # S02：位置/种类/歧义的结构化依据（列表本身不变，兼容既有比较）
             "voice_source_meta": _voice_source_meta(_vspans, novel_text),
             "voice_landings": _landings,
+            # S13（2026-11-21 S11 实跑发现）：**逐片段**的现有落点判定。实跑 ch2_run2
+            # 里模型拿整槽 aggregate `voice_existing_beat_uids` 推断，选了另一片段才合法
+            # 的 b09，被 `repair_answer_target_not_allowed` 连续拒收至额度耗尽。
+            # 这里把"所选这一段有没有已有落点、必须用哪个 placement"显式给出。
+            "voice_span_landings": [
+                {"text": str(_x.get("text") or ""),
+                 "existing_beat_uids": [str(_u) for _u in
+                                        (_x.get("beat_uids") or [])],
+                 "existing_allowed": bool(_x.get("beat_uids")),
+                 "placement_required": ("existing" if _x.get("beat_uids")
+                                        else "new")}
+                for _x in (_landings or []) if isinstance(_x, dict)],
             "voice_existing_beat_uids": _existing,
             "voice_new_allowed": not _existing,
             "current_carriers": list(_cur),
@@ -1556,10 +1568,11 @@ _ACT_RULE = {
     ACT_CREATE_VOICE: ("`text` = **整段**取自 `voice_source_spans` 的其中一项（必须与该项"
                        "**完全一致**，不得截短、拼接或改写；候选已按单镜上限切好，多段可选时"
                        "优先较短的整段）——校验按**整段相等**判定，自行截短的子片段会被拒收；"
-                       "`voice_kind` = dialogue / narration；`placement` = existing（`beat_uid` 从"
-                       " `voice_existing_beat_uids` 选）或 new（`insert_after_uid` /"
-                       " `event_index` / `beat_text` 从允许集合选）。已有合法落点时不得 new。"
-                       "画面能承载时优先用视觉动作——声音会吃掉发声预算。"),
+                       "`voice_kind` = dialogue / narration；`placement` 由**所选整段**决定："
+                       "该段 `voice_span_landings.existing_allowed=true` ⇒ 必须 existing"
+                       "（`beat_uid` 只能从该段 `existing_beat_uids` 选）；为 false ⇒ 必须 new"
+                       "（`insert_after_uid` / `event_index` / `beat_text` 从允许集合选）。"
+                       "整槽 `voice_existing_beat_uids` 是各段并集，**不能**代表所选片段。"),
     ACT_BIND: ("`target_uid` = **已经演出**该事实的现有画面（`target_uids` 里选）；"
                "`text` 只能给**空串**"),
     ACT_REWRITE: ("`target_uid` = 要改写的现有承载画面（`target_uids` 里选）；"
@@ -1605,6 +1618,14 @@ def _render_slot_rule(actions=None, slots=None) -> str:
         if ACT_CREATE_VOICE in _acts:
             _parts.append("新增声音由**声音本身**承载完整事实；不要用画面正文替代，"
                           "也不要把视觉改写指导套到此槽")
+            # S13：逐片段落点规则（整槽 aggregate 集合不能代表所选片段）
+            _spl = [x for x in (_s.get("voice_span_landings") or [])
+                    if isinstance(x, dict)]
+            if _spl:
+                _parts.append(
+                    "`placement` 按**所选整段的** `voice_span_landings` 判断"
+                    "（existing_allowed=true 的片段才能用 existing；为 false 的片段"
+                    "必须 placement=new）—— 不要用整槽 `voice_existing_beat_uids` 推断")
         if any(_a in (ACT_CREATE, ACT_BIND, ACT_REWRITE) for _a in _acts):
             _parts.append("视觉动作按所选画面正文承载完整事实")
         if ACT_SPLIT in _acts:
@@ -1953,10 +1974,17 @@ def answer_problems(answer, slots, *, where: str = "槽位回答") -> list:
             if _place == "existing":
                 _bid = str(_it.get("beat_uid") or "")
                 if _bid not in _eligible:
+                    # S13：明确告诉生产者"是所选片段没有落点"还是"选错落点"，
+                    # 并给出可行方向（另有合法落点→从这里选；没有→必须 placement=new）。
+                    _hint = ("该片段在基线里**没有任何已有落点**：`placement=existing` "
+                             "不可用，请改用 `placement=new`（`insert_after_uid` 从 "
+                             "`insert_positions` 选，并给 `event_index` / `beat_text`）"
+                             if not _eligible else
+                             "该片段只有这些合法已有落点：%s" % _eligible)
                     _p.append(_rec("repair_answer_target_not_allowed", _sid,
                                    "槽位 %s 的已有落点 %s 不是所选片段 %r 的合法落点"
-                                   "（该片段可用：%s）"
-                                   % (_sid, _brief(_bid), _txt, _eligible), _bid))
+                                   "（%s）"
+                                   % (_sid, _brief(_bid), _txt, _hint), _bid))
                     continue
                 for _f in ("insert_after_uid", "event_index", "beat_text"):
                     if _f in _it:
