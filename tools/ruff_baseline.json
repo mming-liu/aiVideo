@@ -366,12 +366,6 @@
   "count": 1
  },
  {
-  "path": "step01_script_gen/constraints/__init__.py",
-  "code": "F811",
-  "name": "SelfReviewConstraint",
-  "count": 1
- },
- {
   "path": "step01_script_gen/constraints/axis_jump.py",
   "code": "F401",
   "name": "step01_script_gen.scene_anchors.get_scene_type",
