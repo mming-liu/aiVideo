@@ -32,11 +32,13 @@
   - 迁出代码里的 `__file__` 改为 `runtime._MAIN_FILE`（原 main.py 路径）。
   - 先写临时目录，校验全部通过才替换文件。
 - **等价校验**：把 `_mrt.X` 还原成 `X` 后，原 main.py 的 350 条顶层语句与新文件里的语句逐条比对 AST，全部一致，0 处不一致。
-- **门面** `orchestrator/_facade.py`：对 `step01_script_gen.main.X` 的读、写、删转发到 X 所在模块。
+- **门面** `orchestrator/_facade.py`：对 `step01_script_gen.main.X` 的读、写转发到 X 所在模块。
   - 在 main 的 `__dict__` 里保留镜像，`mock.patch` 判为本地属性，退出时用 setattr 恢复原值，嵌套 patch 逐层恢复。
   - 访问 `__dict__` 时先刷新镜像，避免所属模块内部改写全局后镜像过期。
-  - `delattr` 写回首次覆盖前缓存的原值，不做真删除。
-  - 契约测试 11 条，覆盖 `mock.patch` 退出后所属模块原函数仍在、嵌套恢复、`monkeypatch.delattr`、from-import、镜像刷新。
+  - 受管理名字**拒绝删除**；临时覆盖由调用方或测试框架写回原对象（见下方「契约收口」）。
+  - 契约测试 15 条，覆盖三种实际恢复方式（`mock.patch` / `monkeypatch` 撤销 / 调用方 `finally` 写回）、嵌套、连续会话、等值不同对象的恢复、from-import、镜像刷新、删除拒绝。
+
+**契约收口（2026-11-19 复核）**：原计划 D3 要求「`__delattr__` 写回缓存的原值、不做真删除」。核查实际调用方后，删除恢复没有任何消费者（`resume.py` 覆盖运行常量不靠删除恢复；`tools/replay_step01_repair.py` 用 `finally` 写回；测试框架都用 setattr 恢复），却需要原值缓存与会话判断，复核两轮都在这上面发现过期恢复问题。该要求已撤回，原 P2-5 的两次修补随之移除。
 
 ## 3. 与计划的差异
 
