@@ -43,9 +43,12 @@ def _lock(path: Path):
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(fd)
             return lock
-        except FileExistsError:
+        except (FileExistsError, PermissionError) as exc:
+            # Windows：上一持有者刚删除、仍处于 delete-pending 的锁文件，O_EXCL 创建报
+            # PermissionError（errno 13）而非 FileExistsError；按“锁忙”等待，超时仍 fail-closed。
             if time.monotonic() > deadline:
-                raise SendQuotaUnavailable("发送额度锁 %s 在 %.0fs 内拿不到" % (lock, _LOCK_WAIT_SEC))
+                raise SendQuotaUnavailable("发送额度锁 %s 在 %.0fs 内拿不到：%s"
+                                           % (lock, _LOCK_WAIT_SEC, exc)) from exc
             time.sleep(0.02)
         except OSError as exc:
             raise SendQuotaUnavailable("发送额度锁 %s 无法创建：%s" % (lock, exc)) from exc
@@ -62,6 +65,21 @@ def _read(path: Path) -> dict:
             or data["used"] < 0 or not isinstance(data.get("attempts", []), list)):
         raise SendQuotaUnavailable("发送额度文件 %s 形状非法：%r" % (path, data))
     return data
+
+
+def _replace(tmp: Path, path: Path) -> None:
+    """原子写回；Windows 上目标被其他进程短暂打开时 os.replace 报 PermissionError，有限重试."""
+    deadline = time.monotonic() + _LOCK_WAIT_SEC
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            if time.monotonic() > deadline:
+                raise SendQuotaUnavailable("发送额度文件 %s 写回失败：%s" % (path, exc)) from exc
+            time.sleep(0.02)
+        except OSError as exc:
+            raise SendQuotaUnavailable("发送额度文件 %s 写回失败：%s" % (path, exc)) from exc
 
 
 def reserve(*, provider: str, endpoint: str, call_id: str = "") -> "int | None":
@@ -82,7 +100,7 @@ def reserve(*, provider: str, endpoint: str, call_id: str = "") -> "int | None":
             "provider": str(provider), "endpoint": str(endpoint), "call_id": str(call_id or "")})
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, path)
+        _replace(tmp, path)
         return data["used"]
     finally:
         try:
