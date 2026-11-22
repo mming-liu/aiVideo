@@ -531,8 +531,30 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
                 _text = str(_vu.get("text") or "")
                 _manifest = _manifest_for_carrier(view, _vkind, _uid)
                 _affected = [str(_m.get("fact_uid") or "") for _m in _manifest]
+                # 2026-11-22（M06 / S11 repair_narrow_invalid ×3）：收窄只有「原句逐字子串 +
+                # 合法切分边界 + 净缩短 + 义务仍成立」才会被接受。旧实现把这件事交给模型自由
+                # 截取，实测原句「把兴步维艰的家当…交到了他年仅十六岁的独生子杨旭手中。」内部
+                # 没有任何分句标点，**根本不存在合法收窄**，模型 6 轮都给出必被拒的片段。
+                # 这里用执行器同一判据（_narrow_problems）预先列出全部合法候选：
+                # 有候选 → 随槽位下发，模型只能从中选；无候选 → 不开这个槽位，显式记为表达不了。
+                _src_txt = str((_vu.get("source") or {}).get("text") or "")
+                # hook 承载另有专门拒收（repair_narrow_hook_bound，执行器侧），这里不重复判，
+                # 只判「文本上是否存在合法收窄」。
+                _probe = {"slot_id": "voice_text:%s" % _uid, "affects_hook": False,
+                          "required_content_manifest": _manifest, "unit_uid": _uid}
+                _legal = _legal_narrow_texts(
+                    _probe, _text, kind=_vkind, novel_text=novel_text,
+                    source_texts=[_src_txt] if _src_txt else [])
+                if not _legal:
+                    _bad.append("%s（声音 %r 不存在合法的收窄片段）" % (_code, _uid))
+                    _blocked.append(_rec(
+                        "repair_narrow_no_legal_span", "voice_text:%s" % _uid,
+                        "声音 %r 的正文内部没有合法切分边界（或任何更短片段都保不住义务），"
+                        "收窄表达不了——不向模型下发必被拒的收窄槽位" % _uid, _text))
+                    continue
                 _slots.append({
                     "slot_id": "voice_text:%s" % _uid, "kind": "voice_text",
+                    "legal_narrow_texts": _legal,
                     "fact_uid": "", "card_id": "",
                     "problem_codes": [_code],
                     "claim": "", "evidence": "",
@@ -1118,6 +1140,42 @@ def _narrow_evidence_problems(manifest, new_text, slot_id="", target_uid="") -> 
     return _p
 
 
+#: 合法收窄候选的上限（候选按长度降序截取——越长保留的内容越多）
+_NARROW_CANDIDATE_LIMIT = 12
+
+
+def _legal_narrow_texts(slot, original, *, kind="", novel_text="", source_texts=None) -> list:
+    """枚举 `original` 的全部**会被执行器接受**的收窄片段（与 `_narrow_problems` 同一判据）.
+
+    只在合法边界（句首/分句标点之后）起、在边界（分句标点处或句尾）止，逐个交
+    `_narrow_problems` 复核，结果去重并按长度降序，最多 `_NARROW_CANDIDATE_LIMIT` 条。
+    """
+    _old = str(original or "")
+    if not _old:
+        return []
+
+    def _bound(ch):
+        return ch in "。！？!?；;，,、：: \n\t"
+
+    starts = [0] + [i for i in range(1, len(_old)) if _bound(_old[i - 1])]
+    ends = [j for j in range(1, len(_old) + 1)
+            if j == len(_old) or _bound(_old[j]) or _bound(_old[j - 1])]
+    seen: list = []
+    for i in starts:
+        for j in ends:
+            if j <= i:
+                continue
+            cand = _old[i:j]
+            if not cand.strip() or cand in seen or cand == _old:
+                continue
+            if _narrow_problems(slot, cand, original=_old, kind=kind,
+                                novel_text=novel_text, source_texts=source_texts):
+                continue
+            seen.append(cand)
+    seen.sort(key=len, reverse=True)
+    return seen[:_NARROW_CANDIDATE_LIMIT]
+
+
 def _narrow_problems(slot, new_text, *, original="", kind="", novel_text="",
                      source_texts=None) -> list:
     """P1b narrow 的确定性准入：逐字/净缩短/边界/来源/独立载体证据."""
@@ -1578,8 +1636,9 @@ _ACT_RULE = {
     ACT_REWRITE: ("`target_uid` = 要改写的现有承载画面（`target_uids` 里选）；"
                   "`text` = 改写后的画面正文"),
     ACT_NARROW_CARD: "`text` = 从原文截取的**更短且逐字一致**的片段（改后不得超出阅读预算）",
-    ACT_NARROW_VOICE: "`text` = 从该声音原文/来源截取的**更短且逐字一致**的片段；"
-                      "保留段的义务必须仍由目标或其他已绑定独立载体单独承担",
+    ACT_NARROW_VOICE: "`text` 必须**逐字照抄**该槽位 `legal_narrow_texts` 中的某一项"
+                      "（代码已按逐字、合法切分边界、净缩短与义务保留预先核过）；"
+                      "列表之外的任何截取都会被拒收",
     ACT_RECLASSIFY: "只回带 `slot_id` 与动作；迁移方向、目标集合与临时身份由代码从当前"
                     "已准入核验记录派生，**不要**填正文、目标或任何哈希",
     ACT_BIND_VOICE: "`target_uid` = 现有声音单位（`voice_target_uids` 里选）；`text` 只能给"
