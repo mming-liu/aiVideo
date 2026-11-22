@@ -80,6 +80,7 @@ class _Svc:
 
     def generate(self, req):
         self.schemas.append(str((req.json_schema or {}).get("name") or ""))
+        self.prompts = getattr(self, "prompts", []) + [req.user_prompt]
         _t = self.texts.pop(0)
         if _t is None:
             return TextGenerationResult(success=False, call_id="x", error="boom")
@@ -162,6 +163,19 @@ def test_one_retry_after_invalid_content():
     res = _gen(svc)
     assert res["executable"] is True
     assert svc.schemas == ["lightweight_outline", "lightweight_outline"]
+    assert res["revision"]["calls"] == 2
+
+
+def test_budget_rejection_feeds_back_per_line_costs():
+    long_text = NOVEL * 6                       # 同一部原文重复：逐字仍成立
+    bad = _answer()
+    bad["events"][0]["beats"][0].update(voice_kind="narration",
+                                        voice_text=long_text.replace("\n", "")[:400])
+    svc = _Svc([bad, _answer()])
+    res = lw.generate_lightweight_outline_result(long_text, service=svc)
+    assert len(svc.prompts) == 2
+    assert "上一版的声音估时" in svc.prompts[1] and "旁白" in svc.prompts[1]
+    assert "声音（台词 + 旁白）合计不超过约" in svc.prompts[0]
     assert res["revision"]["calls"] == 2
 
 
