@@ -125,8 +125,20 @@ def _voices_on_carriers(view, carriers) -> set:
 
 def adoption_problems(*, base_view, candidate_view, base_plan, candidate_plan,
                       base_record, candidate_record, parent_uid, child_uids,
-                      baseline_problems, candidate_problems) -> list:
+                      baseline_problems, candidate_problems,
+                      new_voice_uids=(), base_uid_map=None) -> list:
+    """`new_voice_uids`（2026-11-22，「新建声音 + 拆分」）：本事务在临时视图里新建、
+    R0 里本来没有的声音。它们只要求 R2 `supported`；echo/source_kind/speaker 没有 R0
+    可比，不能拿空值去比（否则必然误判）。`base_view` 此时是含新声音的临时视图 V1，
+    `base_plan`/`base_record` 仍是授权基线 V0/R0。
+
+    `base_uid_map`：V0 身份 → V1 身份（legacy 位置编号在插入后会顺延；映射由调用方按
+    同一节拍序列逐位配对给出）。R0 的声音行与基线残余先换算到 V1 身份再比较。
+    缺省时行为与改动前一致。
+    """
     _p: list = []
+    _new_voices = {str(x) for x in (new_voice_uids or ()) if str(x)}
+    _umap = {str(k): str(v) for k, v in (base_uid_map or {}).items() if str(k) and str(v)}
     _parent = str(parent_uid or "")
     _children = [str(x) for x in (child_uids or []) if str(x)]
     _target = {_parent} | set(_children)
@@ -144,6 +156,8 @@ def adoption_problems(*, base_view, candidate_view, base_plan, candidate_plan,
             _p.append(_rec("split_adoption_record_invalid", "",
                            "%s 记录的 rule_version 不是当前版本" % _label))
     _base_facts, _base_src, _base_voices = _record_maps(base_record)
+    if _umap:
+        _base_voices = {_umap.get(k, k): v for k, v in _base_voices.items()}
     _cand_facts, _cand_src, _cand_voices = _record_maps(candidate_record)
     # ---- 目标子事实 ----
     for _uid in _children:
@@ -166,6 +180,11 @@ def adoption_problems(*, base_view, candidate_view, base_plan, candidate_plan,
         if str(_c.get("verdict") or "") != "supported":
             _p.append(_rec("split_adoption_voice_unsupported", _uid,
                            "受影响声音 %s 未获 R2 supported" % _uid))
+        if _uid in _new_voices:
+            if _uid in _base_voices:
+                _p.append(_rec("split_adoption_voice_unsupported", _uid,
+                               "声明为新建的声音 %s 在 R0 里已存在" % _uid))
+            continue
         for _k in ("echo_text", "source_kind", "speaker"):
             if str(_b.get(_k) or "") != str(_c.get(_k) or ""):
                 _p.append(_rec("split_adoption_voice_unsupported", _uid,
@@ -268,7 +287,8 @@ def adoption_problems(*, base_view, candidate_view, base_plan, candidate_plan,
         _p.append(_rec("split_adoption_frozen_modified", "",
                        "`plan_basis`（除 fact_uids/拆分账本）被改动", "plan_basis"))
     # ---- deferred 残余逐条映射 ----
-    _base_keys = {(_problem_uid(p), str((p or {}).get("code") or ""),
+    _base_keys = {(_umap.get(_problem_uid(p), _problem_uid(p)),
+                   str((p or {}).get("code") or ""),
                    str((p or {}).get("path") or "")) for p in (baseline_problems or [])
                   if isinstance(p, dict)}
     for _p0 in (candidate_problems or []):

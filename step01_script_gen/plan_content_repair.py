@@ -119,6 +119,8 @@ STATE_UNSUPPORTED = "unsupported"
 STATE_NO_SLOTS = "no_slots"
 STATE_ACTION_CONVERGENCE_EMPTY = "action_convergence_empty"
 STATE_UNREADABLE = "unreadable"
+#: 本轮唯一能落槽的是「单载体替换会丢掉已表达部分」的复合事实 ⇒ 走「新建声音 + 拆分」事务
+STATE_VOICE_SPLIT = "voice_split"
 #: 字段类型（`int` **不含 `bool`**——`event_index=True` 是违约，不是 1）
 _FIELD_TYPE = {"slot_id": "str", "action": "str", "text": "str", "target_uid": "str",
                "insert_after_uid": "str", "event_index": "int",
@@ -381,6 +383,7 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
     _narrow_unavailable: list = []
     _covered: list = []
     _deferred: list = []
+    _voice_split: list = []
     _beats = _beat_uids(view)
     from shared.presentation_contract import selectable_visual_beat_uids
     _visual_targets=selectable_visual_beat_uids(view)
@@ -612,12 +615,22 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
         _cur = _visual_carriers(view, _uid)
         _vt = _voice_targets(view, _uid, novel_text=novel_text)
         _acts = ([ACT_CREATE] if allow_create else [])
+        _raw_spans = _voice_source_raw(view, _uid, _rec_in, novel_text,
+                                       admitted=bool(record_admitted))
         _vspans = _voice_source_spans(view, _uid, _rec_in, novel_text,
                                       admitted=bool(record_admitted))
+        # 2026-11-22（M07 ch1，C）：与该事实**当前声音载体同一处原话**重叠的片段不再
+        # 作为新建候选——实跑第 3–5 轮每轮都把已表达的那半句再建一条声音和节拍，
+        # 节拍从 14 涨到 18，缺的那一层始终没进发声正文。不同场合有意重复同一句
+        # （另一事实、另一处原文）不受影响：判据是原文位置重叠，不是文字相同。
+        _covered_pos = _fact_voice_positions(view, _uid, novel_text)
+        if _covered_pos:
+            _vspans = [_s for _s in _vspans
+                       if not _overlaps(_occurrences(_s, novel_text), _covered_pos)]
         _landings = _voice_landings(view, novel_text, _vspans)
         _existing = _voice_existing_beats(_landings)
         _cars = []
-        from shared.presentation_contract import ref_uid
+        from shared.presentation_contract import fact_binding_policy, ref_uid
         for _b in (view or {}).get("fact_bindings") or []:
             if isinstance(_b, dict) and str(_b.get("fact_uid") or "") == _uid:
                 _cars = [c for c in (_b.get("carriers") or []) if isinstance(c, dict)]
@@ -625,7 +638,82 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
         _fact_hook = any(_hook_bound(view, str(_c.get("kind") or ""),
                                      str(ref_uid(_c) or ""))
                          for _c in _cars)
-        if allow_create and _vspans and not _fact_hook:
+        # **单载体替换下的复合事实**（A 的入口条件，纯结构判定）：当前唯一载体已经逐字
+        # 承载了本事实已准入原话的一部分，另有未承载的原话可建成声音——此时 create_voice
+        # 会**替换**掉已表达的那部分（legacy 只有一个「承载」位）。这种事实不走普通槽位，
+        # 交给「新建声音 + 事实拆分」事务（`voice_split`），由修订方提出子事实。
+        _pol = fact_binding_policy(view)
+        _single = (str(_pol.get("selection") or "") == "replace"
+                   or int(_pol.get("max_carriers") or 0) == 1)
+        _partly = bool(_covered_pos) and any(
+            _overlaps(_occurrences(_s, novel_text), _covered_pos) for _s in _raw_spans)
+        _replace_loses = bool(_single and _partly)
+        if (allow_create and _replace_loses and _vspans and not _fact_hook
+                and len(_cars) == 1):
+            _authority, _ap = _split_authority(view, _uid, _rec_in)
+            if not _ap:
+                _vslot = {
+                    "slot_id": "slot:fact:%s" % _uid, "kind": "fact_visual",
+                    "fact_uid": _uid, "card_id": "",
+                    "problem_codes": sorted({
+                        str((_p or {}).get("code") or "") for _p in (problems or [])
+                        if record_uid(_p) == _uid}),
+                    "claim": str(_f.get("claim") or ""),
+                    "evidence": str(_f.get("evidence") or ""),
+                    "allowed_actions": [ACT_CREATE_VOICE],
+                    "target_uids": [], "insert_positions": [""] + list(_beats),
+                    "voice_target_uids": [],
+                    "voice_source_spans": _vspans,
+                    "voice_source_meta": _voice_source_meta(_vspans, novel_text,
+                                                            raw=_raw_spans),
+                    "voice_landings": _landings,
+                    "voice_span_landings": [
+                        {"text": str(_x.get("text") or ""),
+                         "existing_beat_uids": [str(_u) for _u in
+                                                (_x.get("beat_uids") or [])],
+                         "existing_allowed": bool(_x.get("beat_uids")),
+                         "placement_required": ("existing" if _x.get("beat_uids")
+                                                else "new")}
+                        for _x in (_landings or []) if isinstance(_x, dict)],
+                    "voice_existing_beat_uids": _existing,
+                    "voice_new_allowed": not _existing,
+                    "current_carriers": [],
+                    "voice_split_parent": _uid,
+                    "facts": [_fact_brief(view, _uid)],
+                    "event_uids": list(_events),
+                    "sources": [str(_f.get("evidence") or "")],
+                }
+                _kmap = _carrier_kind_map(view)
+                _keep = [{"kind": str(_c.get("kind") or ""), "uid": str(ref_uid(_c)),
+                          "text": "\n".join(_t for _t in _cv_texts(view, _c) if _t)}
+                         for _c in _cars if str(ref_uid(_c)) in _kmap]
+                _sslot = {
+                    "slot_id": "split:fact:%s" % _uid, "kind": "split_fact",
+                    "fact_uid": _uid, "card_id": "",
+                    "problem_codes": list(_vslot["problem_codes"]),
+                    "claim": _authority["claim"], "evidence": _authority["evidence"],
+                    "parent_evidence_spans": list(_authority["spans"]),
+                    "parent_display": _authority["display"],
+                    "parent_source": _authority["source"],
+                    "current_carriers": _carriers_of(view, _uid),
+                    # 只许：保留当前已表达的那个载体 + 本轮 create_voice 新建的声音
+                    "allowed_carrier_uids": _keep + [{
+                        "kind": "new_voice", "uid": _create_voice_temp_uid(_vslot),
+                        "text": "（本轮同一回答里 create_voice 新建的那条声音）"}],
+                    "allowed_actions": [ACT_SPLIT],
+                    "target_uids": [], "voice_target_uids": [],
+                    "insert_positions": [], "current_text": "",
+                    "min_children": 2, "max_children": 4,
+                    "facts": [_fact_brief(view, _uid)],
+                    "event_uids": list(_events),
+                    "sources": [str(_authority["evidence"] or "")],
+                    "voice_split_parent": _uid,
+                }
+                _voice_split.append({"fact_uid": _uid,
+                                     "codes": list(_vslot["problem_codes"]),
+                                     "slots": [_vslot, _sslot]})
+                continue
+        if allow_create and _vspans and not _fact_hook and not _replace_loses:
             _acts.append(ACT_CREATE_VOICE)
         if _visual_targets:
             _acts += [ACT_BIND, ACT_REWRITE]
@@ -648,7 +736,7 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             "voice_target_uids": [x["uid"] for x in _vt],
             "voice_source_spans": _vspans,
             # S02：位置/种类/歧义的结构化依据（列表本身不变，兼容既有比较）
-            "voice_source_meta": _voice_source_meta(_vspans, novel_text),
+            "voice_source_meta": _voice_source_meta(_vspans, novel_text, raw=_raw_spans),
             "voice_landings": _landings,
             # S13（2026-11-21 S11 实跑发现）：**逐片段**的现有落点判定。实跑 ch2_run2
             # 里模型拿整槽 aggregate `voice_existing_beat_uids` 推断，选了另一片段才合法
@@ -705,7 +793,9 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
             "blocked": _blocked, "deferred": sorted(set(_deferred)),
             "covered_codes": sorted(set(_covered)),
             # 目标存在但某种修法不可用（与 `blocked` 的「身份失效」分开）；只作证据
-            "narrow_unavailable": _narrow_unavailable}
+            "narrow_unavailable": _narrow_unavailable,
+            # 单载体替换会丢掉已表达部分的复合事实：不出普通槽位，交「新建声音 + 拆分」
+            "voice_split": _voice_split}
 
 
 def _request_facts(slots) -> list:
@@ -765,24 +855,31 @@ def _voice_unit_of(view, uid) -> tuple:
     return None, {}
 
 
-def _voice_source_meta(spans, novel_text) -> dict:
+def _voice_source_meta(spans, novel_text, raw=None) -> dict:
     """每个来源片段的**结构化依据**（S02：位置 / 种类 / 是否歧义）.
 
     仅供 prompt 之外的消费者（`answer_problems`、S03、诊断）使用；
     `voice_source_spans` 本身保持纯字符串列表，字符串比较与既有调用不变。
+    `raw` = 未做时长过滤的已准入整段：片段不是整段、而是其中一段连续分句时记
+    `utterance_window`，并给出所属整段（修订方据此判断这段话是否仍完整）。
     """
     _out: dict = {}
+    _pool = [str(_p or "") for _p in list(spans or []) + list(raw or [])]
     for _s in spans or []:
         _s = str(_s or "")
         if not _s:
             continue
         _pos = _occurrences(_s, novel_text)
         _kind, _parent = "full_evidence", ""
-        for _p in spans or []:
-            _p = str(_p or "")
+        for _p in _pool:
             if _p and _p != _s and _s in _dialogue_bodies(_p):
                 _kind, _parent = "dialogue_body", _p
                 break
+        if _kind == "full_evidence" and raw is not None and _s not in raw:
+            _hosts = sorted((str(_p) for _p in raw if _p and str(_p) != _s
+                             and _s in str(_p)), key=len)
+            if _hosts:
+                _kind, _parent = "utterance_window", _hosts[0]
         _out[_s] = {"occurrences": len(_pos),
                     "first_pos": _pos[0] if _pos else None,
                     "source_kind": _kind,
@@ -984,14 +1081,52 @@ def _dialogue_bodies(text) -> list:
     return out
 
 
-def _voice_source_spans(view, fact_uid, record, novel_text, *,
-                        admitted=False) -> list:
-    """创建声音可用的逐字来源：**已准入**记录的 spans + 事实证据，且落在原文.
+#: 发言内部的分句/句末标点：**只用于从已准入原话里选一段连续发言**，不是切镜点。
+#: 跨镜切一条必须播完的长台词仍只认句末边界（`find_legal_split`），这里不改它。
+_CLAUSE_TAIL = "，、；：,;:"
+_SENTENCE_TAIL = "。！？!?…"
+#: 每条超长整段最多给出的连续片段数（按起点、长度确定性排序；超出部分记数不静默）
+_WINDOWS_PER_SPAN = 40
 
-    事实 evidence 只能作为逐字内容来源，不能替代记录准入；`admitted=False` 时
-    即使 evidence 在原文里也不返回任何来源。返回的是**单镜说得完**的片段
-    （超长 span 按句末展开，见 `_voice_feasible_spans`）。
+
+def _utterance_windows(text, cap) -> list:
+    """超单镜上限、又不能按句末切开的**已准入整段**里，可单镜说完的**连续分句片段**.
+
+    2026-11-22（M07 ch1）：回城那句台词 19.6s、句内只有逗号，`_voice_feasible_spans`
+    整句丢掉，于是复合事实缺的那一层**根本没有来源可选**。这里只在整段不可表示时，
+    按分句边界列出逐字连续片段（起点在发言开头或分句之后，终点在分句/句末之前），
+    每段估时 ≤ 单镜上限。片段是否保得住说话人、对象与理由由修订方判断，代码不替它选。
     """
+    from step01_script_gen.plan_feasibility import _estimate_duration
+    _t = str(text or "")
+    _segs: list = []
+    _start, _i, _n = 0, 0, len(_t)
+    while _i < _n:
+        if _t[_i] in _CLAUSE_TAIL + _SENTENCE_TAIL:
+            _j = _i
+            while _j < _n and _t[_j] in _CLAUSE_TAIL + _SENTENCE_TAIL:
+                _j += 1
+            _segs.append((_start, _j))
+            _start, _i = _j, _j
+            continue
+        _i += 1
+    if _start < _n:
+        _segs.append((_start, _n))
+    _out: list = []
+    for _a in range(len(_segs)):
+        for _b in range(_a, len(_segs)):
+            _w = _t[_segs[_a][0]:_segs[_b][1]].strip().rstrip(_CLAUSE_TAIL).strip()
+            if not _w or _w == _t.strip() or not _norm_key(_w):
+                continue
+            if float(_estimate_duration(_w)) > float(cap) + 0.01:
+                break
+            if _w not in _out:
+                _out.append(_w)
+    return _out[:_WINDOWS_PER_SPAN]
+
+
+def _voice_source_raw(view, fact_uid, record, novel_text, *, admitted=False) -> list:
+    """已准入记录的 spans + 事实证据（+ 归属语整句的台词本体），逐字落在原文；未做时长过滤."""
     if not admitted or not isinstance(record, dict):
         return []
     _spans = list((source_spans_by_fact(record) or {}).get(str(fact_uid)) or [])
@@ -1007,7 +1142,53 @@ def _voice_source_spans(view, fact_uid, record, novel_text, *,
         for _b in _dialogue_bodies(_s):
             if _b and _b not in _out and _occurrences(_b, novel_text):
                 _out.append(_b)
-    return _voice_feasible_spans(_out)
+    return _out
+
+
+def _voice_source_spans(view, fact_uid, record, novel_text, *,
+                        admitted=False) -> list:
+    """创建声音可用的逐字来源：**已准入**记录的 spans + 事实证据，且落在原文.
+
+    事实 evidence 只能作为逐字内容来源，不能替代记录准入；`admitted=False` 时
+    即使 evidence 在原文里也不返回任何来源。返回的是**单镜说得完**的片段
+    （超长 span 按句末展开，见 `_voice_feasible_spans`）；整段不可表示时再给出
+    其中的连续分句片段（`_utterance_windows`；带归属语的整句只从台词本体取）。
+    """
+    from step01_script_gen.timecode import active_shot_cap
+    _raw = _voice_source_raw(view, fact_uid, record, novel_text, admitted=admitted)
+    _out = _voice_feasible_spans(_raw)
+    _cap = float(active_shot_cap())
+    for _s in _raw:
+        if _s in _out or _dialogue_bodies(_s):
+            continue
+        for _w in _utterance_windows(_s, _cap):
+            if _w not in _out and _occurrences(_w, novel_text):
+                _out.append(_w)
+    return _out
+
+
+def _voice_positions(view, kind, uid, novel_text) -> list:
+    """声音单位正文在原文中的位置（画面/卡片不是逐字原话，返回空）."""
+    if str(kind or "") not in ("dialogue", "narration"):
+        return []
+    _k, _u = _voice_unit_of(view, uid)
+    if _k is None:
+        return []
+    return _occurrences(str(_u.get("text") or ""), novel_text)
+
+
+def _cv_texts(view, carrier) -> list:
+    from shared.content_verification import carrier_texts
+    return [str(_t) for _t in (carrier_texts(view, carrier) or []) if str(_t)]
+
+
+def _fact_voice_positions(view, fact_uid, novel_text) -> list:
+    """该事实**当前声音载体**正文在原文中的全部位置（同一来源发言的判据）."""
+    _out: list = []
+    for _c in _carriers_of(view, fact_uid):
+        if isinstance(_c, dict):
+            _out.extend(_voice_positions(view, _c.get("kind"), _c.get("uid"), novel_text))
+    return _out
 
 
 def _voice_landings(view, novel_text, spans) -> list:
@@ -1694,10 +1875,28 @@ def _render_slot_rule(actions=None, slots=None) -> str:
                     "`placement` 按**所选整段的** `voice_span_landings` 判断"
                     "（existing_allowed=true 的片段才能用 existing；为 false 的片段"
                     "必须 placement=new）—— 不要用整槽 `voice_existing_beat_uids` 推断")
+            if any(isinstance(_m, dict) and _m.get("source_kind") == "utterance_window"
+                   for _m in (_s.get("voice_source_meta") or {}).values()):
+                _parts.append(
+                    "`voice_source_meta.source_kind=utterance_window` 的候选是一句长发言"
+                    "（`parent_span`）里的连续分句：选它时要保证这段话本身仍交代清楚"
+                    "该事实缺的那层（说话人、对象、理由），不要只因为短就选")
         if any(_a in (ACT_CREATE, ACT_BIND, ACT_REWRITE) for _a in _acts):
             _parts.append("视觉动作按所选画面正文承载完整事实")
         if ACT_SPLIT in _acts:
-            _parts.append("拆分只选既有载体，不新建；子载体可共用")
+            _new_voice = [str(_c.get("uid") or "")
+                          for _c in (_s.get("allowed_carrier_uids") or [])
+                          if isinstance(_c, dict)
+                          and str(_c.get("kind") or "") == "new_voice"]
+            if _new_voice:
+                _parts.append(
+                    "本槽与同事实的 create_voice 槽**在同一回答里一起生效**：先新建那条声音，"
+                    "再拆分。父主张的每一层都要落到一个子事实上；已由当前载体表达的那层"
+                    "绑当前载体，缺的那层绑 `%s`（即本回答 create_voice 新建的声音）。"
+                    "子主张合起来必须完整保留父主张的主体、对象、先后与因果，不得删掉任何一层"
+                    % _new_voice[0])
+            else:
+                _parts.append("拆分只选既有载体，不新建；子载体可共用")
         _per.append("- `%s` 只允许 `%s`%s"
                     % (_s.get("slot_id"), "、".join(_acts),
                        ("：" + "；".join(_parts)) if _parts else ""))
@@ -2403,6 +2602,16 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
                 _p.append(_rec("repair_create_voice_not_in_source", _sid,
                                "所选声音片段不是已授权的逐字来源", _txt))
                 continue
+            # C（2026-11-22）：同一事实、同一处原话再建一条声音 + 节拍只会重复已表达的
+            # 部分（实跑 14→18 个节拍）。按**原文位置重叠**判定，不按文字相同；整轮拒收、
+            # 基线不动。另一事实或另一处原文的同句不受影响。
+            if _fu and _overlaps(_occurrences(_txt, novel_text),
+                                 _fact_voice_positions(view, _fu, novel_text)):
+                _p.append(_rec("repair_create_voice_duplicates_carrier", _sid,
+                               "所选片段与事实 %s 当前声音载体是同一处原话——再建一条"
+                               "只会重复已表达的部分；缺的那层要来自另一处原话" % _fu,
+                               _txt))
+                continue
             _land_beats = [str(_x) for _x in (_landing.get("beat_uids") or [])]
             if _claim_write("声音", _vuid, _sid, _txt) == "conflict":
                 continue
@@ -2447,9 +2656,12 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
                 _beat.update({
                     "uid": _buid, "text": str(_it.get("beat_text") or ""),
                     "purpose": str(_slot.get("claim") or ""),
+                    # 新节拍的原文依据优先取**本条新声音自己的逐字原话**（上面已核过
+                    # 是授权来源）；否则复合事实会拿到另一处原话（M07 ch1：新台词节拍
+                    # 的依据成了「没什么事……」）。
                     "evidence": _pick_evidence(
-                        _slot, (evidence_by_fact or {}).get(_fu), novel_text,
-                        view=view, fact_uid=_fu),
+                        _slot, [_txt] + list((evidence_by_fact or {}).get(_fu) or []),
+                        novel_text, view=view, fact_uid=_fu),
                     "event_uids": _ev, "source": {},
                     "voice_ref": {"kind": _kind, "uid": _vuid}})
                 _claim_write("画面", _buid, _sid, _beat["text"])
@@ -2609,7 +2821,8 @@ def compile_delta(view, slots, answer, *, novel_text: str = "",
     return _delta, []
 
 
-def compile_split(view, base_plan, slot, answer, *, record, novel_text="") -> tuple:
+def compile_split(view, base_plan, slot, answer, *, record, novel_text="",
+                  carrier_view=None, carrier_alias=None) -> tuple:
     """把拆分槽回答编译成事务输入：`(split_ops, ledger, scope, problems)`.
 
     - 子 uid、载体 kind、scope、authority、账本全由代码生成；
@@ -2617,6 +2830,11 @@ def compile_split(view, base_plan, slot, answer, *, record, novel_text="") -> tu
       并与 `base_plan`、R0 `plan_digest` 三方一致；
     - 子载体可以共用（D 只要求每个子事实有一个载体）；
     - 父证据 span 只从 R0 的 `source_support` 取，不接受调用方另给一份。
+
+    `carrier_view` / `carrier_alias`（2026-11-22，「新建声音 + 拆分」）：授权与摘要仍按
+    `view`（V0）与 R0 核；子载体按 `carrier_view`（V1，含本轮新建声音）核存在与种类。
+    `carrier_alias` 把槽位里给模型看的临时 uid 映射成 V1 的最终 uid（由 delta 应用的
+    `mapping` 给出，不猜）。两者缺省时行为与改动前一致。
     """
     from shared import content_verification as _cv
     from shared import fact_split as _fs
@@ -2696,7 +2914,8 @@ def compile_split(view, base_plan, slot, answer, *, record, novel_text="") -> tu
         return None, None, None, [_rec(
             "repair_split_children_out_of_range", _sid,
             "拆分只接受 %d–%d 个子事实（当前 %d）" % (_min, _max, len(_kids)))]
-    _kind_map = _carrier_kind_map(view)
+    _kind_map = _carrier_kind_map(carrier_view if isinstance(carrier_view, dict) else view)
+    _alias = {str(k): str(v) for k, v in (carrier_alias or {}).items() if str(k) and str(v)}
     _allowed_cars = {str((_c or {}).get("uid") or "")
                      for _c in (_slot.get("allowed_carrier_uids") or [])
                      if isinstance(_c, dict)}
@@ -2713,7 +2932,8 @@ def compile_split(view, base_plan, slot, answer, *, record, novel_text="") -> tu
             continue
         _claim = str(_kid.get("claim") or "")
         _ev = str(_kid.get("evidence") or "")
-        _car = str(_kid.get("carrier_uid") or "")
+        _car_answer = str(_kid.get("carrier_uid") or "")
+        _car = _alias.get(_car_answer, _car_answer)
         if not _claim.strip() or not _ev.strip():
             _p.append(_rec("repair_split_child_invalid", _sid,
                            "children[%d] 的 claim/evidence 不能为空" % (_i - 1)))
@@ -2727,7 +2947,7 @@ def compile_split(view, base_plan, slot, answer, *, record, novel_text="") -> tu
             _p.append(_rec("repair_split_carrier_unknown", _sid,
                            "children[%d] 的载体 %r 不在当前视图" % (_i - 1, _car), _car))
             continue
-        if _allowed_cars and _car not in _allowed_cars:
+        if _allowed_cars and _car_answer not in _allowed_cars:
             _p.append(_rec("repair_split_carrier_unknown", _sid,
                            "children[%d] 的载体 %r 不在槽位允许集合" % (_i - 1, _car), _car))
             continue

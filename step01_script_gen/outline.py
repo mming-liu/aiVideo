@@ -2028,6 +2028,9 @@ _FIX_CAPABILITY_OUT_OF_SCOPE = {
     "plan_refs_pairing_broken": "候选层：plan_refs 配对破损",
     "plan_refs_stale_plan": "候选层：plan_refs 指向的计划版本已过期",
     "illegal_response": "响应协议：拒收记录（不是计划验收问题）",
+    "canonical_beat_count_mismatch": "修订事务内部：新建声音后投影读回的身份配对失败（整轮拒收，不是计划验收问题）",
+    "canonical_voice_kind_mismatch": "修订事务内部：新建声音后投影读回的身份配对失败（整轮拒收，不是计划验收问题）",
+    "canonical_voice_identity_conflict": "修订事务内部：新建声音后投影读回的身份配对失败（整轮拒收，不是计划验收问题）",
     "response_not_json": "响应协议：正文不是 JSON",
     "outline_invalid": "首版尝试结果码（不是计划验收问题）",
     "deadline_exhausted": "运行级：规划截止耗尽",
@@ -3100,12 +3103,48 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
             "blocked": list(_found.get("blocked") or []),
             "narrow_unavailable": list(_found.get("narrow_unavailable") or []),
             "deferred": list(_found.get("deferred") or [])}
+    # 2026-11-22（M07 ch1，A）：单载体替换会丢掉已表达部分的复合事实。只在不受限的
+    # 普通修订里开放（受限动作/显式目标沿用原语义）；拆分预检与核验容量零调用先判。
+    _vsplit_ready: list = []
+    _vsplit_unavail: list = []
+    if (_found.get("voice_split") and allowed_repair_actions is None
+            and not allow_split):
+        from shared import fact_split as _fs_v
+        for _e in _found.get("voice_split") or []:
+            if verification is None or verification.capacity() <= 0:
+                _vsplit_unavail.append({"fact_uid": _e.get("fact_uid"),
+                                        "codes": ["split_verification_capacity"]})
+                continue
+            _pre = _fs_v.split_preflight_problems(
+                _base_view, plan, _rec, str(_e.get("fact_uid") or ""),
+                novel_text=novel_text)
+            if _pre:
+                _vsplit_unavail.append({"fact_uid": _e.get("fact_uid"),
+                                        "codes": [str(x.get("code") or "") for x in _pre]})
+                continue
+            _vsplit_ready.append(_e)
+    _ctx["voice_split"] = _vsplit_ready
+    _ctx["voice_split_unavailable"] = _vsplit_unavail
+    _vsplit_codes = sorted({str(c) for _e in (_found.get("voice_split") or [])
+                            for c in (_e.get("codes") or [])})
     # **身份失效优先**：目标实体都不存在时，先修记录（生产者），不是先改内容
     if _ctx["blocked"]:
         return False, "本轮问题里的**目标身份失效**（%s）——这些实体不在基线视图里，" \
             "内容槽位无从下手" % "、".join(str(_x.get("reason") or _x.get("uid") or "")
                                           for _x in _ctx["blocked"]), \
             dict(_ctx, state=_pcr.STATE_UNKNOWN_TARGET)
+    if _vsplit_codes and _found["slots"]:
+        # 普通槽位先修其余事实；复合事实本轮 deferred，由完整验收继续报告，
+        # 等它成为唯一可落槽的问题时再走「新建声音 + 拆分」（避免与其他部分修订同轮
+        # 让保护事实的核验措辞漂移，拆分采纳因此只能记无法确认）。
+        _ctx["deferred"] = sorted(set(_ctx.get("deferred") or []) | set(_vsplit_codes))
+    if _vsplit_ready and not _found["slots"]:
+        _deferred_codes, _blocking_codes = _slot_deferral(
+            _found["unexpressible"], problems) if _found["unexpressible"] else ([], [])
+        if not _blocking_codes:
+            return True, "", dict(_ctx, state=_pcr.STATE_VOICE_SPLIT,
+                                  deferred=sorted(set(_ctx.get("deferred") or [])
+                                                  | set(_deferred_codes)))
     if _found["unexpressible"]:
         # S04（2026-11-21）：按**能力类别**决定"留到下一轮"还是"挡路"，不再逐个 code 豁免。
         # 可 defer 的问题不改变最终验收——完整验收下一轮照旧报告它们；这里只决定**本轮
@@ -3299,8 +3338,9 @@ def _replan_by_slots(plan, problems, novel_text, budget, rejections=None, *, mod
             target_fact_uids=target_fact_uids, verification=verification,
             novel_text=novel_text,
             allowed_repair_actions=allowed_repair_actions)
-        if not _ok:
-            return None, "内容槽位不适用：%s" % _why, "", (evidence or {})
+        if not _ok or not (_ctx2.get("found") or {}).get("slots"):
+            return None, "内容槽位不适用：%s" % (_why or _ctx2.get("state")), "", \
+                (evidence or {})
         _base_view, _found, _mode = _ctx2["view"], _ctx2["found"], _ctx2["mode"]
     _slots = _found["slots"]
     if evidence is not None:
@@ -3668,6 +3708,258 @@ def _replan_by_split(plan, problems, novel_text, budget, rejections=None, *,
             "call_id": _cid, "evidence": _ev,
             "terminal": _split_terminal(_stop, detail="split_transaction:%s" % _stage,
                                         evidence=_ev)}
+
+
+def _canonical_view_map(view) -> tuple:
+    """视图 → 投影再读回的规范视图 + 旧身份到新身份的映射 `(view_n, uid_map, problems)`.
+
+    映射只来自**同一节拍序列的逐位配对**：节拍 i ↔ 节拍 i，节拍 i 的声音引用 ↔ 读回后
+    节拍 i 的声音引用。节拍数或某位的载体种类不一致即判失败，不做相似度匹配。
+    """
+    try:
+        _plan = plan_from_view(view)
+    except PresentationContractError as _exc:
+        return None, {}, list(_exc.problems)
+    _vn, _vp = view_from_plan(_plan)
+    if _vn is None or _vp:
+        return None, {}, list(_vp or [])
+    _a = [b for b in (view or {}).get("beats") or [] if isinstance(b, dict)]
+    _b = [b for b in (_vn or {}).get("beats") or [] if isinstance(b, dict)]
+    if len(_a) != len(_b):
+        return None, {}, [{"code": "canonical_beat_count_mismatch",
+                           "reason": "读回后节拍数变化（%d → %d）" % (len(_a), len(_b))}]
+    _map: dict = {}
+    for _x, _y in zip(_a, _b):
+        _map[str(_x.get("uid") or "")] = str(_y.get("uid") or "")
+        _rx, _ry = _x.get("voice_ref") or {}, _y.get("voice_ref") or {}
+        if str(_rx.get("kind") or "") != str(_ry.get("kind") or ""):
+            return None, {}, [{"code": "canonical_voice_kind_mismatch",
+                               "reason": "节拍 %s 读回后声音种类变化" % _x.get("uid")}]
+        if str(_rx.get("kind") or "") in ("dialogue", "narration"):
+            _ox, _oy = str(ref_uid(_rx) or ""), str(ref_uid(_ry) or "")
+            if _ox in _map and _map[_ox] != _oy:
+                return None, {}, [{"code": "canonical_voice_identity_conflict",
+                                   "reason": "声音 %s 读回后对应两个身份" % _ox}]
+            _map[_ox] = _oy
+    return _vn, _map, []
+
+
+def _replan_by_voice_split(plan, problems, novel_text, budget, rejections=None, *,
+                           model=None, system_prompt=None, evidence=None,
+                           verification=None, ctx=None) -> dict:
+    """**新建声音 + 事实拆分**一轮（2026-11-22，M07 ch1「先 C 后 A」的 A）.
+
+    触发：legacy 单载体替换下，复合事实的唯一载体已经逐字表达了其中一层，缺的那层
+    来自另一处已准入原话（`content_slots` 的 `voice_split`）。普通 create_voice 会把
+    已表达的那层替换掉，所以这里**复用既有事务**而不另造协议：
+
+    1. 一次回答同时给两个既有形状的槽：`create_voice`（缺的那层）+ `split_fact`
+       （子事实由修订方提出；子载体 = 当前载体或本回答新建的声音）；
+    2. `compile_delta` + `apply_delta_view` 在 V0 的副本上得到 V1（不采纳、不验）；
+    3. `compile_split` 按 V0/R0 授权、按 V1 核载体；
+    4. `split_transaction.run_create_voice_then_split`：授权仍用 (V0, R0)，M 判完整
+       保留一次，R 只核最终候选 V2；采纳契约 `split_adoption` 以 V1 为结构基线。
+
+    任何一步失败都不写回 V1/V2，返回与 `_replan_by_split` 同一形状的结果。
+    """
+    from shared.config import PROMPT_MAX_CHARS
+    from shared.content_verification import plan_digest_of
+    from step01_script_gen import plan_content_repair as _pcr
+    from step01_script_gen import split_adoption, split_judge as _sj
+    from step01_script_gen import split_transaction as _st
+    _ev = evidence if isinstance(evidence, dict) else {}
+    _ctx = ctx if isinstance(ctx, dict) else {}
+    _base_view = _ctx.get("view")
+    _mode = str(_ctx.get("mode") or plan_mode(plan) or MODE_LEGACY)
+    _entries = [e for e in (_ctx.get("voice_split") or []) if isinstance(e, dict)]
+    _deferred = sorted({str(x) for x in (_ctx.get("deferred") or [])})
+    _ev.update({"route": "voice_split_transaction", "deferred": _deferred})
+    _record = plan.get("plan_verification") if isinstance(plan, dict) else None
+    if (not _entries or not isinstance(_base_view, dict) or verification is None
+            or not isinstance(_record, dict)):
+        return {"kind": "invalid_target", "call_id": "", "evidence": _ev,
+                "detail": "新建声音+拆分：缺目标、基线视图、R0 或核验控制器"}
+    _entry = _entries[0]
+    _slots = [s for s in (_entry.get("slots") or []) if isinstance(s, dict)]
+    _vslot = next((s for s in _slots if s.get("kind") == "fact_visual"), None)
+    _sslot = next((s for s in _slots if s.get("kind") == "split_fact"), None)
+    if _vslot is None or _sslot is None:
+        return {"kind": "invalid_target", "call_id": "", "evidence": _ev,
+                "detail": "新建声音+拆分：槽位不完整"}
+    _parent = str(_entry.get("fact_uid") or "")
+    _ev["target_fact_uid"] = _parent
+    _ev["slots"] = [str(s.get("slot_id") or "") for s in _slots]
+    _ev["voice_source_spans"] = list(_vslot.get("voice_source_spans") or [])
+    print("[PLAN] ⇒ 走**新建声音 + 事实拆分**（%s：单载体替换会丢掉已表达的那层；"
+          "其余 deferred：%s）" % (_parent, "、".join(_deferred) or "无"))
+    _limits = {"mode": _mode, "rule_version": _pcr.REPAIR_RULE_VERSION,
+               "max_calls": getattr(budget, "max_calls", None),
+               "calls_left": getattr(budget, "calls_left", None),
+               "deadline_at": getattr(budget, "deadline_at", None)}
+    _req = _pcr.slot_request(
+        _base_view, _slots, limits=_limits,
+        remaining_calls=getattr(budget, "calls_left", None),
+        remaining_sec=budget.remaining_sec() if budget is not None else None)
+    _prompt = chr(10).join([
+        _REVISION_NOVEL_PROMPT.format(novel_text=novel_text[:PROMPT_MAX_CHARS]),
+        _view_feedback_block(problems, _base_view),
+        _rejection_feedback_block(rejections),
+        "# 本轮只修这一条复合事实：新建缺失那层的声音，并把它拆成各由一个载体承载的子事实",
+        _pcr.slot_prompt(_req, novel_text=novel_text),
+        "请现在对两个槽位各给一条回答；不要返回其他动作。",
+    ])
+    _timeout = budget.remaining_sec() if budget is not None else None
+
+    def _fail(kind, stage, detail, cid=""):
+        _ev["failure_stage"] = stage
+        return {"kind": kind, "detail": detail, "call_id": cid, "evidence": _ev}
+
+    try:
+        _res = create_service().generate(TextGenerationRequest(
+            system_prompt=system_prompt or _OUTLINE_SYSTEM_PROMPT,
+            user_prompt=_prompt, temperature=0.3,
+            json_schema=_pcr.answer_json_schema(_slots), model=model,
+            deadline_monotonic=getattr(budget, "deadline_at", None),
+            timeout_sec=_timeout))
+    except Exception as exc:                                         # noqa: BLE001
+        return _fail("call_failed", "voice_split_answer_call",
+                     "call_failed: %s: %s" % (type(exc).__name__, exc))
+    _cid = str(getattr(_res, "call_id", "") or "")
+    _ev["answer_call_id"] = _cid
+    if not _res.success:
+        return _fail("call_failed", "voice_split_answer_call",
+                     "call_failed: %s" % str(getattr(_res, "error", "") or ""), _cid)
+    _data = _parse_outline_json(_res.text)
+    _ev["raw_response_text"] = str(getattr(_res, "text", "") or "")
+    if not isinstance(_data, dict):
+        return _fail("illegal", "answer_parsing", "槽位回答不是可解析的 JSON 对象", _cid)
+    _norm, _norm_recs, _norm_p = _pcr.normalize_slot_answer(_data, _slots)
+    _ans_p = list(_norm_p) + list(_pcr.answer_problems(_norm, _slots, where="槽位回答"))
+    _ev["slot_answer_normalized"] = _norm
+    _ev["normalization_records"] = _norm_recs
+    _ev["answer_problems"] = [str((x or {}).get("code") or "") for x in _ans_p]
+    if _ans_p:
+        return _fail("illegal", "answer_contract", _detail_vp(_ans_p), _cid)
+    _items = [i for i in (_norm.get("answers") or []) if isinstance(i, dict)]
+    _vans = {"schema": _norm.get("schema"),
+             "answers": [i for i in _items if i.get("slot_id") == _vslot["slot_id"]]}
+    _sans = {"schema": _norm.get("schema"),
+             "answers": [i for i in _items if i.get("slot_id") == _sslot["slot_id"]]}
+    if (len(_vans["answers"]) != 1 or len(_sans["answers"]) != 1
+            or str(_vans["answers"][0].get("action") or "") != _pcr.ACT_CREATE_VOICE):
+        return _fail("illegal", "answer_contract",
+                     "新建声音+拆分必须同时回答 create_voice 与 split_fact 两个槽", _cid)
+    # ---- V0 → V1：只应用 create_voice（副本，不采纳、不核验）----
+    _ev_by_fact = _pcr.source_spans_by_fact(_record)
+    _delta, _cp = _pcr.compile_delta(_base_view, [_vslot], _vans, novel_text=novel_text,
+                                     evidence_by_fact=_ev_by_fact)
+    if _delta is None:
+        _ev["compile_problems"] = [str((x or {}).get("code") or "") for x in _cp]
+        return _fail("illegal", "slot_compilation", _detail_vp(_cp), _cid)
+    _scope_v = _pcr.build_editable_scope(_base_view, [_vslot], answer=_vans)
+    _v1, _v1p, _v1r = apply_delta_view(_base_view, _delta, mode=_mode,
+                                       accept=lambda _v: [], editable_scope=_scope_v)
+    if _v1 is None or str((_v1r or {}).get("kind") or "") != "applied":
+        _ev["create_voice_problems"] = [str((x or {}).get("code") or "") for x in _v1p or []]
+        return _fail("illegal", "create_voice_application",
+                     _detail_vp(_v1p) or "新建声音的增量被拒收", _cid)
+    _tmp = _pcr._create_voice_temp_uid(_vslot)
+    _raw_new = str(((_v1r or {}).get("mapping") or {}).get(_tmp) or "")
+    if not _raw_new:
+        return _fail("illegal", "create_voice_application",
+                     "新建声音没有得到最终身份（mapping 缺 %s）" % _tmp, _cid)
+    # legacy 的身份是**位置编号**：插入新节拍/新台词后，投影再读回会顺延编号。拆分、
+    # 核验与采纳都消费读回后的视图，所以 V1 先规范成读回形态，再按**同一节拍序列的
+    # 逐位配对**换算身份（不按文字相似度猜）。
+    _v1n, _uid_map, _map_p = _canonical_view_map(_v1)
+    if _v1n is None:
+        return _fail("illegal", "create_voice_projection",
+                     _detail_vp(_map_p) or "新建声音后的视图无法投影读回", _cid)
+    _new_uid = str(_uid_map.get(_raw_new) or "")
+    _alias = {_tmp: _new_uid}
+    for _c in (_sslot.get("allowed_carrier_uids") or []):
+        _u = str((_c or {}).get("uid") or "")
+        if _u and _u != _tmp and _uid_map.get(_u):
+            _alias[_u] = str(_uid_map[_u])
+    if not _new_uid or len(_alias) != len(_sslot.get("allowed_carrier_uids") or []):
+        return _fail("illegal", "create_voice_projection",
+                     "读回后无法逐位确定新建声音或保留载体的身份（%s）" % _alias, _cid)
+    _v1 = _v1n
+    _ev["new_voice_uid"] = _new_uid
+    _ev["carrier_alias"] = dict(_alias)
+    # ---- 拆分编译：授权按 V0/R0，载体按 V1 ----
+    _ops, _ledger, _scope, _cpp = _pcr.compile_split(
+        _base_view, plan, _sslot, _sans, record=_record, novel_text=novel_text,
+        carrier_view=_v1, carrier_alias=_alias)
+    _ev["split_ops"] = _ops
+    _ev["split_scope"] = _scope
+    if _cpp:
+        _ev["compile_problems"] = [str((x or {}).get("code") or "") for x in _cpp]
+        return _fail("illegal", "split_compilation", _detail_vp(_cpp), _cid)
+    if not any(str((c.get("carrier") or {}).get("uid") or "") == _new_uid
+               for c in (_ops.get("children") or [])):
+        return _fail("illegal", "split_compilation",
+                     "子事实没有一个绑到本轮新建的声音——缺的那层仍无人承载", _cid)
+    _baseline_problems = list(plan_acceptance_problems(plan, novel_text) or [])
+    _m_log: list = []
+
+    def _m_call(prompt):
+        _raw, _m_cid = _sj.call_split_m(
+            prompt, model=model,
+            deadline_monotonic=getattr(budget, "deadline_at", None),
+            timeout_sec=_timeout)
+        _m_log.append({"prompt": prompt, "raw": _raw, "call_id": _m_cid})
+        return _raw, _m_cid
+
+    def _acceptance(cand_plan, nt):
+        _cand_problems = list(plan_acceptance_problems(cand_plan, nt) or [])
+        _ev["candidate_problems"] = _cand_problems
+        _cand_view, _vp = view_from_plan(cand_plan)
+        if _cand_view is None or _vp:
+            return list(_vp) or [{"code": "split_adoption_view_invalid",
+                                  "reason": "候选投影不可读"}]
+        return split_adoption.adoption_problems(
+            base_view=_v1, candidate_view=_cand_view,
+            base_plan=plan, candidate_plan=cand_plan, base_record=_record,
+            candidate_record=cand_plan.get("plan_verification"),
+            parent_uid=_parent,
+            child_uids=[str(c.get("uid")) for c in (_ops.get("children") or [])],
+            baseline_problems=_baseline_problems,
+            candidate_problems=_cand_problems, new_voice_uids=[_new_uid],
+            base_uid_map={k: v for k, v in _uid_map.items() if k != _raw_new})
+
+    _tx = _st.run_create_voice_then_split(
+        v0=_base_view, r0=_record, create_voice=lambda _v: copy.deepcopy(_v1),
+        split_args={"split_ops": _ops, "scope": _scope, "ledger": _ledger,
+                    "novel_text": novel_text, "acceptance": _acceptance},
+        verify_candidate=lambda cand: verification.record_for(
+            cand, plan_digest_of(plan_from_view(cand)), allow_correction=False),
+        m_call=_m_call, m_call_id="")
+    _ev["m_calls"] = _m_log
+    _ev["transaction"] = {k: _tx.get(k) for k in
+                          ("ok", "stage", "state", "m_calls", "problems",
+                           "status", "judgment", "error", "rollback")}
+    if _tx.get("ok"):
+        _ev["applied"] = True
+        return {"kind": "applied", "plan": _tx.get("plan"), "call_id": _cid,
+                "detail": "voice_split_transaction:committed（新建 %s，%s → %s）"
+                          % (_new_uid, _parent, "、".join(
+                              str(c.get("uid")) for c in _ops.get("children") or [])),
+                "evidence": _ev}
+    _stage = str(_tx.get("stage") or "")
+    _codes = {str((x or {}).get("code") or "") for x in (_tx.get("problems") or [])}
+    _pending = bool((_stage == "m" and _tx.get("status") == "pending_adjudication")
+                    or (_stage == "acceptance"
+                        and _codes == {"split_adoption_unconfirmed"}))
+    _detail = "voice_split_transaction:%s:%s" % (_stage, "、".join(sorted(_codes))
+                                                 or "无问题码")
+    _ev["failure_stage"] = "voice_split_" + (_stage or "unknown")
+    if _pending:
+        return {"kind": "pending_adjudication", "detail": _detail, "call_id": _cid,
+                "evidence": _ev,
+                "terminal": _split_terminal("split_pending_adjudication",
+                                            detail=_detail, evidence=_ev)}
+    return {"kind": "illegal", "detail": _detail, "call_id": _cid, "evidence": _ev}
 
 
 def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
@@ -4436,6 +4728,12 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                   "不落回完整计划/delta/预算重选")
             return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
                     "evidence": _ev}
+        if _slot_ok and str((_slot_ctx or {}).get("state") or "") \
+                == _pcr_state.STATE_VOICE_SPLIT:
+            return _replan_by_voice_split(
+                plan, problems, novel_text, budget, rejections, model=model,
+                system_prompt=system_prompt, evidence=_ev, verification=verification,
+                ctx=_slot_ctx)
         if _slot_ok:
             _ev["content_slots"]["slots"] = [str(_s["slot_id"])
                                              for _s in _slot_ctx["found"]["slots"]]
@@ -4495,6 +4793,12 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                   "不落回完整计划/delta/预算重选")
             return {"kind": "invalid_target", "detail": _slot_why, "call_id": "",
                     "evidence": _ev}
+        if _slot_ok and str((_slot_ctx or {}).get("state") or "") \
+                == _pcr_state.STATE_VOICE_SPLIT:
+            return _replan_by_voice_split(
+                plan, problems, novel_text, budget, rejections, model=model,
+                system_prompt=system_prompt, evidence=_ev, verification=verification,
+                ctx=_slot_ctx)
         if _slot_ok:
             _ev["content_slots"]["slots"] = [str(_s["slot_id"])
                                              for _s in _slot_ctx["found"]["slots"]]
