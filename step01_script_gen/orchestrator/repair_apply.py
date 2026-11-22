@@ -964,10 +964,29 @@ def _apply_shot_replacements(script: dict, replacements: list,
                 except (TypeError, ValueError):
                     _old_d, _new_d = 0.0, 0.0
                 if _old_d > 0 and 0 < _new_d < _old_d:
-                    _rescale_shot_timeline(new_shot, _old_d, _new_d)
+                    # 2026-11-22（S14 M04）：缩时只许削**空余**时长。低于基线镜头的
+                    # 内容下限（与正式时间轴同一算法）= 加速朗读/动作换时长 ⇒ 拒收、
+                    # 保留基线，不缩放时间轴去迁就。
+                    from step01_script_gen.timecode import shot_content_floor
+                    try:
+                        _fps_r = float(script.get("fps", 24) or 24)
+                    except (TypeError, ValueError, AttributeError):
+                        _fps_r = 24.0
+                    _floor = float(shot_content_floor(target, _fps_r))
+                    if _new_d < _floor - 0.011:
+                        _reject("duration_below_content_floor",
+                                f"shot {sid}: duration {_new_d:g}s 低于内容下限 "
+                                f"{_floor:.2f}s（发声/动作时段/关键帧）", sid=sid,
+                                field_path="duration", allowed=allowed,
+                                details={"floor_sec": round(_floor, 3),
+                                         "requested_sec": _new_d})
+                        return
+                    # 新镜长 ≥ 内容下限 ⇒ 动作时段与关键帧都装得下：只削尾部空余，
+                    # **不**等比缩放（缩放会把装得下的动作也加速）。
+                    new_shot["duration_sec"] = round(float(_new_d), 2)
                     _mrt._logger.info(
-                        "[REPAIR] shot %s: duration %.2f->%.2f，镜内时间轴按 %.3f 等比缩放"
-                        % (sid, _old_d, _new_d, _new_d / _old_d))
+                        "[REPAIR] shot %s: duration %.2f->%.2f（内容下限 %.2f；镜内时段不变）"
+                        % (sid, _old_d, _new_d, _floor))
         # M03：`code` 由**结构化事实**判定，不解析 `_validate_replacement_shot`
         # 的原因文本（文本只用于展示）。
         #   ① 帧数与布局数不等 → 配对形状错误（可纠正）

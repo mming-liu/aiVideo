@@ -1359,31 +1359,44 @@ def _duration_budget_issues(script: dict) -> list[Issue]:
         # 但旧 Issue 没有 repair_targets、code 也不在 _REPAIR_CODE_FIELDS 里 ⇒ 授权
         # 面为空；模型一改 duration 就被整轮判越权（rejected_by_validation）。
         # 这里按「可压缩余量」挑镜，给**精确到镜**的授权，并写明目标秒数。
+        #
+        # 2026-11-22（S14 M04，ch2 94.62s）：余量必须相对**可证明的内容下限**
+        # （`timecode.shot_content_floor`：实际播出正文估时、闭合动作时段、关键帧时刻，
+        # 与正式时间轴同一算法），不是相对固定的最小镜长——旧写法把旁白 9s、台词 7.85s
+        # 的镜头授权压到 3s，正式时间轴随后又按发声撑回去（或缩放时间轴加速动作）。
+        # 只分配消除超额所需的秒数；余量合计不够时**不授权缩时**，明确报告差额。
+        from step01_script_gen.timecode import shot_content_floor
         try:
-            from step01_script_gen.timecode import MIN_SHOT_DURATION as _MIN_SHOT
-        except Exception:
-            _MIN_SHOT = 2.0
-        try:
-            _min_shot = float(_MIN_SHOT or 2.0)
+            _fps = float(script.get("fps", 24) or 24)
         except (TypeError, ValueError):
-            _min_shot = 2.0
+            _fps = 24.0
         _need = total - DURATION_MAX_SEC
-        _cands = sorted(
-            ((max(0.0, _d - _min_shot), str(_s.get("index")), _d)
-             for _s, _d in zip(shots, durations)),
-            key=lambda x: x[0], reverse=True)
-        _acc, _hints = 0.0, []
-        for _room, _sid, _d in _cands:
-            if _room <= 0:
-                continue
-            targets.append({"shot_id": _sid, "field_path": "duration"})
-            _hints.append("镜%s→≤%.1fs" % (_sid, max(_min_shot, _d - _room)))
-            _acc += _room
-            if _acc >= _need + 2.0:
-                break
-        if targets:
-            hint = ("；**修法（本轮已按镜授权 duration）**：下调下列镜头时长——代码会同步 "
-                    "duration_sec 并按比例缩放该镜 motion 时段与 kf 的 t_sec：" + "、".join(_hints))
+        _eps = 1.0 / max(_fps, 1.0)
+        _rows = []
+        for _s, _d in zip(shots, durations):
+            _floor = float(shot_content_floor(_s, _fps))
+            _rows.append((max(0.0, _d - _floor), str(_s.get("index")), _d, _floor))
+        _room_total = sum(_r[0] for _r in _rows if _r[0] > _eps)
+        if _room_total + 0.01 >= _need:
+            _left, _hints = _need, []
+            for _room, _sid, _d, _floor in sorted(_rows, key=lambda x: x[0], reverse=True):
+                if _left <= 0.005:
+                    break
+                if _room <= _eps:
+                    continue
+                _take = min(_room, _left)
+                targets.append({"shot_id": _sid, "field_path": "duration"})
+                _hints.append("镜%s %.2fs→%.2fs（内容下限 %.2fs）"
+                              % (_sid, _d, _d - _take, _floor))
+                _left -= _take
+            hint = ("；**修法（本轮已按镜授权 duration）**：只下调下列镜头的空余时长，"
+                    "不得低于括号里的内容下限（实际发声/动作时段/关键帧）——代码会同步 "
+                    "duration_sec，镜内 motion 时段与 kf 的 t_sec 保持不变；低于下限的"
+                    "答卷整镜拒收：" + "、".join(_hints))
+        else:
+            hint = ("；各镜已贴近内容下限（实际发声/动作时段/关键帧），可安全省出的时长合计 "
+                    "%.2fs，仍差 %.2fs——**不授权缩短镜长**；需在原文与改编权限内精简"
+                    "或合并镜头内容" % (_room_total, _need - _room_total))
     else:
         msg = (f"正片总时长 {total:.1f}s < {DURATION_MIN_SEC:g}s，低于 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 验收区间；"
                "需补充有效镜头或重新分配时长")

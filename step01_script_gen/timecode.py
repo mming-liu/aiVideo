@@ -554,6 +554,26 @@ def _shot_content_duration(shot: dict, fps: float, shot_cap: float) -> float:
     return duration
 
 
+def shot_content_floor(shot: dict, fps=None) -> float:
+    """单镜**可证明的时长下限**：不含当前声明时长的 `_shot_content_duration`.
+
+    与正式时间轴同一算法（实际播出正文的语速估时、闭合动作时段终点、关键帧时刻、
+    `MIN_SHOT_DURATION`，按帧对齐），只是不把当前 `duration`/`duration_sec` 当下限。
+    缩时授权与拒收都读这里，不另立估时口径。超单镜上限时**不夹取**——那是结构问题，
+    由 `shot_content_over_cap` 报告。
+    """
+    if not isinstance(shot, dict):
+        return float(MIN_SHOT_DURATION)
+    _bare = {k: v for k, v in shot.items() if k not in ("duration", "duration_sec")}
+    try:
+        _fps = float(fps or 24.0)
+    except (TypeError, ValueError):
+        _fps = 24.0
+    if _fps <= 0:
+        _fps = 24.0
+    return _shot_content_duration(_bare, _fps, float("inf"))
+
+
 def project_post_split_metrics(shots: list, *, fps=None, shot_cap=None) -> dict:
     """预估 timecode 拆镜后的有效镜数/时长，不修改输入、不写日志.
 
