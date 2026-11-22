@@ -62,6 +62,11 @@ def _hook_max_sends() -> int:
         return max(0, int(_mrt.HOOK_MAX_SENDS))
 
 
+#: 视线/指向动词：分句里出现在人名之前时，该人名是动作对象，不是在场证据
+#: （只收「X向」方向性动词；「看着某人走来」里对象通常在场，不在此列）
+_GAZE_VERBS = ("射向", "看向", "望向", "瞥向", "指向", "转向", "扫向", "投向", "瞪向")
+
+
 def _sync_missing_onscreen_layout_entries(script: dict) -> int:
     """确定性补齐 ff/lf/kfs 中「描述明确在场、布局列表漏登记」的角色条目.
 
@@ -87,6 +92,12 @@ def _sync_missing_onscreen_layout_entries(script: dict) -> int:
             if any(neg in prefix for neg in ("不见", "没有", "未出现", "空无一人",
                                              "离开", "消失", "并未", "不在",
                                              "画外", "幕后")):
+                continue
+            # 2026-11-22（S14 M04 ch2 镜15）：视线/指向动作的**宾语**不是在场证据——
+            # 「目光射向画中偏左的刘旭」在近景里只说明看向谁；补成在场条目会凭空多出
+            # 一个人并借用别人的座位。同一分句内，人名前出现视线/指向动词即跳过。
+            _clause = _re.split(r"[，。；,;]", prefix)[-1]
+            if any(v in _clause for v in _GAZE_VERBS):
                 continue
             return True
         return False
@@ -114,7 +125,10 @@ def _sync_missing_onscreen_layout_entries(script: dict) -> int:
         if not support:
             for cand in (seed or {}).get("_all_entries") or []:
                 if isinstance(cand, dict) and cand.get("support"):
-                    support = _copy.deepcopy(cand["support"])
+                    # 借同镜他人的支撑物时只沿用**物体**（id/kind，同一条船/同一张桌），
+                    # 不沿用他的**座位面**——否则凭空占了别人的位置（S14 M04 ch2 镜15）。
+                    support = {k: v for k, v in _copy.deepcopy(cand["support"]).items()
+                               if k != "surface"}
                     break
         return {
             "name": name,

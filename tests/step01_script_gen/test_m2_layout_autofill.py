@@ -53,3 +53,22 @@ def test_negation_context_is_not_filled():
     before = len(script["shots"][0]["frame_layouts"]["ff"])
     _sync_missing_onscreen_layout_entries(script)
     assert len(script["shots"][0]["frame_layouts"]["ff"]) == before
+
+
+def test_gaze_object_is_not_autofilled_and_seat_not_borrowed():
+    """S14 M04：视线/指向的宾语不是在场证据；补齐条目不借用别人的座位."""
+    from step01_script_gen.main import _sync_missing_onscreen_layout_entries
+    seat = {"id": "t1", "kind": "方桌", "surface": "桌左侧长凳"}
+    script = {"characters": [{"identifier": "阿甲"}, {"identifier": "阿乙"}],
+              "shots": [{"index": 1, "ff_desc": "阿甲坐于画左，目光射向画中偏左的阿乙",
+                         "lf_desc": "阿甲右手指向画右，阿乙在画右起身", "keyframes": [],
+                         "frame_layouts": {
+                             "ff": [{"name": "阿甲", "on_screen": True, "position": "画左",
+                                     "support": seat}],
+                             "lf": [{"name": "阿甲", "on_screen": True, "position": "画左",
+                                     "support": seat}], "kfs": []}}]}
+    _sync_missing_onscreen_layout_entries(script)
+    lay = script["shots"][0]["frame_layouts"]
+    assert [e["name"] for e in lay["ff"]] == ["阿甲"]
+    added = [e for e in lay["lf"] if e["name"] == "阿乙"]
+    assert added and added[0]["support"] == {"id": "t1", "kind": "方桌"}
