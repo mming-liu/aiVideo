@@ -8,6 +8,9 @@
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from shared import content_verification as cv
@@ -15,7 +18,10 @@ from shared import presentation_contract as pc
 from step01_script_gen import outline as o
 from step01_script_gen import plan_content_repair as pcr
 
-_SAMPLE_TOKENS = ("杨旭", "听香", "张十三", "青州", "杀青州", "锦衣夜行")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _content_binding import ALL_TERMS  # noqa: E402  作品词单点清单，本文件不重写
+
+_SAMPLE_TOKENS = ALL_TERMS
 
 
 def _partial_fact_record():

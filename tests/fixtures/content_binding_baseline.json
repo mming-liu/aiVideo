@@ -11,6 +11,7 @@
     "enhancements/test_tts_candidate_cli.py": 8,
     "enhancements/test_tts_media_inputs.py": 8,
     "enhancements/test_tts_providers.py": 7,
+    "fixtures/lightweight_voice_edits/cmp_d6563b3.json": 9,
     "fixtures/video_prompt_benchmark.json": 194,
     "integration/test_chain2_audio_merge.py": 4,
     "integration/test_chain5_artifact_protection.py": 4,
@@ -238,6 +239,7 @@
     "tts/test_voice_registry_contract.py": 17
   },
   "historical": {
+    "fixtures/lightweight_voice_edits/cmp_d6563b3.json": "2026-11-22 S14 四轮对照的外部专项回放清单（tools/replay_lightweight_voice_edits.py 读取 .tmp/s14/cmp，SHA-1 钉定），不被 pytest 收集，不是基础测试依赖",
     "fixtures/video_prompt_benchmark.json": "真实提示词基准语料：用于对比组装效果，属测量数据而非判据输入",
     "step01_script_gen/fixtures/audit_blocked_20260925_prop_release.json": "2026-09-25 道具脱手的审计阻塞现场快照，历史事故回放数据",
     "step01_script_gen/fixtures/audit_frozen_layout_delete_20261003.json": "2026-10-03 冻结布局删除现场，§14 P 包归因回归数据",

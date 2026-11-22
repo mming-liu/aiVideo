@@ -365,7 +365,7 @@ def test_assembly_length_message_carries_counts_and_remediation():
     _target = _complete_shot(5)
     _target["frame_layouts"]["kfs"] = _target["frame_layouts"]["kfs"][:2]
     _add = [{"frame": {"t_sec": 5.5, "stage": "exit", "desc": "收尾动作"},
-             "layout": [{"name": "张十三", "on_screen": True, "pose": "收尾"}]}]
+             "layout": [{"name": "丙", "on_screen": True, "pose": "收尾"}]}]
     _new, _err = _m._assemble_keyframe_additions(_target, _add)
     assert _new is None and _err, _err
     assert "4 项" in _err and "3 项" in _err, _err

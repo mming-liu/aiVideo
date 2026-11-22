@@ -13,12 +13,17 @@
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from step01_script_gen import outline as o
 
-#: 测试素材专属特征（人名/地名/情节/编号）：不是生产提示可用的示例。
-_SAMPLE_TOKENS = ("杨旭", "听香", "张十三", "青州", "锦衣夜行", "杀青州",
-                  "例如 d09", "88 字", "心理决断", "当面应对", "动身离开",
-                  "第 2 轮", "第 16/17", "r3/r4")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _content_binding import ALL_TERMS  # noqa: E402  作品词单点清单，本文件不重写
+
+#: 测试素材专属特征（作品词 + 现场痕迹/情节模板）：不是生产提示可用的示例。
+_SAMPLE_TOKENS = ALL_TERMS + ("例如 d09", "88 字", "心理决断", "当面应对", "动身离开",
+                              "第 2 轮", "第 16/17", "r3/r4")
 
 _VIEW_PROBLEMS = [
     {"code": "verify_fact_unsupported", "uid": "f01", "reason": "画面没有完整表达"},

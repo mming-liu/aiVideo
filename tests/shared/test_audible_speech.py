@@ -25,7 +25,7 @@ def _unit(kind: str, source_index: int, role: str = "", text: str = "") -> objec
 
 
 def test_threat_without_unit_is_warned():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁；音效=衣料摩擦",
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁；音效=衣料摩擦",
                            motion="他低声厉色开口，目光扫向岸边"))
     warnings = missing_audible_speech_units(
         script, units=[], voice_unit_records=[], audio_mode="tts_mix")
@@ -35,17 +35,17 @@ def test_threat_without_unit_is_warned():
 
 
 def test_dialogue_unit_on_shot_clears_warning():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁",
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁",
                            motion="他低声厉色开口"))
     warnings = missing_audible_speech_units(
-        script, units=[_unit("dialogue", 11, text="你若不想吃官司，便听我吩咐")],
+        script, units=[_unit("dialogue", 11, text="你若不想惹上麻烦，便照我说的做")],
         voice_unit_records=[], audio_mode="tts_mix")
     assert warnings == []
 
 
 def test_plan_record_but_no_actual_unit_is_warned():
     """旧实现的漏报：计划记录覆盖该镜，但最终没有 SpeechUnit."""
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁"))
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁"))
     warnings = missing_audible_speech_units(
         script, units=[],
         voice_unit_records=[{"kind": "dialogue", "index": 1,
@@ -55,7 +55,7 @@ def test_plan_record_but_no_actual_unit_is_warned():
 
 
 def test_only_unrelated_narration_does_not_cover_dialogue():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁"))
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁"))
     warnings = missing_audible_speech_units(
         script, units=[_unit("narration", 4, role="", text="无关旁白")],
         voice_unit_records=[{"kind": "narration", "index": 4,
@@ -65,10 +65,10 @@ def test_only_unrelated_narration_does_not_cover_dialogue():
 
 
 def test_wrong_role_on_same_shot_is_warned():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁",
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁",
                            motion="他低声厉色开口"))
-    script["characters"] = [{"name": "张十三", "identifier": "张十三"}, {"name": "听香", "identifier": "听香"}]
-    script["shots"][0]["narration_segment"] = "听香道：你若不想吃官司，便听我吩咐"
+    script["characters"] = [{"name": "甲", "identifier": "甲"}, {"name": "乙", "identifier": "乙"}]
+    script["shots"][0]["narration_segment"] = "乙道：你若不想惹上麻烦，便照我说的做"
     warnings = missing_audible_speech_units(
         script, units=[_unit("dialogue", 11, role="voice-A", text="无关台词")],
         voice_unit_records=[], audio_mode="tts_mix")
@@ -76,10 +76,10 @@ def test_wrong_role_on_same_shot_is_warned():
 
 
 def test_story_role_is_read_from_script_not_provider_speaker():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁"))
-    script["characters"] = [{"name": "张十三", "identifier": "张十三"}, {"name": "听香", "identifier": "听香"}]
-    script["shots"][0]["narration_segment"] = "张十三道：你若不想吃官司，便听我吩咐"
-    unit = _unit("dialogue", 11, role="", text="你若不想吃官司，便听我吩咐")
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁"))
+    script["characters"] = [{"name": "甲", "identifier": "甲"}, {"name": "乙", "identifier": "乙"}]
+    script["shots"][0]["narration_segment"] = "甲道：你若不想惹上麻烦，便照我说的做"
+    unit = _unit("dialogue", 11, role="", text="你若不想惹上麻烦，便照我说的做")
     unit.speaker = "voice-A"
     warnings = missing_audible_speech_units(
         script, units=[unit], voice_unit_records=[], audio_mode="tts_mix")
@@ -109,16 +109,16 @@ def test_readback_failure_is_not_reported_as_missing_dialogue(monkeypatch):
 
 
 def test_structured_dialogue_contract_can_be_hard():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁", lines=[1]))
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁", lines=[1]))
     warnings = missing_audible_speech_units(
         script, units=[], voice_unit_records=[], audio_mode="tts_mix")
     assert warnings and warnings[0]["severity"] == "hard"
 
 
 def test_cross_shot_narration_covers_both_shots():
-    script = _script(_shot(4, audio="人声=张十三内心旁白（压低嗓音，不张口）"))
+    script = _script(_shot(4, audio="人声=甲内心旁白（压低嗓音，不张口）"))
     warnings = missing_audible_speech_units(
-        script, units=[_unit("narration", 2, role="张十三", text="N2")],
+        script, units=[_unit("narration", 2, role="甲", text="N2")],
         voice_unit_records=[{"kind": "narration", "index": 2,
                              "shot_indexes": ["3", "4"]}],
         audio_mode="tts_mix")
@@ -133,14 +133,14 @@ def test_environment_only_does_not_warn():
 
 
 def test_native_mode_does_not_warn():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁",
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁",
                            motion="他低声厉色开口"))
     assert missing_audible_speech_units(
         script, units=[], voice_unit_records=[], audio_mode="native") == []
 
 
 def test_preflight_consumes_same_warning():
-    script = _script(_shot(11, audio="人声=张十三压低嗓音厉色威胁",
+    script = _script(_shot(11, audio="人声=甲压低嗓音厉色威胁",
                            motion="他低声厉色开口"))
     issues = preflight_run(script, include_audible_speech=True,
                            speech_units=[], audio_mode="tts_mix")

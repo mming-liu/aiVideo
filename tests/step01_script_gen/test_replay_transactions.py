@@ -143,7 +143,7 @@ def _issue9():
 
 def _fixed4():
     s = _complete_shot(4)
-    s["ff_desc"] = "杨旭双目圆睁仰卧船头"
+    s["ff_desc"] = "甲双目圆睁仰卧船头"
     return s
 
 
@@ -180,7 +180,7 @@ def test_rejected_patch_feeds_the_next_request(monkeypatch):
     """第一轮：shot_4 修好但引入新 blocking（肇事目标）、shot_9 仍未解决
     ⇒ 回退 shot_4、带反馈重试；第二次请求必须携带真实拒收反馈。"""
     bad4 = _fixed4()
-    bad4["ff_desc"] = "杨旭双目圆睁仰卧船头触发新阻塞"
+    bad4["ff_desc"] = "甲双目圆睁仰卧船头触发新阻塞"
     still9 = _complete_shot(9)
     still9["prompt"] = "中景，" + MARKER
     h = _Harness(monkeypatch,
@@ -231,7 +231,7 @@ def test_intermediate_keyframe_insertion_is_not_rejected(monkeypatch):
                        {"desc": "中间补帧：灯盏脱手", "t_sec": 2.0, "stage": "approach"},
                        kfs[2]]
     s4["frame_layouts"]["kfs"] = [lay[0],
-                                  [{"name": "张十三", "on_screen": True,
+                                  [{"name": "丙", "on_screen": True,
                                     "position": "画右", "pose": "松手",
                                     "gaze_target": "画左", "props": []}],
                                   lay[2]]
@@ -252,7 +252,7 @@ def test_intermediate_keyframe_insertion_is_not_rejected(monkeypatch):
 
 def test_unresolved_target_keeps_the_baseline(monkeypatch):
     s4 = _complete_shot(4)                   # 改了，但没有「圆睁」⇒ 未解决
-    s4["ff_desc"] = "杨旭仰卧船头"
+    s4["ff_desc"] = "甲仰卧船头"
     h = _Harness(monkeypatch,
                  responses=[{"shot_replacements": [{"shot_id": "4", "shot": s4}],
                              "hook_replacement": None}],
