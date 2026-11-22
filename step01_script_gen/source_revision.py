@@ -82,8 +82,17 @@ def admission_problems(view):
     if FIELD not in (view.get('plan_basis') or {}):
         return []
     ctx=context(view)
-    if (not isinstance(ctx,dict) or set(ctx)!={'version','novel_digest','base_digest',
-                                             'targets','baseline_facts','baseline_core'}
+    # 2026-11-22（M06）：`core_update_trace` 是 apply_response 在核心摘要获授权修改时写入的
+    # 留痕（{字段: 依赖原因}）。旧判据要求键集合**恰好**六项，于是任何一次获授权的核心修改
+    # 都会在这里被判「上下文形状非法」——授权路径从未能走通。留痕为可选键，形状单独校验。
+    _trace=ctx.get('core_update_trace') if isinstance(ctx,dict) else None
+    if (not isinstance(ctx,dict)
+            or set(ctx)-{'core_update_trace'}!={'version','novel_digest','base_digest',
+                                                'targets','baseline_facts','baseline_core'}
+            or ('core_update_trace' in ctx
+                and (not isinstance(_trace,dict) or not _trace
+                     or any(k not in CORE_FIELDS or not isinstance(v,str) or not v.strip()
+                            for k,v in _trace.items())))
             or ctx.get('version') not in SUPPORTED_VERSIONS
             or any(not isinstance(ctx.get(k),str) or not re.fullmatch(r'[0-9a-f]{64}',ctx[k])
                    for k in ('novel_digest','base_digest'))
@@ -247,6 +256,10 @@ def apply_response(plan, response, *, novel_text, novel_digest,
             or '｜' in r['claim'] or '｜' in r['evidence'] or r['evidence'] not in novel_text for r in rows)
             or [r['fact_uid'] for r in rows]!=targets):
         return None,[problem('source_revision_response','修正表必须完整同序覆盖授权身份、主张非空且证据逐字来自原文')]
+    # 2026-11-22（M06）：与基线逐字相同的核心字段是「回显」不是修改——S11 实测模型常把未改的
+    # causal_chain 原样带回。只把真正变化的字段交授权与留痕，回显不算越权、也不写进 trace。
+    response=dict(response)
+    response['core_updates']={k:v for k,v in response['core_updates'].items() if plan.get(k)!=v}
     _core_bad=core_update_problems(response['core_updates'],allowed_core_updates)
     if _core_bad:
         return None,_core_bad

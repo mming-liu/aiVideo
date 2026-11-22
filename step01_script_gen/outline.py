@@ -4174,6 +4174,38 @@ def revise_plan_full(plan, problems, novel_text, *, model=None, base_prompt=None
     return new_plan, "", _call_id
 
 
+def _source_core_authorization(plan, problems) -> dict:
+    """来源修正通道的核心摘要授权 ``{field: 依赖原因}``（`revision_route.core_update_problems` 消费）.
+
+    1. 问题记录显式给出 ``core_dependency`` + ``core_fields`` 时按记录授权（原有协议）。
+    2. 2026-11-22（M06 / S11 core_field_frozen ×4）：来源修正的提示要求「核心摘要含同一无来源
+       推断时在 core_updates 同步纠正」，来源保留核验也明确要求「不能在关联事件或其他摘要留下
+       同一无来源推断」；但全仓没有任何生产者写 ``core_dependency``，授权表恒为空，于是每一份
+       按提示同步了 main_events / climax 的合法响应都被判 ``core_field_frozen``，连续 5 轮耗尽额度。
+       这里把通道本身的依赖写成显式授权：仅当计划带当前有效的来源负面结论（与
+       ``source_revision.eligible_targets`` 同一判据）时，对核心摘要字段放行，原因写明授权事实，
+       并由 ``core_update_trace`` 留痕；改动是否只去掉无来源部分，仍由独立的来源保留核验判定。
+       其他通道不经过这里，核心摘要冻结规则不变。
+    """
+    from step01_script_gen import source_revision as _sr
+    allowed: dict = {}
+    for _p in (problems or []):
+        if not isinstance(_p, dict):
+            continue
+        _dep = str(_p.get("core_dependency") or "").strip()
+        if not _dep:
+            continue
+        for _f in (_p.get("core_fields") or []):
+            allowed[str(_f)] = _dep
+    targets = _sr.eligible_targets(plan)
+    if targets:
+        reason = ("来源修正：授权事实 %s 的无来源推断可能同样写在核心摘要里，须同步纠正；"
+                  "是否只去掉无来源部分由独立来源保留核验判定" % "、".join(targets))
+        for _f in _sr.CORE_FIELDS:
+            allowed.setdefault(_f, reason)
+    return allowed
+
+
 def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str, model=None,
                      base_prompt=None, system_prompt=None, verification=None, verify_axes=None,
                      target_fact_uids=None, allowed_repair_actions=None) -> dict:
@@ -4253,15 +4285,7 @@ def revise_plan_once(plan, problems, budget, rejections=None, *, novel_text: str
                     'evidence':{'applied':False,'no_model_call':True,
                                 'route':'source_basis_revision',
                                 'route_decision':_route_dec}}
-        _allowed_core = {}
-        for _p in (problems or []):
-            if not isinstance(_p, dict):
-                continue
-            _dep = str(_p.get("core_dependency") or "").strip()
-            if not _dep:
-                continue
-            for _f in (_p.get("core_fields") or []):
-                _allowed_core[str(_f)] = _dep
+        _allowed_core = _source_core_authorization(plan, problems)
         _src_res = _source_revision.revise_with_service(
             plan, problems, novel_text=novel_text, service=create_service(),
             model=model, timeout_sec=_timeout, deadline_monotonic=_deadline_at,
