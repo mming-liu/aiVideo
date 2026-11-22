@@ -174,7 +174,9 @@ def test_budget_rejection_feeds_back_per_line_costs():
     svc = _Svc([bad, _answer()])
     res = lw.generate_lightweight_outline_result(long_text, service=svc)
     assert len(svc.prompts) == 2
-    assert "上一版的声音估时" in svc.prompts[1] and "旁白" in svc.prompts[1]
+    # 总量超限走**减量修订**：给需减秒数、必保留/可省清单，并要求由模型选删减
+    assert "减量修订" in svc.prompts[1] and "需再减" in svc.prompts[1]
+    assert "旁白" in svc.prompts[1]
     assert "声音（台词 + 旁白）合计不超过约" in svc.prompts[0]
     assert res["revision"]["calls"] == 2
 
@@ -286,3 +288,144 @@ def test_hybrid_presentation_is_rejected_before_send(monkeypatch):
     with pytest.raises(ValueError):
         ce.extract_all_concurrent(NOVEL, None, None, enable_characters=False,
                                   enable_scene_objects=False)
+
+
+# ---------------------------------------------------------------------------
+# 定向修订（2026-11-22，Codex 计划第 1 步）：只替换问题句 / 减量由模型选、代码复算
+# ---------------------------------------------------------------------------
+LONG_C = ("你若执意要走出了事可怨不得我，这河水深得很，夜里行船最是危险，"
+          "我这条船家也担待不起。")
+SHORT_C = "你若执意要走，出了事可怨不得我。"
+NOVEL_C = ("黄昏时分，阿青提着灯笼走进渡口。\n"
+           "老船夫摆手道：“" + LONG_C + "”\n"
+           "老船夫又低声道：“" + SHORT_C + "”\n"
+           "阿青摇头。\n")
+
+
+def _answer_c(line):
+    """3 个事件、1 句台词（可被替换）、1 条声音承载的事实."""
+    def _b(text, src, kind="none", vt="", sp=""):
+        return {"text": text, "purpose": "推进", "source": src, "voice_kind": kind,
+                "voice_text": vt, "speaker": sp}
+    return {
+        "characters": ["阿青", "老船夫"], "emotional_arc": "迟疑→坚持",
+        "climax": "老船夫劝阻", "end_hook": "阿青摇头", "omittable": [],
+        "events": [
+            {"summary": "阿青夜到渡口", "beats": [
+                _b("阿青提着灯笼站在渡口", "黄昏时分，阿青提着灯笼走进渡口。"),
+                _b("老船夫摆手劝阻", "老船夫摆手道", "dialogue", line, "老船夫")]},
+            {"summary": "老船夫说明河险", "beats": [
+                _b("老船夫指向黑沉沉的河面", "老船夫又低声道")]},
+            {"summary": "阿青仍要过河", "beats": [
+                _b("阿青摇头", "阿青摇头。")]},
+        ],
+        "facts": [{"claim": "老船夫劝阿青不要连夜走", "evidence": line,
+                   "event": 1, "beat": 2, "carrier": "voice"}],
+    }
+
+
+def test_scoped_revision_replaces_only_the_unplayable_line():
+    """首答只差一句不能播 → 第二答只换这一句，其余逐字保留，且提示里不再要整份重答."""
+    from step01_script_gen.plan_feasibility import check_dialogue_representable
+    est = check_dialogue_representable(LONG_C)["est_sec"]
+    assert est > 12.0
+    svc = _Svc([_answer_c(LONG_C), _answer_c(SHORT_C)])
+    res = lw.generate_lightweight_outline_result(NOVEL_C, service=svc)
+    assert res["executable"] is True, res["failure"]
+    assert res["revision"]["scope"] == "replace"
+    assert len(svc.prompts) == 2
+    p2 = svc.prompts[1]
+    assert "定点替换" in p2 and "只差 1 句" in p2
+    assert "重新给出完整回答" not in p2
+    # 反馈读数与拒收记录同一判据入口（对白含说话人前缀余量），不再出现 11.0s 当判据
+    assert "估时 %.2fs" % est in p2
+    assert "%.1fs 台词" % est in p2
+    assert "「%s」" % SHORT_C in p2
+    assert res["plan"]["dialogue_lines"] == [SHORT_C]
+
+
+def test_scoped_revision_rejects_out_of_scope_rewrite():
+    """第二答顺手改了未点名的画面/声音 → 范围守卫拒收，不静默采纳另一份计划."""
+    bad = _answer_c(SHORT_C)
+    bad["events"][2]["beats"][0]["text"] = "阿青点头"
+    svc = _Svc([_answer_c(LONG_C), bad])
+    res = lw.generate_lightweight_outline_result(NOVEL_C, service=svc)
+    assert res["executable"] is False
+    assert res["revision"]["scope"] == "replace"
+    codes = {str(p.get("code") or "") for p in res["failure"]["problems"]}
+    assert "revision_scope_violation" in codes
+    assert len(svc.prompts) == 2          # 不增加调用轮数
+
+
+NOVEL_T = ("黄昏时分，阿青提着灯笼走进渡口。\n"
+           "老船夫问道：“这么晚了，你要去哪里，莫不是要连夜过河去东岸。”\n"
+           "阿青答道：“姐姐病重，我要连夜过河送药，不能再等天亮了。”\n"
+           "老船夫叹道：“河上风大浪急，你一个人撑船过河，我实在放心不下。”\n"
+           "阿青摇头。\n")
+T_LINES = ["这么晚了，你要去哪里，莫不是要连夜过河去东岸。",
+           "姐姐病重，我要连夜过河送药，不能再等天亮了。",
+           "河上风大浪急，你一个人撑船过河，我实在放心不下。"]
+
+
+def _answer_t(*, drop_third=False):
+    """3 句可单镜表示的台词（合计超上限），第 1 句被事实引用、第 3 句可省."""
+    def _b(text, src, kind="none", vt="", sp=""):
+        return {"text": text, "purpose": "推进", "source": src, "voice_kind": kind,
+                "voice_text": vt, "speaker": sp}
+    _third = (_b("老船夫伸手拦住阿青", "老船夫叹道")
+              if drop_third else
+              _b("老船夫伸手拦住阿青", "老船夫叹道", "dialogue", T_LINES[2], "老船夫"))
+    return {
+        "characters": ["阿青", "老船夫"], "emotional_arc": "焦急", "climax": "老船夫劝阻",
+        "end_hook": "阿青摇头", "omittable": ["老船夫的第三句劝说"],
+        "events": [
+            {"summary": "阿青夜到渡口", "beats": [
+                _b("阿青提着灯笼站在渡口", "黄昏时分，阿青提着灯笼走进渡口。"),
+                _b("老船夫开口询问", "老船夫问道", "dialogue", T_LINES[0], "老船夫")]},
+            {"summary": "阿青说明来意", "beats": [
+                _b("阿青放下药箱回答", "阿青答道", "dialogue", T_LINES[1], "阿青"),
+                _b("老船夫打量药箱", "阿青答道")]},
+            {"summary": "老船夫仍不放心", "beats": [
+                _third,
+                _b("阿青握紧船桨", "阿青摇头。")]},
+        ],
+        "facts": [
+            {"claim": "老船夫问阿青是否要连夜过河", "evidence": T_LINES[0],
+             "event": 1, "beat": 2, "carrier": "voice"},
+            {"claim": "阿青握紧船桨准备连夜过河", "evidence": "阿青摇头。",
+             "event": 3, "beat": 2, "carrier": "visual"},
+        ],
+    }
+
+
+def test_total_over_budget_trim_keeps_must_keep_voice(monkeypatch):
+    """全章超额 → 给「需再减多少秒」和必保留/可省清单，删掉可省声音后复算通过."""
+    monkeypatch.setattr("step01_script_gen.validation._REDGUO_DURATION_MAX", 15.0)
+    monkeypatch.setattr("step01_script_gen.validation._REDGUO_DURATION_MIN", 5.0)
+    svc = _Svc([_answer_t(), _answer_t(drop_third=True)])
+    res = lw.generate_lightweight_outline_result(NOVEL_T, service=svc)
+    assert res["revision"]["scope"] == "trim", res.get("failure")
+    assert res["executable"] is True, res["failure"]
+    p2 = svc.prompts[1]
+    assert "减量修订" in p2 and "需再减" in p2
+    assert "必保留的声音" in p2 and "可省的声音" in p2
+    assert "改用画面演出" not in p2          # 不再把「改用画面」当已表达
+    assert "事实的承载方式被改" not in p2
+    assert len(res["plan"]["dialogue_lines"]) == 2
+    assert res["plan"]["dialogue_lines"][0] == T_LINES[0]
+
+
+def test_trim_scope_guard_rejects_deleting_fact_voice():
+    """必保留声音被删成画面 → 范围守卫按「不得把改用画面当成已表达」拒收."""
+    flagged = lw._flagged_beats(_answer_t(), [])
+    problems = lw._revision_scope_problems(
+        _answer_t(), _answer_t(drop_third=True), "trim", flagged)
+    # 第 3 句未被事实引用：删它合法
+    assert not any("必保留" in str(p.get("reason")) for p in problems)
+    bad = _answer_t(drop_third=True)
+    bad["events"][0]["beats"][1]["voice_kind"] = "none"
+    bad["events"][0]["beats"][1]["voice_text"] = ""
+    bad["facts"][0]["carrier"] = "visual"
+    problems = lw._revision_scope_problems(_answer_t(), bad, "trim", flagged)
+    reasons = " ".join(str(p.get("reason") or "") for p in problems)
+    assert "必保留" in reasons and "承载方式" in reasons
