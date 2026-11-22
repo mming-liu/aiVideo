@@ -217,7 +217,7 @@ step01 asset_extractor.py（LLM 提取，schema: SCENE_ASSETS_SCHEMA / PROPS_SCH
 - 使用 `shared.chapter_reader` 提取完整章节
 
 ## 关键参考文件
-- `skill_spy.txt` — Prompt 工程参考
+- `docs/archive/skill_spy.txt` — Prompt 工程参考（2026-11-21 自根目录归档）
 - `shared/style_prefix.py` — 风格前缀/改写函数（v6.60.1 自根目录迁入；根目录留 deprecated shim）
 - `step01_script_gen/prompts.py` — 包含详细的分镜生成 prompt
 
