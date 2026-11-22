@@ -1,0 +1,39 @@
+{
+  "source_file": "code_d6563b34fb76/锦衣夜行_77119小说.txt",
+  "source_sha1": "4d061c7edc995f647a785f0b4e53e688f3f5b31c",
+  "cases": [
+    {
+      "chapter": 1,
+      "id": "c587529df077a4c16",
+      "sha1": "f04ebf1db243c10d28596674c42358119a45088d",
+      "before": 69.84,
+      "after": 57.65,
+      "edits": {
+        "N1": "头戴平定四方巾的年轻公子坐在船头怡然吹箫，在他身旁还有一位撑着油纸伞的美人儿",
+        "D6": "只说少爷是被人所刺，谁会信你？这场官司打到官府里，你便休想脱身了。"
+      },
+      "rejected": {
+        "id": "c6cf92ea87b9f42b2",
+        "sha1": "b12321f9249ce293d29d192ac8749444fd48c90f",
+        "body": "runs/cmp_ch1_lightweight/output/锦衣夜行/part_01_杀青州/chapter_001/step01_call_bodies/c6cf92ea87b9f42b2.txt"
+      },
+      "body": "runs/cmp_ch1_lightweight/output/锦衣夜行/part_01_杀青州/chapter_001/step01_call_bodies/c587529df077a4c16.txt"
+    },
+    {
+      "chapter": 2,
+      "id": "c543dbd68e19b4872",
+      "sha1": "2e328859e798fac7eb84e9f94edc1382f6927bad",
+      "before": 109.98,
+      "after": 71.45,
+      "edits": {
+        "D2": "把佥事大人能够动用的全部财力、物力和人脉都用上了，这才把杨旭扶持起来。",
+        "N1": "",
+        "D4": "",
+        "D5": "",
+        "D6": "",
+        "D8": ""
+      },
+      "body": "runs/cmp_ch2_lightweight/output/锦衣夜行/part_01_杀青州/chapter_002/step01_call_bodies/c543dbd68e19b4872.txt"
+    }
+  ]
+}

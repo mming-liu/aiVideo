@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""轻量规划（STEP01_PLAN_MODE=lightweight）离线验收：一进一出、重抽一次、失败不下发.
+"""轻量规划离线验收：原稿、定点声音修订、拒收及生成前放行.
 
 匿名最小情节 + 假大纲服务；不读 `.tmp` / `output`，不发真实请求。
 """
@@ -13,6 +13,7 @@ import pytest
 from _text_gen.models import TextGenerationResult
 from step01_script_gen import concurrent_extract as ce
 from step01_script_gen import lightweight_plan as lw
+from step01_script_gen import lightweight_voice_repair as vr
 from step01_script_gen.outline import outline_to_anchor, plan_acceptance_problems
 from step01_script_gen.plan_feasibility import (check_event_contract,
                                                 check_plan_before_generation,
@@ -156,36 +157,87 @@ def test_success_is_one_request_and_consumable(tmp_path):
     assert res2["executable"] and res2["source"] == "cache" and svc2.schemas == []
 
 
-def test_one_retry_after_invalid_content():
+def test_source_error_without_a_local_voice_fix_stops():
     bad = _answer()
     bad["events"][0]["beats"][1]["voice_text"] = "原文里没有这句话"
     svc = _Svc([bad, _answer()])
     res = _gen(svc)
-    assert res["executable"] is True
-    assert svc.schemas == ["lightweight_outline", "lightweight_outline"]
-    assert res["revision"]["calls"] == 2
+    assert not res["executable"]
+    assert svc.schemas == ["lightweight_outline"]
 
 
-def test_budget_rejection_feeds_back_per_line_costs():
-    long_text = NOVEL * 6                       # 同一部原文重复：逐字仍成立
-    bad = _answer()
-    bad["events"][0]["beats"][0].update(voice_kind="narration",
-                                        voice_text=long_text.replace("\n", "")[:400])
-    svc = _Svc([bad, _answer()])
-    res = lw.generate_lightweight_outline_result(long_text, service=svc)
-    assert len(svc.prompts) == 2
-    assert "上一版的声音估时" in svc.prompts[1] and "旁白" in svc.prompts[1]
-    assert "声音（台词 + 旁白）合计不超过约" in svc.prompts[0]
-    assert res["revision"]["calls"] == 2
+def test_only_long_voice_is_replaced_after_illegal_redraw():
+    kept = "小船行到河心，忽然起了大风，船身剧烈摇晃。"
+    line = "河面的水波一层一层朝两岸铺开，两个人看着远处渐渐升起的白雾，谁都没有出声。" + kept
+    source = NOVEL.replace(kept, line)
+    answer = _answer()
+    answer["events"][1]["beats"][1]["voice_text"] = line
+    svc = _Svc([answer, _answer(), {"edits": [{"id": "N1", "text": kept}]}])
+    res = lw.generate_lightweight_outline_result(source, service=svc)
+    assert res["executable"], res["failure"]
+    assert svc.schemas == ["lightweight_outline"] + ["lightweight_voice_edits"] * 2
+    assert all(value in svc.prompts[0] for value in ("10 条", "280 个汉字", "42 个汉字", "55–80 秒"))
+    rows = vr.prepare(answer, source)["rows"]
+    assert [r["id"] for r in rows if r["editable"]] == ["N1"]
+    assert all(t in line and vr._check("narration", t, 11)["est_sec"] <= 11
+               for t in rows[-1]["replacements"])
+    assert "不接受整稿" in svc.prompts[2]
+    expected, _ = lw.build_plan(_answer(), source)
+    for field in ("dialogue_lines", "narration_lines", "shot_beats", "main_events", "voice_units"):
+        assert res["plan"][field] == expected[field]
+    check_plan_before_generation(res["plan"], novel_text=source)
 
 
-def test_two_failures_stop_without_storyboard():
+def test_budget_trim_requires_full_reduction_and_preserves_beats():
+    answer = _answer()
+    source = NOVEL
+    additions = []
+    for location in ("码头", "山坡", "田边", "路口", "溪边", "小桥", "山脚", "镇口", "岗亭"):
+        text = f"远处的{location}亮起一盏灯，人们提起手里的行李，沿着岸边慢慢走向等候的船只。"
+        source += text + "\n"
+        beat = dict(text=f"{location}亮灯", purpose="交代环境", source=text,
+                    voice_kind="narration", voice_text=text, speaker="")
+        additions.append(beat)
+    answer["events"][-1]["beats"].extend(additions)
+    ctx = vr.prepare(answer, source)
+    assert ctx["seconds"] > 90
+    rows = [r for r in ctx["rows"] if r["text"] in {b["voice_text"] for b in additions}]
+    deletes = [{"id": r["id"], "text": ""} for r in rows]
+    svc = _Svc([answer, {"edits": deletes[:1]}, {"edits": deletes}])
+    res = lw.generate_lightweight_outline_result(source, service=svc)
+    assert res["executable"], res["failure"]
+    assert f"至少 {round(ctx['seconds'] - 80, 2)} 秒" in svc.prompts[1]
+    assert "净减量不足" in svc.prompts[2]
+    assert len(res["plan"]["shot_beats"]) == 6 + len(additions)
+    expected, _ = lw.build_plan(_answer(), source)
+    assert res["plan"]["voice_units"] == expected["voice_units"]
+    check_plan_before_generation(res["plan"], novel_text=source)
+
+
+@pytest.mark.parametrize("edit", [{"id":"D2","text":""}, {"id":"D100","text":"新增"},
+                                   {"id":"N1","text":"另一段的发言"}, {"id":"D1","text":""}])
+def test_invalid_local_edits_leave_baseline_and_cache_untouched(edit, tmp_path):
+    answer = _answer()
+    line = "屋檐的水滴落在青石板上，走廊的影子随着灯光晃动，守门人站在雨中又等了很久，等到最后一个行人也离开了渡口。"
+    answer["events"][0]["beats"][0].update(voice_kind="narration", voice_text=line)
+    source = NOVEL + line
+    svc = _Svc([answer] + [{"edits":[edit]}] * 2)
+    result = lw.generate_lightweight_outline_result(source, service=svc, cache_path=tmp_path/"cache")
+    assert not result["executable"] and len(svc.schemas) == 3
+    assert result["acceptance"]["codes"] == ["lightweight_voice_edit_rejected"]
+    assert not (tmp_path / lw.CACHE_FILE_NAME).exists()
+    expected, _ = lw.build_plan(answer, source)
+    assert result["plan"]["shot_beats"] == expected["shot_beats"]
+    assert result["plan"]["voice_units"] == expected["voice_units"]
+
+
+def test_invalid_structure_stops_without_a_new_outline():
     bad = _answer()
     bad["facts"][2]["carrier"] = "voice"          # 指向无声音节拍
     svc = _Svc([bad, "不是 JSON"])
     res = _gen(svc)
     assert res["executable"] is False and res["failure"]["code"] == "outline_invalid"
-    assert svc.schemas == ["lightweight_outline", "lightweight_outline"]
+    assert svc.schemas == ["lightweight_outline"]
 
 
 def test_call_failure_is_not_retried():

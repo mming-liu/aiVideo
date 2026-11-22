@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """轻量规划（`STEP01_PLAN_MODE=lightweight`，S14 M06/M07，2026-11-22）.
 
-**一次**轻量大纲请求（内容不合法时最多重抽一次）：模型只给有序事件/节拍、必保留事实、
+**一次**轻量大纲请求（声音预算超限时仅允许局部修订）：模型只给有序事件/节拍、必保留事实、
 选用声音（逐字原话）、说话人与落点；编号、`载体：`、`承载：`、`fact_refs` 与可消费的
 `chapter_outline` 全由代码派生（经 `presentation_contract.plan_from_view` 投影）。
 
@@ -28,8 +28,7 @@ PLAN_MODE_LEGACY = "legacy"
 PLAN_MODE_LIGHTWEIGHT = "lightweight"
 PLAN_MODES = (PLAN_MODE_LEGACY, PLAN_MODE_LIGHTWEIGHT)
 CONTRACT_VERSION = "lightweight_outline.v1"
-#: 首次内容不合法时最多重抽一次 ⇒ 至多 2 次大纲请求
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 3  # 一份原稿，最多两次定点声音修订
 CACHE_FILE_NAME = "chapter_outline.lightweight.cache.json"
 
 
@@ -149,8 +148,8 @@ LIGHTWEIGHT_PROMPT = """# 任务：为下面这一章小说做**轻量分镜计�
 4. `climax`、`end_hook`、`emotional_arc`、`characters`（出场角色）、`omittable`（可省略的内容）。
 
 ## 总时长（硬约束，代码会逐句估时核算）
-正片 {band_min:g}–{band_max:g} 秒，画面也要占时间。**所有声音（台词 + 旁白）合计不超过约
-{voice_sec:g} 秒，约 {voice_chars} 个汉字**（按每秒约 4 字估）；超过就整份拒收。
+正片 {band_min:g}–{band_max:g} 秒。全章旁白和对白合计不超过 {lines} 条、{han} 个汉字，
+每条不超过 {line_han} 个汉字，声音目标 55–{target} 秒。交稿前逐句计数，为画面和停顿留时。
 只选推动剧情、画面演不出来的话；能用画面演的不要再配旁白，不要把整段原文都放进声音。
 
 ## 原文
@@ -392,64 +391,13 @@ def dialogue_speakers(plan) -> dict:
 def _prompt(novel_text: str) -> str:
     from shared.config import DURATION_MAX_SEC, DURATION_MIN_SEC, PROMPT_MAX_CHARS
     from step01_script_gen.timecode import active_shot_cap
-    _voice_sec = voice_budget_sec()
+    from step01_script_gen import lightweight_voice_repair as vr
     return LIGHTWEIGHT_PROMPT.format(cap=float(active_shot_cap()),
                                      band_min=float(DURATION_MIN_SEC),
                                      band_max=float(DURATION_MAX_SEC),
-                                     voice_sec=_voice_sec, voice_chars=int(_voice_sec * 4),
+                                     lines=vr.MAX_LINES, han=vr.MAX_HAN,
+                                     line_han=vr.MAX_LINE_HAN, target=vr.TARGET_SEC,
                                      novel_text=str(novel_text or "")[:PROMPT_MAX_CHARS])
-
-
-def voice_budget_sec() -> float:
-    """给规划者的声音总量**引导值**：上限的 70%（画面也要占时间）。硬判据仍是 `evaluate_plan`."""
-    from shared.config import DURATION_MAX_SEC
-    return round(float(DURATION_MAX_SEC) * 0.7, 0)
-
-
-def _voice_cost_lines(plan, novel_text) -> list:
-    """上一版计划里每句声音的估时（代码算，同 `evaluate_plan` 的估算器）+ 超单镜句的合法替代."""
-    from step01_script_gen.outline import _sentence_alternatives
-    from step01_script_gen.plan_feasibility import plan_voice_entries
-    from step01_script_gen.timecode import _estimate_duration, active_shot_cap
-    if not isinstance(plan, dict):
-        return []
-    _cap = float(active_shot_cap())
-    _rows = []
-    for _e in plan_voice_entries(plan):
-        _t = str(_e.get("text") or "")
-        _rows.append((round(float(_estimate_duration(_t)), 1), _e.get("kind"), _t))
-    if not _rows:
-        return []
-    _total = round(sum(r[0] for r in _rows), 1)
-    _out = ["", "上一版的声音估时（共 %d 句，合计 %.1f 秒；本集声音引导上限约 %g 秒，"
-                "硬上限 %g 秒；单句不超过 %g 秒）——删掉或换短的，从最长的开始："
-            % (len(_rows), _total, voice_budget_sec(), _total_cap(), _cap)]
-    for _sec, _kind, _t in sorted(_rows, key=lambda r: -r[0])[:12]:
-        _tag = "台词" if _kind == "dialogue" else "旁白"
-        _line = "- %.1fs %s「%s」" % (_sec, _tag, _t[:60] + ("…" if len(_t) > 60 else ""))
-        if _sec > _cap + 0.01:
-            _alts = _sentence_alternatives(_t, novel_text, cap_sec=_cap, limit=2)
-            _line += ("（超单镜；原文里可用的较短完整句：%s）"
-                      % "／".join("「%s」" % a["text"] for a in _alts) if _alts
-                      else "（超单镜，且原文里没有合适的短句：删掉，改用画面演出）")
-        _out.append(_line)
-    return _out
-
-
-def _total_cap() -> float:
-    from shared.config import DURATION_MAX_SEC
-    return float(DURATION_MAX_SEC)
-
-
-def _feedback_block(problems, plan=None, novel_text="") -> str:
-    _lines = ["", "# 上一版回答被本地校验拒收（没有被采纳）。请按下列原因改正后**重新给出完整回答**："]
-    for _x in list(problems or [])[:12]:
-        _lines.append("- %s｜%s" % (str(_x.get("path") or "（整份）"),
-                                    str(_x.get("reason") or _x.get("code") or "")[:240]))
-    if len(problems or []) > 12:
-        _lines.append("- （另有 %d 条）" % (len(problems) - 12))
-    _lines += _voice_cost_lines(plan, novel_text)
-    return chr(10).join(_lines)
 
 
 def _cache_key(prompt: str, model) -> str:
@@ -507,7 +455,7 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                                         service=None) -> dict:
     """轻量大纲：至多 `MAX_ATTEMPTS` 次请求；返回与 `generate_outline_result` 同形的结果.
 
-    失败（调用失败 / 两次都不合法 / 过截止）不发分镜请求：`executable=False`，
+    失败（调用失败 / 局部修订未通过 / 过截止）不发分镜请求：`executable=False`，
     由 `_stop_if_outline_unavailable` 按既有诊断停在计划层。
     """
     from _text_gen import TextGenerationRequest, create_service
@@ -515,6 +463,7 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                                            _outline_max_tokens, _outline_result_skeleton,
                                            _parse_outline_json, plan_acceptance_problems,
                                            round_archive_writer)
+    from step01_script_gen import lightweight_voice_repair as vr
     from step01_script_gen.plan_revision import problem_records
     _dls = [float(x) for x in (deadline_monotonic, run_deadline_at) if x is not None]
     _dl = min(_dls) if _dls else None
@@ -543,7 +492,8 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
     _archive = round_archive_writer()
     _attempts: list = []
     _last_plan = None
-    _prev_plan = None
+    original = None
+    scope = None
     _last_problems: list = []
     for _n in range(1, MAX_ATTEMPTS + 1):
         if _dl is not None and time.monotonic() >= _dl:
@@ -552,10 +502,10 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                          attempts=_attempts)
         _req = TextGenerationRequest(
             system_prompt=_OUTLINE_SYSTEM_PROMPT,
-            user_prompt=prompt + (_feedback_block(_last_problems, _prev_plan, novel_text)
-                                  if _last_problems else ""),
+            user_prompt=(vr.prompt(scope) + "\n" + json.dumps(_last_problems, ensure_ascii=False)
+                         if scope else prompt),
             max_tokens=_outline_max_tokens(), temperature=0.3,
-            json_schema=LIGHTWEIGHT_SCHEMA, model=model, deadline_monotonic=_dl)
+            json_schema=vr.SCHEMA if scope else LIGHTWEIGHT_SCHEMA, model=model, deadline_monotonic=_dl)
         _r = _svc.generate(_req)
         res["revision"]["calls"] = _n
         _cid = str(getattr(_r, "call_id", "") or "")
@@ -564,21 +514,42 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
             _write_round(_archive, _n, "call_failed", _cid, [], None)
             return _fail(res, "call_failed", str(getattr(_r, "error", "")), attempts=_attempts)
         _data = _parse_outline_json(getattr(_r, "text", ""))
-        if not isinstance(_data, dict):
-            _last_problems = [_rec("response_not_json", "", "回答不是可解析的 JSON 对象")]
-            _plan = None
-        else:
-            _plan, _last_problems = build_plan(_data, novel_text)
-            if _plan is not None:
-                _plan["prop_state_candidates"] = _anchors
-                _last_problems = list(plan_acceptance_problems(_plan, novel_text) or [])
-        _last_plan = _plan if _plan is not None else _last_plan
-        _prev_plan = _plan
+        _plan = None
+        _last_problems = []
+        if scope:
+            try:
+                _data = vr.apply(original, scope, _data)
+            except ValueError as exc:
+                _last_problems = [_rec("lightweight_voice_edit_rejected", "edits", str(exc))]
+        if not _last_problems:
+            if not isinstance(_data, dict):
+                _last_problems = [_rec("response_not_json", "", "回答不是可解析的 JSON 对象")]
+            else:
+                _plan, _last_problems = build_plan(_data, novel_text)
+                if _plan is not None:
+                    _plan["prop_state_candidates"] = _anchors
+                    _last_problems = list(plan_acceptance_problems(_plan, novel_text) or [])
+                if not answer_problems(_data):
+                    remaining = vr.prepare(_data, novel_text)
+                    if remaining:
+                        _last_problems.append(_rec("lightweight_voice_budget", "events",
+                                                   "声音条数、汉字数或可播时长超限"))
+                        if scope is None:
+                            original, scope = _data, remaining
+                            res["revision"]["voice_edit_scope"] = scope["scope"]
+        # Failed local transactions always retry against the same original.
+        if _plan is not None and (not scope or _data is original or not _last_problems):
+            _last_plan = _plan
         _kind = "ok" if (_plan is not None and not _last_problems) else "illegal"
         _write_round(_archive, _n, _kind, _cid, _last_problems, _plan)
         _attempts.append({"code": _kind, "call_id": _cid,
                           "problems": [str(x.get("code") or "") for x in _last_problems]})
-        if _kind == "ok":
+        if _kind == "ok" or scope is None:
+            break
+        if any(row["editable"] and not row["deletable"] and not row["replacements"]
+               for row in scope["rows"] if scope["scope"] == "replace"):
+            _last_problems.append(_rec("lightweight_voice_no_replacement", "events",
+                                       "原文同段没有合规的单镜替代"))
             break
     res["plan"] = _last_plan
     res["acceptance"] = {"problems": problem_records(_last_problems),
