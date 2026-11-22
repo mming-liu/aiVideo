@@ -1120,6 +1120,50 @@ def check_dialogue_representable(line: str, cap: float | None = None, *,
 _CLAUSE_BOUNDARY = "，、；："
 
 
+def voice_entry_representability(kind, text, cap: float | None = None) -> dict:
+    """一条声音的**单镜可表示性**——判据与读数只有这一个入口.
+
+    对白带说话人前缀余量（5 字，生成层会给台词补「某某道：」）；旁白**不加**
+    （2026-10-22 复核：旁白 11.40s 曾被加余量算成 12.65s，与预算下界两个读数）。
+    返回值即 `check_dialogue_representable` 的四字段；旁白原因加「旁白：」前缀。
+    """
+    _cap = float(active_shot_cap() if cap is None else cap)
+    if str(kind) == VOICE_KIND_NARRATION:
+        _chk = check_dialogue_representable(text, _cap, prefix_allowance_chars=0)
+        if _chk.get("reason"):
+            _chk["reason"] = "旁白：" + str(_chk["reason"])
+        return _chk
+    return check_dialogue_representable(text, _cap)
+
+
+def voice_entry_costs(plan, *, novel_text: str = "", cap: float | None = None) -> list:
+    """逐条声音的**估时 + 单镜判据**（与 `evaluate_plan` 的 `_unrep` **同一入口**）.
+
+    返回 `[{kind,index,id,text,est_sec,body_sec,representable,split,reason,beats}]`，
+    顺序与 `plan_voice_entries` 一致（对白在前、各按编号）。两个读数各有用途：
+
+    - `est_sec`：单镜判据读数（对白含说话人前缀余量）——**超单镜反馈与拒收记录**
+      都用它，同一句不会出现「反馈 14.4s / 拒收 15.49s」；
+    - `body_sec`：播出正文估时——预算合计用这一口径（`voice_seconds` 同源）。
+
+    轻量模式的重抽反馈与验收链都从这里取数，不再各算各的。
+    """
+    _rows = []
+    for _e in plan_voice_entries(plan, novel_text=novel_text):
+        _kind = str(_e.get("kind") or "")
+        _text = str(_e.get("text") or "")
+        _chk = voice_entry_representability(_kind, _text, cap)
+        _rows.append({"kind": _kind, "index": _e.get("index"), "id": str(_e.get("id") or ""),
+                      "text": _text,
+                      "est_sec": round(float(_chk.get("est_sec") or 0.0), 2),
+                      "body_sec": round(float(_estimate_duration(_text)), 2),
+                      "representable": bool(_chk.get("representable")),
+                      "split": _chk.get("split"),
+                      "reason": str(_chk.get("reason") or ""),
+                      "beats": list(_e.get("beats") or [])})
+    return _rows
+
+
 def representable_replacements(line: str, novel_text: str, *, limit: int = 6) -> list:
     """从该台词的**原文出处**里列出「句末收尾且可表示」的逐字替代（2026-09-26 用户决定）.
 
@@ -4825,23 +4869,21 @@ def evaluate_plan(plan: dict | None, *, novel_text: str = "",
     for _x in _kept_ix:
         _line_bc = (_bc_dlg[_x["index"] - 1]["text"]
                     if 0 < _x["index"] <= len(_bc_dlg) else _x["line"])
-        _chk = check_dialogue_representable(_line_bc, _cap)
+        _chk = voice_entry_representability("dialogue", _line_bc, _cap)
         if not _chk["representable"]:
             _unrep.append({"kind": "dialogue", "index": _x["index"],
                            "line": _line_bc, "est_sec": _chk["est_sec"],
                            "reason": _chk["reason"]})
     # 旁白同样不能截句：一条旁白必须能整条讲完在一个镜头里（与台词同判据）
-    # ⚠️ 2026-10-22：旁白**不加说话人前缀余量**。旧写法复用 `check_dialogue_representable`
-    # 的默认 5 字余量，把 11.40s 的旁白算成 12.65s 判"不可表示"，而预算下界用不加余量的
-    # 估时（11.40s）——同一句话两个读数，模型无论怎么改都过不了。
+    # ⚠️ 2026-10-22：旁白**不加说话人前缀余量**（见 `voice_entry_representability`）。
     for _e, _ni in zip(_narr_kept, _narr_kept_ix):
         _line_bc = (_bc_narr[_ni - 1]["text"]
                     if 0 < _ni <= len(_bc_narr) else _e["text"])
-        _chk = check_dialogue_representable(_line_bc, _cap, prefix_allowance_chars=0)
+        _chk = voice_entry_representability("narration", _line_bc, _cap)
         if not _chk["representable"]:
             _unrep.append({"kind": "narration", "index": _ni,
                            "line": _line_bc, "est_sec": _chk["est_sec"],
-                           "reason": "旁白：" + str(_chk["reason"])})
+                           "reason": _chk["reason"]})
     reasons, suggestions = [], []
     if rejected:
         reasons.append("选用台词 %d 句未在原文中逐字找到，已从计划中剔除" % len(rejected))

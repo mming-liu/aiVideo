@@ -389,12 +389,14 @@ def dialogue_speakers(plan) -> dict:
 # 生成入口（与 `outline.generate_outline_result` 同一结果契约）
 # ---------------------------------------------------------------------------
 def _prompt(novel_text: str) -> str:
-    from shared.config import DURATION_MAX_SEC, DURATION_MIN_SEC, PROMPT_MAX_CHARS
+    from shared.config import PROMPT_MAX_CHARS
+    from step01_script_gen.plan_feasibility import budget_band
     from step01_script_gen.timecode import active_shot_cap
     from step01_script_gen import lightweight_voice_repair as vr
+    _bmin, _bmax = budget_band()   # 与验收链同源，不另读配置常量
     return LIGHTWEIGHT_PROMPT.format(cap=float(active_shot_cap()),
-                                     band_min=float(DURATION_MIN_SEC),
-                                     band_max=float(DURATION_MAX_SEC),
+                                     band_min=float(_bmin),
+                                     band_max=float(_bmax),
                                      lines=vr.MAX_LINES, han=vr.MAX_HAN,
                                      line_han=vr.MAX_LINE_HAN, target=vr.TARGET_SEC,
                                      novel_text=str(novel_text or "")[:PROMPT_MAX_CHARS])
@@ -494,6 +496,7 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
     _last_plan = None
     original = None
     scope = None
+    res["revision"]["scope"] = "none"   # replace / trim：基于原稿的 edits 定点修正
     _last_problems: list = []
     for _n in range(1, MAX_ATTEMPTS + 1):
         if _dl is not None and time.monotonic() >= _dl:
@@ -536,7 +539,7 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                                                    "声音条数、汉字数或可播时长超限"))
                         if scope is None:
                             original, scope = _data, remaining
-                            res["revision"]["voice_edit_scope"] = scope["scope"]
+                            res["revision"]["scope"] = scope["scope"]
         # Failed local transactions always retry against the same original.
         if _plan is not None and (not scope or _data is original or not _last_problems):
             _last_plan = _plan

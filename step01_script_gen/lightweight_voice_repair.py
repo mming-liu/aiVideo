@@ -18,8 +18,8 @@ SCHEMA = {"name": "lightweight_voice_edits", "strict": True, "schema": {
 
 
 def _check(kind, text, cap):
-    return pf.check_dialogue_representable(
-        text, cap, prefix_allowance_chars=5 if kind == "dialogue" else 0)
+    # Same single-shot entry as evaluate_plan (dialogue gets the speaker-prefix allowance).
+    return pf.voice_entry_representability(kind, text, cap)
 
 
 def voices(answer):

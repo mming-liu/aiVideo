@@ -338,3 +338,128 @@ def test_hybrid_presentation_is_rejected_before_send(monkeypatch):
     with pytest.raises(ValueError):
         ce.extract_all_concurrent(NOVEL, None, None, enable_characters=False,
                                   enable_scene_objects=False)
+
+
+# ---------------------------------------------------------------------------
+# 合并自 cff77a7 的匿名情节，改走 edits 定点修正协议（2026-11-22 合并）
+# ---------------------------------------------------------------------------
+LONG_C = ("你若执意要走出了事可怨不得我，这河水深得很，夜里行船最是危险，"
+          "我这条船家也担待不起。")
+SHORT_C = "你若执意要走出了事可怨不得我"   # 同一引语的逐字分句
+NOVEL_C = ("黄昏时分，阿青提着灯笼走进渡口。\n"
+           "老船夫摆手道：“" + LONG_C + "”\n"
+           "老船夫又低声道：“你若执意要走，出了事可怨不得我。”\n"
+           "阿青摇头。\n")
+
+
+def _b(text, src, kind="none", vt="", sp=""):
+    return {"text": text, "purpose": "推进", "source": src, "voice_kind": kind,
+            "voice_text": vt, "speaker": sp}
+
+
+def _answer_c(line):
+    """3 个事件、1 句台词（超单镜）、1 条声音承载的事实."""
+    return {
+        "characters": ["阿青", "老船夫"], "emotional_arc": "迟疑→坚持",
+        "climax": "老船夫劝阻", "end_hook": "阿青摇头", "omittable": [],
+        "events": [
+            {"summary": "阿青夜到渡口", "beats": [
+                _b("阿青提着灯笼站在渡口", "黄昏时分，阿青提着灯笼走进渡口。"),
+                _b("老船夫摆手劝阻", "老船夫摆手道", "dialogue", line, "老船夫")]},
+            {"summary": "老船夫说明河险", "beats": [_b("老船夫指向黑沉沉的河面", "老船夫又低声道")]},
+            {"summary": "阿青仍要过河", "beats": [_b("阿青摇头", "阿青摇头。")]},
+        ],
+        "facts": [{"claim": "老船夫劝阿青不要连夜走", "evidence": line,
+                   "event": 1, "beat": 2, "carrier": "voice"}],
+    }
+
+
+def test_replace_offers_only_same_utterance_candidates_and_keeps_speaker():
+    """超单镜台词只能换成**同一引语**内的逐字短句；相邻另一条引语不在候选里."""
+    est = vr._check("dialogue", LONG_C, 12)["est_sec"]
+    assert est > 12.0
+    ctx = vr.prepare(_answer_c(LONG_C), NOVEL_C)
+    assert ctx["scope"] == "replace"
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert SHORT_C in row["replacements"]
+    assert "你若执意要走，出了事可怨不得我。" not in row["replacements"]
+    svc = _Svc([_answer_c(LONG_C), {"edits": [{"id": row["id"], "text": SHORT_C}]}])
+    res = lw.generate_lightweight_outline_result(NOVEL_C, service=svc)
+    assert res["executable"] is True, res["failure"]
+    assert res["revision"]["scope"] == "replace"
+    assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
+    assert "%.2f" % est in svc.prompts[1] or str(round(est, 2)) in svc.prompts[1]
+    assert res["plan"]["dialogue_lines"] == [SHORT_C]
+    assert lw.dialogue_speakers(res["plan"])[SHORT_C] == "老船夫"
+
+
+NOVEL_T = ("黄昏时分，阿青提着灯笼走进渡口。\n"
+           "老船夫问道：“这么晚了，你要去哪里，莫不是要连夜过河去东岸。”\n"
+           "阿青答道：“姐姐病重，我要连夜过河送药，不能再等天亮了。”\n"
+           "老船夫叹道：“河上风大浪急，你一个人撑船过河，我实在放心不下。”\n"
+           "阿青摇头。\n")
+T_LINES = ["这么晚了，你要去哪里，莫不是要连夜过河去东岸。",
+           "姐姐病重，我要连夜过河送药，不能再等天亮了。",
+           "河上风大浪急，你一个人撑船过河，我实在放心不下。"]
+
+
+def _answer_t():
+    """3 句可单镜表示的台词（合计超上限），第 1 句被事实引用、第 3 句可省."""
+    return {
+        "characters": ["阿青", "老船夫"], "emotional_arc": "焦急", "climax": "老船夫劝阻",
+        "end_hook": "阿青摇头", "omittable": ["老船夫的第三句劝说"],
+        "events": [
+            {"summary": "阿青夜到渡口", "beats": [
+                _b("阿青提着灯笼站在渡口", "黄昏时分，阿青提着灯笼走进渡口。"),
+                _b("老船夫开口询问", "老船夫问道", "dialogue", T_LINES[0], "老船夫")]},
+            {"summary": "阿青说明来意", "beats": [
+                _b("阿青放下药箱回答", "阿青答道", "dialogue", T_LINES[1], "阿青"),
+                _b("老船夫打量药箱", "阿青答道")]},
+            {"summary": "老船夫仍不放心", "beats": [
+                _b("老船夫伸手拦住阿青", "老船夫叹道", "dialogue", T_LINES[2], "老船夫"),
+                _b("阿青握紧船桨", "阿青摇头。")]},
+        ],
+        "facts": [
+            {"claim": "老船夫问阿青是否要连夜过河", "evidence": T_LINES[0],
+             "event": 1, "beat": 2, "carrier": "voice"},
+            {"claim": "阿青握紧船桨准备连夜过河", "evidence": "阿青摇头。",
+             "event": 3, "beat": 2, "carrier": "visual"},
+        ],
+    }
+
+
+@pytest.fixture
+def _small_band(monkeypatch):
+    monkeypatch.setattr("step01_script_gen.validation._REDGUO_DURATION_MAX", 15.0)
+    monkeypatch.setattr("step01_script_gen.validation._REDGUO_DURATION_MIN", 5.0)
+
+
+def test_trim_deletes_optional_voice_and_keeps_must_keep(_small_band):
+    ctx = vr.prepare(_answer_t(), NOVEL_T)
+    assert ctx["scope"] == "trim" and ctx["goal"] == 15.0
+    by_text = {r["text"]: r for r in ctx["rows"]}
+    assert by_text[T_LINES[0]]["deletable"] is False      # 被事实引用：只能换短
+    assert by_text[T_LINES[2]]["deletable"] is True
+    edits = [{"id": by_text[T_LINES[1]]["id"], "text": ""},
+             {"id": by_text[T_LINES[2]]["id"], "text": ""}]
+    svc = _Svc([_answer_t(), {"edits": edits}])
+    res = lw.generate_lightweight_outline_result(NOVEL_T, service=svc)
+    assert res["executable"] is True, res["failure"]
+    assert res["revision"]["scope"] == "trim"
+    assert res["plan"]["dialogue_lines"] == [T_LINES[0]]
+    assert len(res["plan"]["shot_beats"]) == 6             # 节拍一个不少
+
+
+def test_trim_refuses_deleting_must_keep_voice(_small_band):
+    ctx = vr.prepare(_answer_t(), NOVEL_T)
+    must = next(r for r in ctx["rows"] if r["text"] == T_LINES[0])
+    with pytest.raises(ValueError, match="不允许"):
+        vr.apply(_answer_t(), ctx, {"edits": [{"id": must["id"], "text": ""}]})
+
+
+def test_whole_answer_redraw_is_rejected_and_baseline_kept(_small_band):
+    """整稿重答（哪怕更短）不是 edits 事务 ⇒ 拒收，原稿不被替换."""
+    redraw = _answer_t()
+    redraw["events"][2]["beats"][0].update(voice_kind="none", voice_text="", speaker="")
+    with pytest.raises(ValueError, match="不接受整稿"):
+        vr.apply(_answer_t(), vr.prepare(_answer_t(), NOVEL_T), redraw)
