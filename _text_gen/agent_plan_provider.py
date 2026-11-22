@@ -427,6 +427,10 @@ class AgentPlanTextService(TextGenerationService):
         # 实际传输计量（S02）：字节数与摘要一起进日志——事后不必按字符数估算。
         _verbose_write("[WIRE] agent_plan 请求体 %d 字节（sha256=%s）"
                        % (_st["request_bytes"], _st["request_sha256"][:16]))
+        # M07（2026-11-22）：按次数封顶的发送额度——**每次实际 POST 之前**占一次（重发也算），
+        # 额度用完或状态不可读即抛错，POST 不会发生。未设 TEXT_SEND_QUOTA_FILE 时为 no-op。
+        from _text_gen.send_quota import reserve as _reserve_send
+        _reserve_send(provider="agent_plan", endpoint=url)
         resp = requests.post(url, data=body, headers=self._headers,
                              timeout=timeout, stream=True, allow_redirects=False)
         return resp, body
