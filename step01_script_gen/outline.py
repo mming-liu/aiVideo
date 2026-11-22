@@ -3963,6 +3963,22 @@ def _replan_by_voice_split(plan, problems, novel_text, budget, rejections=None, 
     return {"kind": "illegal", "detail": _detail, "call_id": _cid, "evidence": _ev}
 
 
+def _allowed_fields_block(allowed_fields) -> str:
+    """通道字段白名单**写进请求**（S14-04，2026-11-22）.
+
+    应用侧 `revision_route.delta_field_violations` 一直按白名单整轮拒收，但请求里从没说过
+    （cmp ch2/legacy 实测：模型回了 `evidence_updates` ⇒ `route_field_violation`）。
+    请求与应用读**同一份** `allowed_fields`；`None` = 本轮不限字段，不输出。
+    """
+    if allowed_fields is None:
+        return ""
+    _ok = sorted(str(x) for x in allowed_fields)
+    return ("# 本轮通道只允许改这些字段：%s\n"
+            "增量里**只能出现**上面这些键（`upsert`/`delete` 里同样只针对它们）；其它键——"
+            "例如 `evidence_updates`、`screen_cards`——本轮一律不要出现，出现即整轮拒收。"
+            "来源证据类问题留到承载闭合后的单独轮次处理。" % "、".join(_ok))
+
+
 def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
                     model=None, system_prompt=None, evidence=None,
                     mode=None, verification=None, protocol=None, verify_axes=None,
@@ -4054,9 +4070,12 @@ def _replan_by_view(plan, problems, novel_text, budget, rejections=None, *,
          "请按本次 mode 的字段契约回带整份 view；不输出 delete/order 增量块。"),
         _view_feedback_block(problems, _base_view),
         _rejection_feedback_block(rejections),
+        _allowed_fields_block(allowed_fields) if _is_delta else "",
         "请现在实际修复上面的计划问题，并提交完成的 %s 改动；不要返回示例或空修改。"
         % (DELTA_SCHEMA if _is_delta else REVISION_SCHEMA),
     ])
+    if evidence is not None and _is_delta and allowed_fields is not None:
+        evidence["allowed_fields_declared"] = sorted(str(x) for x in allowed_fields)
     _sys = system_prompt or _OUTLINE_SYSTEM_PROMPT
     if evidence is not None:
         from shared.revision_request_evidence import revision_request_evidence
