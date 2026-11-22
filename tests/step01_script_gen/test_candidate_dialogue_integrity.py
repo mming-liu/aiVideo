@@ -82,7 +82,7 @@ def _patch_candidate_pipeline(monkeypatch, scripts: list, tmp_path):
     # LLM 调用与解析桩：按次序吐出预置稿
     monkeypatch.setattr(m, "gen_spy_script", lambda *a, **k: "RAW")
     monkeypatch.setattr(m, "parse_response",
-                        lambda raw, novel_text=None: scripts.pop(0))
+                        lambda raw, novel_text=None, **_kw: scripts.pop(0))
     # 评分桩：破损候选在评分**之前**就被门拦下，评分只服务于合格候选
     monkeypatch.setattr(m, "_score_script",
                         lambda s, n: {"total": 90.0, "detail": "测试", "final_score": 90.0})
@@ -287,7 +287,7 @@ def test_mixed_failures_counted_separately(tmp_path, monkeypatch):
 
     monkeypatch.setattr(m, "gen_spy_script", _gen)
     monkeypatch.setattr(m, "parse_response",
-                        lambda raw, novel_text=None: _broken_script())
+                        lambda raw, novel_text=None, **_kw: _broken_script())
     monkeypatch.setattr(m, "_score_script",
                         lambda s, n: {"total": 90.0, "detail": "测试", "final_score": 90.0})
     monkeypatch.setattr(m, "_candidate_quality_summary", lambda s, n: {})

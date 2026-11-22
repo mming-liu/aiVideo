@@ -312,10 +312,14 @@ def approved_voice_fragments(plan, *, novel_text: str = "") -> tuple[str, ...]:
 
 def is_approved_voice_fragment(text, fragments, characters=None) -> bool:
     """Exact match, optionally removing a recognized speaker prefix."""
-    from shared.dialogue import strip_speaker_prefix
+    from shared.dialogue import strip_narration_label, strip_speaker_prefix
     if not isinstance(text, str) or not text:
         return False
-    return text in fragments or strip_speaker_prefix(text, characters) in fragments
+    # 2026-11-22（S14-07 ch2_r04）：「旁白：」是**不播出**的显示标签（与估时、TTS 同一口径）。
+    # 不剥它就认不出批准旁白，长句断句便往逐字旁白里插逗号（「衙门的，一个检校」），
+    # 候选随即被判 extra_dialogue / plan_refs_narration_missing——三个候选全军覆没。
+    return (text in fragments or strip_speaker_prefix(text, characters) in fragments
+            or strip_narration_label(text) in fragments)
 
 
 def voice_text_key(text) -> str:

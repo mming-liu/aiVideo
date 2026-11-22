@@ -578,7 +578,8 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
         try:
-            new_script = _mrt.parse_response(raw, novel_text=novel_text)
+            new_script = _mrt.parse_response(raw, novel_text=novel_text,
+                                             plan=plan or script.get("chapter_outline"))
         except (ValueError, json.JSONDecodeError) as e:
             _mrt._logger.warn(f"[WARN] 收敛重生成 JSON 解析失败，保留原版: {e}")
             break
@@ -1253,7 +1254,8 @@ def _regen_structural_over_limit(script: dict, novel_text: str, bank=None,
         raw = _sb_re.sub(r"^```\s*", "", raw, flags=_sb_re.MULTILINE)
         raw = _sb_re.sub(r"```\s*$", "", raw, flags=_sb_re.MULTILINE)
         try:
-            new_script = _mrt.parse_response(raw, novel_text=novel_text)
+            new_script = _mrt.parse_response(raw, novel_text=novel_text,
+                                             plan=plan or script.get("chapter_outline"))
         except (ValueError, json.JSONDecodeError) as e:
             _mrt._logger.warn(f"[WARN] 结构收敛 JSON 解析失败，保留原版: {e}")
             return script

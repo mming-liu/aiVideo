@@ -562,7 +562,9 @@ def main() -> None:
                 raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
 
                 try:
-                    new_script = _mrt.parse_response(raw, novel_text=novel_text)
+                    new_script = _mrt.parse_response(
+                        raw, novel_text=novel_text,
+                        plan=pre_extracted_outline or script.get("chapter_outline"))
                 except (ValueError, json.JSONDecodeError) as e:
                     # 重生成结果 JSON 损坏 → 保留上一版，不中断流水线
                     _mrt._logger.warn(f"[WARN] 重生成 JSON 解析失败，保留上一版: {e}")

@@ -4707,7 +4707,7 @@ def _strip_prompt_tail_garbage(prompt: str) -> str:
     return out.rstrip("，。； ")
 
 
-def post_fix_shot_prompts(script: dict) -> dict:
+def post_fix_shot_prompts(script: dict, plan=None) -> dict:
     """解析后、校验前的自动修复（v6.9 新增）。
 
     修复 LLM 最容易漏掉的、且能确定性修掉的点：
@@ -4727,7 +4727,11 @@ def post_fix_shot_prompts(script: dict) -> dict:
     native_voice = active_video_uses_native_voice()
     from step01_script_gen.plan_feasibility import (
         approved_voice_fragments, is_approved_voice_fragment)
-    fragments = approved_voice_fragments(script.get("chapter_outline"))
+    # 2026-11-22（S14-07 ch2_r04）：批准声音以**本请求的计划**为准。候选刚解析时
+    # 还没挂 `chapter_outline`，只读稿件会得到空表 ⇒ 下面的长句断句把逗号插进逐字
+    # 旁白/台词（实测「衙门的，一个检校」），候选随即被台词门/事件契约判破损。
+    fragments = approved_voice_fragments(
+        plan if isinstance(plan, dict) and plan else script.get("chapter_outline"))
     characters = script.get("characters") or []
     shots = script.get("shots", [])
     for i, shot in enumerate(shots):
@@ -5174,12 +5178,13 @@ def _coerce_schema_types(script: dict) -> None:
                     kf["desc"] = _to_str(kf["desc"])
 
 
-def parse_response(raw_text: str, novel_text: str = "") -> dict:
+def parse_response(raw_text: str, novel_text: str = "", *, plan=None) -> dict:
     """解析 LLM 返回的原始文本为 JSON， 含兜底修复。
 
     Args:
         raw_text: LLM 返回的原始文本
         novel_text: 小说原文（用于原文锚点验证）
+        plan: 本请求的计划（批准声音的事实源；缺省时退回稿件上的 `chapter_outline`）
     """
     global _novel_text_for_validation
     _novel_text_for_validation = novel_text
@@ -5247,7 +5252,7 @@ def parse_response(raw_text: str, novel_text: str = "") -> dict:
 
     # v6.9 新增：自动修复（声音指令 + 说话人入画），必须在校验前执行，
     # 否则校验输出的「缺少（用中文说）」「说话人未入画」WARN 无法被消除
-    post_fix_shot_prompts(script)
+    post_fix_shot_prompts(script, plan=plan)
 
     # v6.42：改走新 Constraint 框架（29 条 vs 旧 34 类——新框架更精简一致），
     # 避免与 main.py:1055 / 1664 重复执行。HARD_FIX_USE_OLD 兜底已删除（2026-09-12）。

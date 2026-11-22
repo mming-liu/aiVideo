@@ -477,7 +477,7 @@ def _generate_script_candidates(
                 "超时" in str(_e) or "timeout" in str(_e).lower()
             )
             raise
-        _cand = _mrt.parse_response(raw, novel_text=novel_text)
+        _cand = _mrt.parse_response(raw, novel_text=novel_text, plan=outline)
 
         # v6.135（工作包 sunny-kindling-wilkinson；预算语义 2026-09-26 二审 C1 定稿）：
         # 候选层**台词完整性硬门**——破损候选直接判无效、不占合格名额；**差额在既有
