@@ -20,7 +20,7 @@ from step01_script_gen.constraints.v6_43_prompt_enforcement import (
     V643PromptEnforcementConstraint,
     _fix_vague_anchor,
 )
-from shared.scene_objects_bank import boat_width_text, build_boat_replacement
+from shared.scene_objects_bank import boat_width_text
 
 _BOAT_SPEC = {"小舟": {"category": "船", "length_m": 6, "width_m": 1.4}}
 
@@ -36,7 +36,6 @@ def _ctx(shots: list, scene_objects: dict | None = None) -> ConstraintContext:
 # ---------------------------------------------------------------------------
 def test_width_is_not_invented_without_a_spec():
     assert boat_width_text({"prompt": "一叶小舟"}, {}) == ""
-    assert build_boat_replacement({"prompt": "一叶小舟"}, {}) == ""
 
 
 def test_width_comes_from_the_input_spec_when_present():
@@ -129,21 +128,12 @@ def test_underwater_cm_value_of_another_entity_is_not_borrowed():
 
 
 # ---------------------------------------------------------------------------
-# 5. 船只替换不再无条件生效
+# 5. 船只名称不被改写（2026-11-22 起整词替换规则已删除，见 test_m04_asset_description_injection）
 # ---------------------------------------------------------------------------
-def test_boat_replacement_is_skipped_without_a_spec():
-    shot = {"ff_desc": "一叶小舟静浮水面", "prompt": "一叶小舟静泊"}
-    V643PromptEnforcementConstraint().apply(_ctx([shot]))
-    assert "一叶小舟" in shot["ff_desc"]
-    assert "敞口木舟" not in shot["ff_desc"]
-
-
-def test_boat_replacement_preserves_the_input_name_and_form():
-    """2026-11-13 复核反例：subtype=封闭式救生艇 不得被改写成「敞口木舟」."""
-    spec = {"救生艇": {"category": "船", "subtype": "封闭式救生艇",
-                       "length_m": 6, "width_m": 2}}
-    text = build_boat_replacement(
-        {"prompt": "小舟靠岸", "location": "救生艇"}, spec)
-    assert text.startswith("封闭式救生艇")
-    assert "长6米" in text and "宽2米" in text
-    assert "敞口木舟" not in text
+def test_boat_name_is_kept_with_or_without_a_spec():
+    spec = {"救生艇": {"category": "船", "subtype": "封闭式救生艇", "length_m": 6, "width_m": 2}}
+    for scene_objects in ({}, spec):
+        shot = {"ff_desc": "一叶小舟静浮水面", "prompt": "小舟靠岸", "location": "救生艇"}
+        V643PromptEnforcementConstraint().apply(_ctx([shot], scene_objects))
+        assert shot["ff_desc"] == "一叶小舟静浮水面"
+        assert shot["prompt"] == "小舟靠岸"

@@ -16,6 +16,12 @@ from .types import RepairRecord, Severity
 _GENERIC_SUBJECTS = ("群演", "人群", "路人", "某男子", "某女子", "主角")
 
 
+def _adds_duplicate_block(before: str, after: str) -> bool:
+    """`after` 比 `before` 多出「描述块重复注入」（与质量门 C6 同一检测器）."""
+    from shared.prompt_contradiction import _check_duplicate_block
+    return bool(_check_duplicate_block(after)) and not _check_duplicate_block(before)
+
+
 class RoleAnchorConstraint(Constraint):
     """Add `[name: feature]` to prompt and replace generic subjects."""
 
@@ -115,9 +121,17 @@ class RoleAnchorConstraint(Constraint):
                 continue
             features = anchors[name]
             prompt = str(shot.get("prompt") or "")
+            candidate = prompt
             if not re.search(rf"\[{re.escape(name)}[:：]", prompt):
-                anchor = f"[{name}: {features}]"
-                shot["prompt"] = f"{anchor} {prompt}".strip()
+                candidate = f"[{name}: {features}] {prompt}".strip()
+                # 2026-11-22（M04）：外观段已在正文里（模型写了「张三脸型瘦削，…」），
+                # 再前置一份锚就是同一段描述出现两次——质量门 C6 用同一个检测器判
+                # duplicate_injection（S11 40 轮 30 处）。用权威检测器判断：前置后会新增
+                # 重复块 ⇒ 身份描述已存在，不再前置。
+                if _adds_duplicate_block(prompt, candidate):
+                    candidate = prompt
+            if candidate != prompt:
+                shot["prompt"] = candidate
                 repairs.append(
                     RepairRecord(
                         constraint_name=self.name,

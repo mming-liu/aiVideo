@@ -36,7 +36,6 @@ from step01_script_gen.prompt_semantic import (
 )
 
 from ._base_classes import Constraint, RepairRecord
-from shared.scene_objects_bank import build_boat_replacement
 
 
 def _rule_enabled(flag: str) -> bool:
@@ -49,20 +48,13 @@ def _rule_enabled(flag: str) -> bool:
     return os.getenv(f"CONSTRAINT_V643_{flag}_ENABLED", "1").strip() == "1"
 
 
-# === 规则 1：小舟 → 舴艋舟 ===
-
-# 匹配「一叶小舟/小舟/木舟/一叶舟」等无尺寸通用词（替换文本动态生成，见
-# shared/scene_objects_bank.build_boat_replacement——尺寸以 scene_objects 为
-# 唯一来源（v6.52 教训），未命中才回退历史兜底「宽1.4米，可容3人」）
-# 1. 一叶小舟 / 2. 小舟 / 3. 木舟 / 4. 一叶舟
-_BOAT_PATTERNS: list[re.Pattern] = [
-    re.compile(r"一叶小舟"),
-    re.compile(r"一叶木舟"),
-    re.compile(r"一叶舟"),
-    re.compile(r"小舟"),
-    re.compile(r"木舟"),
-]
-# 兜底用：若 ff_desc/prompt 完全没出现"船/舟"，保留空白让 LLM 补（不强加）
+# === 规则 1（已删除，2026-11-22 M04）===
+# 原规则把「小舟/木舟」整词替换为 scene_objects 里的完整规格「名称（长X米宽Y米…）」，
+# 对 prompt/ff_desc/lf_desc/motion_desc 四个字段各写一遍——同一段 ≥24 字的资产描述
+# 被复制到四个字段，质量门 C6 判为 duplicate_injection（S11 40 轮中 16/17 份提交门
+# BLOCK 含此项）。尺寸由真正的消费者按 scene_objects 自行注入：Step02a
+# `vimax_bridge._inject_object_size_anchor`（帧 prompt，且会剥掉正文里的尺寸括注）、
+# Step02b `prompt_builder._build_space_object_anchor`（视频 prompt）。正文保持模型原文。
 
 
 # === 规则 2：仰卧 + 头部固定 ===
@@ -155,16 +147,6 @@ def _remove_invalid_head_state(text: str, shot: dict | None) -> str:
     out = re.sub(r"[，,]{2,}", "，", out)
     out = re.sub(r"[。]{2,}", "。", out)
     return out.strip("，,。 ")
-
-
-_BOAT_SPEC_RE = re.compile(
-    r"(?:无篷)?(?:舴艋舟|小舟|木舟)[（(][^）)]{0,48}(?:长|宽|高|可容)"
-)
-
-
-def _has_boat_spec(text: str) -> bool:
-    """Return True when this field already carries one concrete boat spec."""
-    return bool(_BOAT_SPEC_RE.search(text or ""))
 
 
 # v6.50（08-29）shot13.5 变体双守卫：
@@ -532,8 +514,6 @@ class V643PromptEnforcementConstraint(Constraint):
             anchors = scene_anchors_for(shot_location)
             # 从 char_layout 抽角色名 + position（Rule 4 替换需要）
             char_names, char_positions = self._extract_char_names_and_positions(shot)
-            # 规则 1 替换文本：船尺寸以 scene_objects 为唯一来源（v6.52 教训）
-            boat_repl = build_boat_replacement(shot, scene_objects)
             for field in ("ff_desc", "lf_desc", "prompt", "motion_desc"):
                 text = shot.get(field, "")
                 if not text or not isinstance(text, str):
@@ -548,7 +528,6 @@ class V643PromptEnforcementConstraint(Constraint):
                     ))
                 new_text = self._enforce_all(
                     text, shot, field, char_names, anchors, char_positions,
-                    boat_repl=boat_repl,
                 )
                 if new_text != text:
                     shot[field] = new_text
@@ -683,48 +662,9 @@ class V643PromptEnforcementConstraint(Constraint):
     def _enforce_all(
         self, text: str, shot: dict, field: str,
         char_names: list[str], anchors: tuple, char_positions: dict[str, str] | None = None,
-        boat_repl: str | None = None,
     ) -> str:
-        """对单字段应用所有规则（各段可经 CONSTRAINT_V643_*_ENABLED 独立禁用）.
-
-        boat_repl=None（默认）时按空 scene_objects 自动生成（走历史兜底文本）；
-        apply() 传本镜动态生成的替换文本。
-        """
+        """对单字段应用所有规则（各段可经 CONSTRAINT_V643_*_ENABLED 独立禁用）."""
         out = text
-        # 规则 1：小舟 → 舴艋舟（替换文本按本镜 scene_objects 动态生成）
-        if _rule_enabled("BOAT"):
-            if boat_repl is None:
-                boat_repl = build_boat_replacement(shot, {})
-            # v6.62（09-06）守卫：替换文本自身必须括号平衡——09-05 hook 实测
-            # 替换文本含未闭合括号时，其后所有锚点注入/消毒都在破损文本上跑
-            # （prompt 半截截断），比不替换更糟。不平衡 → 剥掉括号段用裸词替换。
-            _repl = boat_repl
-            if _repl.count("（") != _repl.count("）") or _repl.count("(") != _repl.count(")"):
-                _repl = _repl.split("（")[0].split("(")[0].rstrip("，, ") or "敞口木舟"
-            _seen_boat_spec = _has_boat_spec(out)
-            # 2026-11-13（S02）：没有输入规格时 `build_boat_replacement` 返回空串，
-            # 此时**不做任何替换**——保留原文，不编造尺寸/载客量。
-            for pat in (_BOAT_PATTERNS if boat_repl else []):
-                # v6.62（09-06）防叠：替换点紧邻前缀已是「舴艋/无篷/窄身」形制词时
-                # 不整词替换（原文「舴艋小舟」→「舴艋无篷舴艋舟」重复实测）——
-                # 只补尺寸段（含闭合括号），形制词由前缀 + 原文剩余字构成。
-                def _sub_guard(m: "re.Match[str]") -> str:
-                    nonlocal _seen_boat_spec
-                    head = out[max(0, m.start() - 2): m.start()]
-                    if any(w in head for w in ("舴艋", "无篷", "窄身")):
-                        _i = _repl.find("（")
-                        return _repl[_i:] if _i >= 0 else ""  # 「（长5.5米…，可容N人）」
-                    # One concrete spec per field is enough.  re.sub invokes
-                    # this guard for every match before assigning `out`, so a
-                    # plain _has_boat_spec(out) check would still duplicate
-                    # when two generic 小舟 exist in the same pass.
-                    if _seen_boat_spec:
-                        # 已有替换结果：保留本次匹配原文，不再把“木舟”二次替换成
-                        # “敞口木舟”（否则会叠成“敞口敞口木舟”，破坏幂等）。
-                        return m.group(0)
-                    _seen_boat_spec = True
-                    return _repl
-                out = pat.sub(_sub_guard, out)
         # 规则 2：仰卧 + 头部固定
         # 只允许死亡/受伤/昏迷上下文；活人仰卧吹箫、饮酒、仰望不得被修成尸体态。
         if _rule_enabled("HEAD_FIX"):
