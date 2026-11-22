@@ -2028,6 +2028,7 @@ _FIX_CAPABILITY_OUT_OF_SCOPE = {
     "plan_refs_pairing_broken": "候选层：plan_refs 配对破损",
     "plan_refs_stale_plan": "候选层：plan_refs 指向的计划版本已过期",
     "illegal_response": "响应协议：拒收记录（不是计划验收问题）",
+    "lightweight_plan_identity_invalid": "轻量计划身份块不成立：责任在轻量规划生产者；轻量计划不进修订分流（失败即停在计划层）",
     "canonical_beat_count_mismatch": "修订事务内部：新建声音后投影读回的身份配对失败（整轮拒收，不是计划验收问题）",
     "canonical_voice_kind_mismatch": "修订事务内部：新建声音后投影读回的身份配对失败（整轮拒收，不是计划验收问题）",
     "canonical_voice_identity_conflict": "修订事务内部：新建声音后投影读回的身份配对失败（整轮拒收，不是计划验收问题）",

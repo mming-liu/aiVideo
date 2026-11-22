@@ -304,9 +304,15 @@ def main() -> None:
         objects_bank_data = json.dumps(
             scene_objects_bank._data, ensure_ascii=False, sort_keys=True
         )
+        # 规划模式进脚本缓存身份：轻量模式不得命中 legacy 产出的脚本缓存（反之亦然）；
+        # 默认 legacy 时指纹逐字不变。
+        from step01_script_gen.lightweight_plan import (PLAN_MODE_LIGHTWEIGHT as _PM_LW,
+                                                        plan_mode_setting as _plan_mode)
+        _script_rule_version = (_mrt.RULE_VERSION if _plan_mode() != _PM_LW
+                                else "%s|plan_mode=%s" % (_mrt.RULE_VERSION, _PM_LW))
         prompt_changed = _mrt._prompt_changed(
             Path(__file__).parent / "prompts.py", _mrt.SCRIPT_FILE, novel_source_text, _mrt.NOVEL_CHAPTER,
-            objects_bank_data, rule_version=_mrt.RULE_VERSION,
+            objects_bank_data, rule_version=_script_rule_version,
         )
 
         if not prompt_changed:
@@ -1042,7 +1048,7 @@ def main() -> None:
         # 读侧仍兼容旧文件里的 `_source_hash`（见 hash_cache._prompt_changed）。
         script["source_hash"] = _mrt._hash_source(
             str(Path(__file__).parent / "prompts.py"), novel_source_text, _mrt.NOVEL_CHAPTER,
-            objects_bank_data, rule_version=_mrt.RULE_VERSION,
+            objects_bank_data, rule_version=_script_rule_version,
         )
 
         # v6.50（08-29）：保存前重算 shot_count——timecode pre-pass 拆镜发生在

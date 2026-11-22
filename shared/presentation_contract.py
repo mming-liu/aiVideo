@@ -912,8 +912,9 @@ def _view_from_hybrid_plan(plan: dict) -> tuple:
 
 
 def _semantic_legacy(plan) -> bool:
-    from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD, LEGACY_ACCEPTANCE_VERSION
-    return isinstance(plan, dict) and plan.get(LEGACY_ACCEPTANCE_FIELD) == LEGACY_ACCEPTANCE_VERSION
+    from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD, SEMANTIC_ACCEPTANCE_VERSIONS
+    return (isinstance(plan, dict)
+            and plan.get(LEGACY_ACCEPTANCE_FIELD) in SEMANTIC_ACCEPTANCE_VERSIONS)
 
 
 def _beat_body_problems(text, uid, path) -> list:

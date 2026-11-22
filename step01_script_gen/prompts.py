@@ -829,11 +829,15 @@ def render_execution_contract(plan) -> str:
             _shadow = shadowed_dialogue_map(plan or {})
         except Exception:
             _shadow = {}
-        parts += ["%d. %s%s%s" % (
+        # 轻量计划（S14）：说话人是计划声明的一部分，随台词一起交给分镜（非轻量计划为空表）
+        from step01_script_gen.lightweight_plan import dialogue_speakers
+        _speakers = dialogue_speakers(plan)
+        parts += ["%d. %s%s%s%s" % (
             i, x,
             "（已批准改编）" if x in _adapted_texts else "",
             ("（与第 %d 句同源：plan_refs.lines 统一填 %d）" % (_shadow[i], _shadow[i]))
-            if i in _shadow else "")
+            if i in _shadow else "",
+            ("（说话人：%s）" % _speakers[x]) if x in _speakers else "")
             for i, x in enumerate(_lines, 1)]
     if _facts:
         parts.append("二、必保留事实（**一条都不许省**，原文证据随附）：")

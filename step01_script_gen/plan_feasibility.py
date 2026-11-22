@@ -3769,11 +3769,24 @@ def plan_contract_records(plan, *, novel_text: str = "",
         return _voice_order + presentation_records(plan, novel_text=novel_text,
                                 verification=(plan or {}).get("plan_verification"),
                                 require_verification=require_verification)
-    from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD, LEGACY_ACCEPTANCE_VERSION
+    from shared.fact_metadata import (LEGACY_ACCEPTANCE_FIELD, LEGACY_ACCEPTANCE_VERSION,
+                                      LIGHTWEIGHT_ACCEPTANCE_VERSION,
+                                      SEMANTIC_ACCEPTANCE_VERSIONS)
     _semantic = LEGACY_ACCEPTANCE_FIELD in plan
-    if _semantic and plan[LEGACY_ACCEPTANCE_FIELD] != LEGACY_ACCEPTANCE_VERSION:
+    if _semantic and plan[LEGACY_ACCEPTANCE_FIELD] not in SEMANTIC_ACCEPTANCE_VERSIONS:
         return _voice_order + [_problem_record("planning_acceptance_version_invalid", "plan", None,
                                 LEGACY_ACCEPTANCE_FIELD, "未知的计划验收版本")]
+    #: 轻量计划**按设计**不带计划层内容核验记录；身份块不成立（缺失 / 原文摘要不符）
+    #: 时不得借这个版本号跳过记录要求——见末尾的核验分支。
+    _lightweight = (_semantic
+                    and plan[LEGACY_ACCEPTANCE_FIELD] == LIGHTWEIGHT_ACCEPTANCE_VERSION)
+    if _lightweight:
+        from step01_script_gen.lightweight_plan import identity_problems
+        _lw_bad = identity_problems(plan, novel_text)
+        if _lw_bad:
+            return _voice_order + [_problem_record(
+                "lightweight_plan_identity_invalid", "plan", None, "lightweight_plan",
+                "轻量计划身份不成立（%s）——不能凭验收版本号免除内容核验记录" % _lw_bad)]
     facts = [str(f) for f in (plan.get("required_facts") or [])]
     if not facts:
         return _voice_order   # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`
@@ -4032,8 +4045,11 @@ def plan_contract_records(plan, *, novel_text: str = "",
             "钩子没要求说出口的那句不要写进承载声明（纯画面钩子请给空串）"
             % (_extra, sorted(_required) or "（无）"))
     if _semantic:
+            # 轻量计划：确定性判据（结构/引用/逐字/承载/预算）照常全跑，只是没有
+            # 计划层 LLM 内容核验这一层——不伪造记录、也不要求记录。
             problems.extend(_semantic_verification_records(
-                plan, novel_text, require_verification=require_verification))
+                plan, novel_text,
+                require_verification=(require_verification and not _lightweight)))
     return problems
 
 
