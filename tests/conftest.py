@@ -68,6 +68,10 @@ def _audit_channel_off_by_default(monkeypatch):
     # 不隔离的话每个用例都会去建原生 deepseek 服务，修复路径的行为随 .env 漂移。
     monkeypatch.delenv("REPAIR_TEXT_PROVIDER", raising=False)
     monkeypatch.delenv("REPAIR_TEXT_MODEL", raising=False)
+    # 恢复入口（step01_script_gen.resume）直接写 os.environ 指向**本用例 tmp_path**
+    # 下的发送预算文件；不清掉就泄漏给后续用例（tmp 目录已不在 ⇒ fail-closed 拒发，
+    # test_run_provenance 跟在 test_resume_from_checkpoint 后必红，2026-11-22 定位）。
+    monkeypatch.delenv("STEP01_SEND_BUDGET_FILE", raising=False)
 
 
 @pytest.fixture(autouse=True)
