@@ -81,7 +81,7 @@ class KfTimelineNormalizeConstraint(Constraint):
         *, target: str, message: str, evidence: str, detail: str,
     ) -> None:
         """统一「只报告」出口。severity 用类声明级（HARD）——这些是结构性缺陷，
-        本地修不了，属 regen 材料；REGEN_AUTO_TRIGGER 默认关闭，不产生 LLM 调用。"""
+        本地修不了，只报告交修复轮；约束层不产生 LLM 调用。"""
         ctx.record_violation(Violation(
             constraint_name=self.name,
             severity=self.severity,

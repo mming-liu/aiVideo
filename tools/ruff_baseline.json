@@ -414,24 +414,6 @@
   "count": 1
  },
  {
-  "path": "step01_script_gen/constraints/dsl/loader.py",
-  "code": "F401",
-  "name": "pathlib.Path",
-  "count": 1
- },
- {
-  "path": "step01_script_gen/constraints/dsl/loader.py",
-  "code": "F401",
-  "name": "sys",
-  "count": 1
- },
- {
-  "path": "step01_script_gen/constraints/dsl/loader.py",
-  "code": "F401",
-  "name": "typing.Any",
-  "count": 1
- },
- {
   "path": "step01_script_gen/constraints/final_quality_normalizer.py",
   "code": "F401",
   "name": "shared.utils.text.text_integrity_errors",
@@ -513,12 +495,6 @@
   "path": "step01_script_gen/constraints/opening_empty_shot_insert.py",
   "code": "F401",
   "name": "copy",
-  "count": 1
- },
- {
-  "path": "step01_script_gen/constraints/regen_trigger.py",
-  "code": "F401",
-  "name": ".types.Severity",
   "count": 1
  },
  {

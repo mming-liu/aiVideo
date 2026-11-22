@@ -349,8 +349,9 @@ def run_hard_fix(
         # 审核建议的首选修法：确定性 hard-fix **只产出结构化违例**，LLM 侧统一交给
         # main 中已有的事务式修复/收敛管线（`_repair_shot_warnings` /
         # `_regen_over_limit` / `_regen_structural_over_limit`——那里有目标集合、字段
-        # 授权、不退化验收、逐镜 revision 快照）。`report.hard_unresolved` 已被主流程
-        # 消费，`regen_trigger` 的 LLM 能力保留给显式调用方与测试。
+        # 授权、不退化验收、逐镜 revision 快照）。2026-11-21：已无调用方的
+        # `regen_trigger` 模块删除；「本层不发模型请求」由
+        # tests/step01_script_gen/constraints/test_engine_no_model_send.py 锁定。
         return (script, report) if return_report else script
     except Exception as e:
         # 环境故障一路向上抛（见 ENV_FAULT_TYPES）：硬修复层整体没跑却返回

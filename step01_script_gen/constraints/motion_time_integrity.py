@@ -30,9 +30,9 @@
 ## 关于报告文案里的「阻止进入下游」
 
 旧文案写「保留原文并阻止进入下游」。2026-09-27 逐条核对消费者：`repaired=False` 的
-HARD 只进 `report.hard_unresolved`，而全仓唯一读取者是 `constraints/regen_trigger.py`，
-`trigger_regen_and_merge()` **已无生产调用方**（见 `constraints/engine.py` v6.98 注：
-「regen_trigger 的 LLM 能力保留给显式调用方与测试」）。即「阻止进入下游」当时并不成立，
+HARD 只进 `report.hard_unresolved`，当时全仓唯一读取者是 `constraints/regen_trigger.py`，
+而 `trigger_regen_and_merge()` **已无生产调用方**（见 `constraints/engine.py` v6.98 注；
+该模块已于 2026-11-21 删除，现在 hard_unresolved 只进 engine 日志）。即「阻止进入下游」当时并不成立，
 属**断言失真**（工作准则 7）。本次改为如实描述：本约束只报、不修、不臆造时间轴。
 真正要不要拦，属工作包 B（已核实的缺帧接入质量门），不在此处顺手升级。
 """

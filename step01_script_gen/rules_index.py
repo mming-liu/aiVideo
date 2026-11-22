@@ -268,7 +268,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
             "tests/step01_script_gen/test_regen_acceptance_gates.py",
             "tests/step01_script_gen/test_structural_convergence.py",
             "tests/shared/test_semantic_barrier.py",
-            "tests/step01_script_gen/constraints/test_regen_trigger.py",
+            "tests/step01_script_gen/constraints/test_engine_no_model_send.py",
             "tests/step01_script_gen/test_repair_shot_replacements.py",
         ],
     },
