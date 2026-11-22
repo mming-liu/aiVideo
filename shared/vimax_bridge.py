@@ -3955,16 +3955,10 @@ async def _gen_first_frame_async(
     if not ff_desc:
         _bridge_log(f"  [FRAME] 首帧 shot_{idx} 缺少 ff_desc，拒绝凭 scene/main_subject 虚构画面")
         return None
-    else:
-        # ff_Desc 存在时，检查是否是纯相机运动描述（无静态画面）
-        motion_keywords = ["上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
-                          "穿越", "飞", "跑", "快速", "缓慢", "跟随", "追"]
-        is_pure_motion = any(kw in ff_desc for kw in motion_keywords)
-        if is_pure_motion or len(ff_desc) < 20:
-            # ff_Desc 几乎是纯相机运动，补充静态画面
-            location = shot.get("location", "") or shot.get("scene", "")
-            main_subj = shot.get("main_subject", "")
-            ff_desc = f"{location}，{main_subj}，静态画面。{ff_desc}"
+    # 2026-11-22（M04）：删除「ff_desc 短于 20 字或含运动词就前置『地点，主体，静态画面。』」
+    # 的补写。它只在生成器路径执行、视觉计划不做，于是生成器收到的提示与计划单元不一致
+    # （S05 内容链用例：ff「小舟靠岸，丁把缆绳系在石桩上。」15 字被补成「快艇，丁，静态画面。…」）；
+    # 补写内容也是凭 location/main_subject 拼出来的，与下方「桥接层不得改写帧事实」冲突。
     if empty_scene:
         ff_desc = f"{ff_desc}\n空镜头，画面中严禁出现任何人物、身影、人影、轮廓或人形。只拍摄自然景物特写。"
 
