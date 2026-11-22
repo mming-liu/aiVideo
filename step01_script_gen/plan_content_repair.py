@@ -378,6 +378,7 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
     _slots: list = []
     _bad: list = []
     _blocked: list = []
+    _narrow_unavailable: list = []
     _covered: list = []
     _deferred: list = []
     _beats = _beat_uids(view)
@@ -546,11 +547,17 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
                     _probe, _text, kind=_vkind, novel_text=novel_text,
                     source_texts=[_src_txt] if _src_txt else [])
                 if not _legal:
-                    _bad.append("%s（声音 %r 不存在合法的收窄片段）" % (_code, _uid))
-                    _blocked.append(_rec(
+                    # 2026-11-22（M06 复核）：目标**存在**，只是收窄这种修法用不了。只记为
+                    # 「槽位表达不了」，交上层按本轮权限选其他修法（`_slot_deferral` 把有槽位
+                    # 适配器的 code 判 blocking ⇒ 走既有非槽位备用路）。**不得**进 `_blocked`：
+                    # `_blocked` 的语义是「目标身份失效」，上层会零调用判 invalid/unknown_target，
+                    # 把可修的问题错报成「目标不存在」（S11 ch1_r05/r08/r18 的 17 份冻结输入实测）。
+                    _bad.append("%s（声音 %r 不存在合法的收窄片段，收窄修法不可用）"
+                                % (_code, _uid))
+                    _narrow_unavailable.append(_rec(
                         "repair_narrow_no_legal_span", "voice_text:%s" % _uid,
                         "声音 %r 的正文内部没有合法切分边界（或任何更短片段都保不住义务），"
-                        "收窄表达不了——不向模型下发必被拒的收窄槽位" % _uid, _text))
+                        "不下发收窄槽位" % _uid, _text))
                     continue
                 _slots.append({
                     "slot_id": "voice_text:%s" % _uid, "kind": "voice_text",
@@ -696,7 +703,9 @@ def content_slots(view, problems, *, allow_create=True, target_fact_uids=None,
         })
     return {"slots": _slots, "unexpressible": sorted(set(_bad)),
             "blocked": _blocked, "deferred": sorted(set(_deferred)),
-            "covered_codes": sorted(set(_covered))}
+            "covered_codes": sorted(set(_covered)),
+            # 目标存在但某种修法不可用（与 `blocked` 的「身份失效」分开）；只作证据
+            "narrow_unavailable": _narrow_unavailable}
 
 
 def _request_facts(slots) -> list:

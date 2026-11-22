@@ -64,3 +64,45 @@ def test_hook_bound_voice_has_no_candidate():
     text = "三年前，老掌柜病故，把铺子交给了他十五岁的长子。"
     assert pcr._legal_narrow_texts(slot, text, kind="narration", novel_text=NOVEL,
                                    source_texts=[text]) == []
+
+
+# ---- 分派：目标存在但不可收窄 ≠ 目标不存在（M06 复核，S11 ch1_r05/r08/r18） ----
+
+def _voice_view_without_boundary():
+    from tests.step01_script_gen.test_narrow import _voice_view
+    return _voice_view(text="甲留在门外直到天黑后才走")
+
+
+def test_unnarrowable_existing_target_is_not_reported_as_unknown():
+    v = _voice_view_without_boundary()
+    found = pcr.content_slots(v, [{"code": "verify_voice_text_mismatch", "uid": "n01",
+                                   "kind": "verification", "path": "x"}],
+                              novel_text="甲留在门外直到天黑后才走")
+    assert not found["slots"], "无合法片段时不下发收窄槽位"
+    assert found["blocked"] == [], "目标存在，不得记为身份失效"
+    assert [r["code"] for r in found["narrow_unavailable"]] == ["repair_narrow_no_legal_span"]
+    assert any(u.startswith("verify_voice_text_mismatch") for u in found["unexpressible"])
+
+
+def test_dispatch_hands_unnarrowable_target_to_the_non_slot_path():
+    """上层分派：不是 STATE_UNKNOWN_TARGET（零调用拒收），而是交既有非槽位备用路.
+
+    真实入口 `revise_plan_once` 的回放见交付记录（17 份 S11 冻结输入）。"""
+    from step01_script_gen import outline as o
+    v = _voice_view_without_boundary()
+    found = pcr.content_slots(v, [{"code": "verify_voice_text_mismatch", "uid": "n01",
+                                   "kind": "verification", "path": "x"}],
+                              novel_text="甲留在门外直到天黑后才走")
+    # 与 `_content_slots_applicable` 同一判定顺序：blocked 为空 ⇒ 进入 unexpressible 分支
+    deferred, blocking = o._slot_deferral(found["unexpressible"],
+                                          [{"code": "verify_voice_text_mismatch"}])
+    assert blocking and not deferred, "有槽位适配器的 code 表达不了 ⇒ 走既有非槽位备用路"
+    assert pcr.STATE_UNKNOWN_TARGET != pcr.STATE_UNSUPPORTED
+
+
+def test_missing_target_is_still_zero_call_unknown():
+    from tests.step01_script_gen.test_narrow import _voice_view
+    v = _voice_view()
+    found = pcr.content_slots(v, [{"code": "verify_voice_text_mismatch", "uid": "n99",
+                                   "kind": "verification", "path": "x"}])
+    assert [b["code"] for b in found["blocked"]] == ["repair_slot_target_unknown"]

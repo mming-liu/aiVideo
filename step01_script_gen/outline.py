@@ -3098,6 +3098,7 @@ def _content_slots_applicable(plan, problems, *, mode=None, allow_create=True,
     _ctx = {"view": _base_view, "found": _found, "mode": _mode,
             "verification_record": _verification_record_for(verification, plan),
             "blocked": list(_found.get("blocked") or []),
+            "narrow_unavailable": list(_found.get("narrow_unavailable") or []),
             "deferred": list(_found.get("deferred") or [])}
     # **身份失效优先**：目标实体都不存在时，先修记录（生产者），不是先改内容
     if _ctx["blocked"]:
