@@ -208,6 +208,64 @@ def test_duplicate_voice_and_missing_speaker_rejected():
     assert {"lightweight_voice_duplicate", "lightweight_speaker_missing"} <= codes
 
 
+NOVEL_B = ("城门口贴出了一张告示。\n"
+           "守卫高声念道：“自今日起，夜里不许出城。”\n"
+           "人群里一阵骚动，卖菜的老妇转身就走。\n"
+           "掌柜低声对伙计说：“把后门的货先搬进来。”\n"
+           "伙计扛起两只麻袋，从后门进了库房。\n"
+           "天黑以后，城门在吱呀声里合上了。\n"
+           "整条街只剩下巡夜人的梆子声。\n")
+
+
+def _answer_b():
+    """另一份内容：4 个事件、2 句台词、2 条旁白、事实比例不同，编号重映射."""
+    def _b(text, src, kind="none", vt="", sp=""):
+        return {"text": text, "purpose": "推进", "source": src, "voice_kind": kind,
+                "voice_text": vt, "speaker": sp}
+    return {
+        "characters": ["守卫", "掌柜", "伙计"], "emotional_arc": "平静→不安→沉寂",
+        "climax": "城门合上", "end_hook": "只剩梆子声", "omittable": ["老妇离开"],
+        "events": [
+            {"summary": "告示宣布夜禁", "beats": [
+                _b("守卫站在告示前高声宣读", "守卫高声念道", "dialogue",
+                   "自今日起，夜里不许出城。", "守卫")]},
+            {"summary": "掌柜吩咐收货", "beats": [
+                _b("掌柜凑近伙计耳语", "掌柜低声对伙计说", "dialogue",
+                   "把后门的货先搬进来。", "掌柜"),
+                _b("伙计扛着麻袋走进库房", "伙计扛起两只麻袋，从后门进了库房。")]},
+            {"summary": "城门关闭", "beats": [
+                _b("城门缓缓合拢", "天黑以后，城门在吱呀声里合上了。", "narration",
+                   "天黑以后，城门在吱呀声里合上了。")]},
+            {"summary": "夜街寂静", "beats": [
+                _b("空街上巡夜人提灯走过", "整条街只剩下巡夜人的梆子声。", "narration",
+                   "整条街只剩下巡夜人的梆子声。")]},
+        ],
+        "facts": [
+            {"claim": "官府告示规定自今日起夜里不许出城",
+             "evidence": "自今日起，夜里不许出城。", "event": 1, "beat": 1, "carrier": "voice"},
+            {"claim": "掌柜让伙计把后门的货先搬进来，伙计随即把麻袋扛进库房",
+             "evidence": "伙计扛起两只麻袋，从后门进了库房。", "event": 2, "beat": 2,
+             "carrier": "visual"},
+        ],
+    }
+
+
+def test_second_content_sample_compiles_through_same_entry():
+    svc = _Svc([_answer_b()])
+    res = lw.generate_lightweight_outline_result(NOVEL_B, service=svc)
+    assert res["executable"] is True, res["failure"]
+    plan = res["plan"]
+    assert len(plan["main_events"]) == 4 and len(plan["shot_beats"]) == 5
+    assert [e["text"] for e in plan["narration_lines"]] == [
+        "天黑以后，城门在吱呀声里合上了。", "整条街只剩下巡夜人的梆子声。"]
+    assert plan["required_facts"][0].endswith("承载：B1/台词1")
+    assert plan["required_facts"][1].endswith("承载：B3/画面")
+    assert "（说话人：掌柜）" in render_execution_contract(plan)
+    # 同一回答换到另一部原文：逐字核验必须拒收（不是靠作品名放行）
+    res_x = lw.generate_lightweight_outline_result(NOVEL, service=_Svc([_answer_b(), _answer_b()]))
+    assert res_x["executable"] is False
+
+
 def test_hybrid_presentation_is_rejected_before_send(monkeypatch):
     monkeypatch.setenv(lw.PLAN_MODE_ENV, "lightweight")
     monkeypatch.setenv("STEP01_PRESENTATION_MODE", "screen_hybrid")
