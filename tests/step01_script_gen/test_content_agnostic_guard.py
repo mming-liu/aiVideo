@@ -95,3 +95,43 @@ def test_no_story_terms_in_prompt_assembler():
         if path.is_file():
             violations.extend(_python_violations(path, STORY_TERMS))
     assert not violations, "\n".join(violations)
+
+
+#: 生产与工具代码的根（2026-11-23 起全部纳入，含剧情短语）。测试语料由
+#: `tests/test_content_binding_ratchet.py` 管；`baselines/` 是冻结快照，不参与。
+_CODE_ROOTS = ("step01_script_gen", "shared", "_text_gen", "_image_gen", "_video_gen", "tts",
+               "step02a_frame_gen", "step02b_video_gen", "step02_video_gen", "step03_tts_audio",
+               "step04_merge", "vimax", "tools")
+
+
+#: 在代码里作为**通用道具名**保留的词（只出现在道具词表/手持物语法修正这类通用表里；
+#: 按具体镜头写死的改写与落点已删除）。提示面门禁仍禁它。
+_CODE_GENERIC_NOUNS = ("钓杆",)
+
+
+def _tracked_code_files():
+    """受版本管理的代码文件；不在 git 仓库里（如解包的源码包）时退回目录遍历."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "--", *_CODE_ROOTS],
+                             capture_output=True, text=True, encoding="utf-8", check=True).stdout
+        files = [ROOT / x for x in out.splitlines() if x.endswith(".py")]
+        if files:
+            return files
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return [p for r in _CODE_ROOTS if (ROOT / r).is_dir()
+            for p in (ROOT / r).rglob("*.py") if "__pycache__" not in p.parts]
+
+
+def test_no_work_terms_or_story_phrases_in_any_code_string():
+    """作品名、人名与第一章剧情短语都不得出现在任何生产/工具代码的字符串常量里.
+
+    docstring 与注释里的历史复盘不算（不进入运行时）；原文路径、书名、部名一律从配置取。
+    """
+    terms = TERMS + tuple(t for t in STORY_TERMS if t not in _CODE_GENERIC_NOUNS)
+    violations = []
+    for path in _tracked_code_files():
+        if path.is_file():
+            violations.extend(_python_violations(path, terms))
+    assert not violations, "\n".join(violations)

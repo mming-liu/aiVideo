@@ -44,6 +44,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _novel_file() -> Path:
+    """原文路径来自配置（NOVEL_FILE），相对路径按仓库根解析."""
+    from shared.config import resolve_novel_file
+    p = Path(resolve_novel_file())
+    return p if p.is_absolute() else ROOT / p
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -267,7 +274,7 @@ def main(argv=None) -> int:
         if not _initial_backup.exists():
             shutil.copy2(official_audit, _initial_backup)
 
-    novel_path = root / "锦衣夜行_77119小说.txt"
+    novel_path = _novel_file()
     novel_text = _read_raw_chapter(novel_path, NOVEL_CHAPTER)
     plan = _resolve_plan(script)
     metadata = {

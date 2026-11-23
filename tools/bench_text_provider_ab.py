@@ -39,6 +39,13 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _novel_file() -> Path:
+    """原文路径来自配置（NOVEL_FILE），相对路径按仓库根解析."""
+    from shared.config import resolve_novel_file
+    p = Path(resolve_novel_file())
+    return p if p.is_absolute() else ROOT / p
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -307,7 +314,7 @@ def main() -> None:
 
     # 1. 提取章节
     from shared.chapter_reader import extract_section
-    novel_text = extract_section(str(ROOT / "锦衣夜行_77119小说.txt"), chapter)
+    novel_text = extract_section(str(_novel_file()), chapter)
     print(f"  章节 {chapter}: {len(novel_text)} 字符")
 
     # 2. 加载已有 bank + 生成大纲（用当前 provider，单次 LLM 调用）

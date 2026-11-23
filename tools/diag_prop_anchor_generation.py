@@ -34,6 +34,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _novel_file() -> Path:
+    """原文路径来自配置（NOVEL_FILE），相对路径按仓库根解析."""
+    from shared.config import resolve_novel_file
+    p = Path(resolve_novel_file())
+    return p if p.is_absolute() else ROOT / p
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -225,7 +232,7 @@ def main(argv=None) -> int:
 
     # 与生产同源：章节读取走 main.read_chapter（`shared.chapter_reader` 只有
     # extract_section/extract_chapter，没有这个封装）
-    novel_text = m.read_chapter("锦衣夜行_77119小说.txt", chapter=NOVEL_CHAPTER)
+    novel_text = m.read_chapter(str(_novel_file()), chapter=NOVEL_CHAPTER)
     outline = generate_outline(novel_text, args.model, cache_path=cache) or {}
     anchors = outline.get("prop_state_candidates") or []
     block = render_prop_anchor_block(anchors)

@@ -39,6 +39,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _novel_file() -> Path:
+    """原文路径来自配置（NOVEL_FILE），相对路径按仓库根解析."""
+    from shared.config import resolve_novel_file
+    p = Path(resolve_novel_file())
+    return p if p.is_absolute() else ROOT / p
 sys.path.insert(0, str(ROOT))
 
 # 价格（元/百万 tokens，2026-08-13 现行价，仅用于相对成本比较）
@@ -78,7 +85,7 @@ def _build_prompt(chapter: int) -> tuple[str, str]:
     from shared.character_bank import CharacterBank
     from shared.scene_objects_bank import SceneObjectsBank
 
-    novel_file = ROOT / "锦衣夜行_77119小说.txt"
+    novel_file = _novel_file()
     novel_text = extract_section(str(novel_file), chapter)
 
     bank = CharacterBank()
@@ -492,17 +499,17 @@ def _stub_result() -> dict:
     for i in range(1, 13):
         shots.append({
             "index": i,
-            "narration_segment": f"张十三道：快撤{i}",
-            "subtitle": f"张十三道：快撤{i}",
-            "scene": "杨府别庄",
-            "location": "照月湾",
-            "main_subject": "张十三",
+            "narration_segment": f"甲道：快撤{i}",
+            "subtitle": f"甲道：快撤{i}",
+            "scene": "庄园",
+            "location": "水湾",
+            "main_subject": "甲",
             "core_keywords": ["撤退", "夜色"],
-            "prompt": "中景，张十三压低身形穿过庭院，画左跑向大门。",
+            "prompt": "中景，甲压低身形穿过庭院，画左跑向大门。",
             "motion_desc": "压低身形穿行",
-            "ff_desc": "张十三蹲伏在假山后，双眼看向画左。",
-            "lf_desc": "张十三已到院墙下，手搭墙沿。",
-            "context_bridge": "上承刺客落水，下启张十三翻墙",
+            "ff_desc": "甲蹲伏在假山后，双眼看向画左。",
+            "lf_desc": "甲已到院墙下，手搭墙沿。",
+            "context_bridge": "上承来人离去，下启甲翻墙",
             "audio_cue": "夜晚虫鸣，衣料摩擦声",
             "fx_effect": "无",
             "color_tone": "冷蓝夜色",

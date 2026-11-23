@@ -25,10 +25,17 @@ import sys
 from datetime import datetime
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _chapter_rel(chapter: int):
+    """<小说名>/part_NN_<部名>/chapter_NNN，书名/部名来自项目配置."""
+    import shared.config  # noqa: F401  加载 .env.content
+    from shared.paths import chapter_relpath
+    return chapter_relpath(chapter)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-RUN_J = ROOT / ".dsh/step01_fix_verify_20261115j/output/锦衣夜行/part_01_杀青州/chapter_001"
+RUN_J = ROOT / ".dsh/step01_fix_verify_20261115j/output" / _chapter_rel(1)
 SNAPSHOT = RUN_J / "snapshots/script_result_20261115_175552.json"
 ANSWER = RUN_J / "step01_call_bodies/c1abb36fe6f7042f5.txt"
 ROUNDS = RUN_J / "step01_repair_rounds.json"

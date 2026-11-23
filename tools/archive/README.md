@@ -15,7 +15,7 @@
 
 | 原路径 | 现路径 | 用途（来自引用文档） |
 |---|---|---|
-| `tools/build_m02_u6_candidate.py` | `tools/archive/build_m02_u6_candidate.py` | M02 U6 冻结候选构造 |
+| `tools/build_m02_u6_candidate.py` | 已删除（2026-11-23，见下） | M02 U6 冻结候选构造 |
 | `tools/build_m03_issue_status.py` | `tools/archive/build_m03_issue_status.py` | M03 问题台账状态 |
 | `tools/build_s03_identity_shadow_diff.py` | `tools/archive/build_s03_identity_shadow_diff.py` | S03 身份影子比对 |
 | `tools/build_s06_decision_samples.py` | `tools/archive/build_s06_decision_samples.py` | S06 G1/G2/G6 裁决样本 |
@@ -23,3 +23,12 @@
 | `tools/build_s06_g7_samples.py` | `tools/archive/build_s06_g7_samples.py` | S06 G7 裁决样本 |
 
 更早归档的 `apply_738fa_audit_patch.py`、`apply_final_audit_patch.py` 不在本表。
+
+## 2026-11-23 作品内容清理
+
+`build_m02_u6_candidate.py`、`apply_738fa_audit_patch.py`、`apply_final_audit_patch.py` 三个一次性
+脚本写死了测试小说的人名、台词和输出路径，已删除。取回：
+
+    git show f952bab2:tools/archive/build_m02_u6_candidate.py
+    git show f952bab2:tools/archive/apply_738fa_audit_patch.py
+    git show f952bab2:tools/archive/apply_final_audit_patch.py

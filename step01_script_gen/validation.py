@@ -2505,7 +2505,7 @@ def _check_ff_motion_timeline(shots: list[dict], hook: dict = None) -> dict:
                                 f"而 motion_desc 有刺入/挥砍动作（{motion[:40]}...）。"
                                 f"t=0 画面没有武器起点，视频模型只能「凭空变」出武器，"
                                 f"导致刀从胸口冒出/刺入方向错乱。"
-                                f"建议 ff 让武器可见（如'刺客半身出水、右手握匕首高举过顶、刀尖朝下'），"
+                                f"建议 ff 让武器可见（如'持械者现身、右手握兵器高举过顶'），"
                                 f"或 motion 首段先写'举刀出水面'建立武器可见起点再下刺。"
                             )
         # 完成态动词检测
@@ -3920,7 +3920,7 @@ def _check_multi_person_staging(shots: list[dict], hook: dict = None,
         "吩咐", "命令", "回答", "回应", "恐吓", "劝告", "解释", "汇报",
         "抱头", "指水", "指画", "指向", "指着", "指向画", "指认",
         "跃出", "从水中跃出", "窜出", "破水而出", "纵身跃上", "飞掠上船",
-        "倒纵", "倒纵入水", "没入", "入水", "退入水中",
+        "倒纵", "跃入水中", "没入", "入水", "退入水中",
     )
     for shot in targets:
         idx = shot.get("index", "?")
@@ -4968,7 +4968,7 @@ _PROP_POS_FALLBACK: dict = _build_prop_pos_fallback()
 # pre-state = 动作起始（破水/出剑/冲撞/跃起/举刀/挥拳…）
 # post-state = 动作结束（没入/倒地/逃走/消失/已被…）
 _KF_PRE_KW = (
-    "半身探出", "刚出水面", "破水而出", "举刀", "刀尖朝下", "正对", "水花四溅",
+    "半身探出", "刚出水面", "破水而出", "举刀", "正对", "水花四溅",
     "破门", "跃起", "扑出", "冲出", "挥刀", "出剑", "抬脚", "纵身",
 )
 _KF_POST_KW = (
@@ -5845,7 +5845,7 @@ from step01_script_gen.prompt_semantic import (
     THREAT_WORDS_ENLARGED as _THREAT_WORDS,
 )
 # 潜伏态威胁免朝向（规则48：潜伏水下/藏匿中无需朝向目标；与 B2 注入共用）
-_RULE48_LURKING = ("潜伏水下", "水下黑影", "微露水面", "藏于水下", "水下轮廓", "藏身水下")
+_RULE48_LURKING = ("潜伏水下", "微露水面", "藏于水下", "水下轮廓", "藏身水下")
 # 「发现者视线指向某威胁」的表达（视线锁定/紧盯/看向 + 威胁词）
 _THREAT_GAZE_RE = re.compile(
     r'[视线目光双眼眼神]?[^。；！？]{0,8}[盯看望锁][^。；！？]{0,10}(刺客|杀手|黑衣人|黑影|水中|水下)'
@@ -6399,7 +6399,7 @@ _BLOOD_WORDS = ("暗红", "洇痕", "血污", "血染", "血痕", "血迹", "红
 from step01_script_gen.prompt_semantic import THREAT_WATER_WORDS as _PS_THREAT_WATER
 _THREAT_WATER_WORDS = (
     *_PS_THREAT_WATER,
-    "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中", "潜伏",
+    "没入水中", "已没入", "已彻底没入", "跃入水中", "潜回水中", "潜伏",
 )
 # 通用化（v6.62）：从原"角色A/角色B"硬编码改为按姿态类别聚合——任何角色名只要
 # 出现在 _extract_state_markers 的 poses dict 中即可被下列规则命中。键名只是语义标签。
@@ -6615,7 +6615,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                     f"违反时间线单调性（出血只能扩大或不变，不能消失）。"
                 )
             # 刺客出水单调：上一镜「没入」、下一镜「刚出」 → 时序倒退
-            prev_gone = prev["threat_water_state"] in ("没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中")
+            prev_gone = prev["threat_water_state"] in ("没入水中", "已没入", "已彻底没入", "跃入水中", "潜回水中")
             cur_just_out = cur["threat_water_state"] in (
                 "刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水"
             )
@@ -6673,7 +6673,7 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
                 "刚出水面", "半身探出", "破水而出", "窜出", "浮出", "半身破水"
             )
             lf_threat_gone = lf_m["threat_water_state"] in (
-                "没入水中", "已没入", "已彻底没入", "倒纵入水", "潜回水中"
+                "没入水中", "已没入", "已彻底没入", "跃入水中", "潜回水中"
             )
             lf_threat_latent = lf_m["threat_water_state"] is None and any(
                 w in lf_text for w in ("潜伏", "黑影", "潜伏水下", "暗影")
@@ -6681,8 +6681,8 @@ def _check_kf_temporal_consistency(shots: list[dict], hook: dict = None) -> dict
             # kf 刺客已出水 → LF 刺客完全消失/潜伏（既不出水也不入水=凭空消失）
             if kf_threat_visible and lf_threat_latent:
                 warnings.append(
-                    f"镜头{label} 刺客状态跳变：kf 末尾 t={last_tr:.1f} 刺客已出水/破水 → LF 刺客「潜伏/黑影」凭空消失（中间缺「倒纵入水/没入」过渡）。"
-                    f"建议 LF 写「刺客已没入水中/倒纵入水」明示消失方式。"
+                    f"镜头{label} 刺客状态跳变：kf 末尾 t={last_tr:.1f} 刺客已出水/破水 → LF 刺客「潜伏/黑影」凭空消失（中间缺「没入/离场」过渡）。"
+                    f"建议 LF 明写消失方式（如已没入水中、已离场）。"
                 )
             # 通用化（v6.62）：任意角色"躺下→坐/站"都视为致命伤持续违反。
             # v6.73: compare per-character clauses; a multi-person shot where
@@ -7250,7 +7250,7 @@ def _check_prop_spatial_anchor(shots: list[dict], hook: dict = None,
         if lacks:
             warnings.append(
                 f"镜头{label}: 同框道具 {matched} 中 {lacks} 未写空间方位——"
-                f"应给每件道具一个落点（如「钓杆垂入画右水面、酒壶倾洒画左甲板」），"
+                f"应给每件道具一个落点（如「A 道具在画右、B 道具在画左」），"
                 f"否则模型自由摆放重叠（规则50/22.9）。"
             )
     for w in warnings:

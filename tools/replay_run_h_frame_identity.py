@@ -31,11 +31,17 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _chapter_rel(chapter: int):
+    """<小说名>/part_NN_<部名>/chapter_NNN，书名/部名来自项目配置."""
+    import shared.config  # noqa: F401  加载 .env.content
+    from shared.paths import chapter_relpath
+    return chapter_relpath(chapter)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-RUN_H = (ROOT / ".dsh" / "step01_full_20261115h" / "output" / "锦衣夜行"
-         / "part_01_杀青州" / "chapter_001")
+RUN_H = ROOT / ".dsh" / "step01_full_20261115h" / "output" / _chapter_rel(1)
 
 # 路径显式指定，禁止自动挑选「最近产物」。
 INPUTS = {

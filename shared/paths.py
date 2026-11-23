@@ -84,6 +84,14 @@ def chapter_dir(chapter: int | None = None, book: int | None = None) -> Path:
     return book_dir(book) / f"chapter_{ch:03d}"
 
 
+def chapter_relpath(chapter: int | None = None, book: int | None = None) -> Path:
+    """`chapter_dir` 去掉 OUTPUT_BASE 后的部分（<小说名>/part_NN_<部名>/chapter_NNN）.
+
+    工具在**别的运行根**（隔离运行、冻结现场）下拼同一章的目录时用，书名/部名来自配置。
+    """
+    return chapter_dir(chapter, book).relative_to(_output_base())
+
+
 # ---- 常用子路径 ----------------------------------------------------------
 
 def script_file(chapter: int | None = None) -> Path:

@@ -29,6 +29,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _novel_file() -> Path:
+    """原文路径来自配置（NOVEL_FILE），相对路径按仓库根解析."""
+    from shared.config import resolve_novel_file
+    p = Path(resolve_novel_file())
+    return p if p.is_absolute() else ROOT / p
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -85,8 +92,8 @@ def _chapter_dir() -> Path:
 def _read_raw_chapter() -> str:
     """旧单轮模式：从项目配置的原文路径读当前章（缺少时由调用方报错）."""
     from shared.chapter_reader import find_sections
-    from shared.config import NOVEL_CHAPTER, NOVEL_NAME
-    path = ROOT / f"{NOVEL_NAME}_77119小说.txt"
+    from shared.config import NOVEL_CHAPTER
+    path = _novel_file()
     if not path.exists():
         raise SystemExit(f"[ABORT] 缺少原文：{path}（单轮模式需要可读原文；"
                          f"清单模式请用 --input-manifest 显式给出）")

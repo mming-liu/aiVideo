@@ -57,7 +57,7 @@ def add_scope_arguments(parser: Any, *, presentation_mode: bool = False) -> None
     )
     parser.add_argument(
         "--book-name", default=None, metavar="NAME",
-        help="指定部名，覆盖 BOOK_NAME（如 --book-name 杀青州 -> part_01_杀青州）",
+        help="指定部名，覆盖 BOOK_NAME（如 --book-name 第一部 -> part_01_第一部）",
     )
     if presentation_mode:
         parser.add_argument(

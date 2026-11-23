@@ -36,6 +36,13 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _chapter_rel(chapter: int):
+    """<小说名>/part_NN_<部名>/chapter_NNN，书名/部名来自项目配置."""
+    import shared.config  # noqa: F401  加载 .env.content
+    from shared.paths import chapter_relpath
+    return chapter_relpath(chapter)
 sys.path.insert(0, str(ROOT))
 
 from _text_gen import retry_policy                                            # noqa: E402
@@ -60,13 +67,13 @@ M_SYSTEM_PROMPT = ("你是严格的事实拆分完整性判定器。只判断子
                    "只输出约定的 JSON，不要解释。")
 
 PRODUCTION_ARTIFACTS = (
-    ROOT / "output" / "video" / "锦衣夜行" / "part_01_杀青州" / "chapter_001"
+    ROOT / "output" / "video" / _chapter_rel(1)
     / "chapter_outline.cache.json",
-    ROOT / "output" / "video" / "锦衣夜行" / "part_01_杀青州" / "chapter_001"
+    ROOT / "output" / "video" / _chapter_rel(1)
     / "step01_commit.json",
-    ROOT / "output" / "video" / "锦衣夜行" / "part_01_杀青州" / "chapter_002"
+    ROOT / "output" / "video" / _chapter_rel(2)
     / "chapter_outline.cache.json",
-    ROOT / "output" / "video" / "锦衣夜行" / "part_01_杀青州" / "chapter_002"
+    ROOT / "output" / "video" / _chapter_rel(2)
     / "step01_commit.json",
 )
 
