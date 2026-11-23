@@ -122,6 +122,19 @@ def _ends_sentence(paragraph, t):
     return t[-1:] in _SENTENCE_END or nxt in _SENTENCE_END + _CLOSE_QUOTE or nxt == ""
 
 
+_CLAUSE_END = "，、；：,;:"
+
+
+def _clause_starts(text):
+    """Offsets where a clause or sentence begins inside `text` (0 included)."""
+    stops = _SENTENCE_END + _CLAUSE_END
+    out = [0]
+    for i, ch in enumerate(text):
+        if ch in stops and i + 1 < len(text) and text[i + 1] not in stops:
+            out.append(i + 1)
+    return out
+
+
 def _starts_sentence(paragraph, t):
     i = paragraph.find(t)
     prev = paragraph[i - 1:i] if i > 0 else ""
@@ -200,7 +213,12 @@ def _options(row, novel, cap):
     for paragraph, anchor, span in _sources(row, novel):
         cands = [anchor] if anchor != row["text"] else []
         cands += pf.representable_replacements(anchor, paragraph)
-        cands += _utterance_windows(anchor, cap)
+        # `_utterance_windows` enumerates from the start of the text and stops at its per-span
+        # cap, so the tail of a long speech never got a candidate (S07 2026-11-23: the
+        # claim-bearing last clause pair of a 135-字 line was absent from the whole pool).
+        # Seed windows from every clause start as well; each suffix stops at the time cap.
+        for start in _clause_starts(anchor)[1:]:
+            cands += _utterance_windows(anchor[start:], cap)
         for t in dict.fromkeys(cands):
             t = t.strip()
             pos = paragraph.find(t)
@@ -235,6 +253,35 @@ def _options(row, novel, cap):
 def _menu(options):
     """Default prompt menu: the first `MAX_OPTIONS` ranked options."""
     return list(options[:MAX_OPTIONS])
+
+
+#: Menu slots reserved for options inside the voice's own bound evidence (S07, 2026-11-23).
+EVIDENCE_SLOTS = 2
+
+
+def _evidence_first(row, ranked, pool=()):
+    """For a fact-bound voice, options lying **inside its bound evidence** come first.
+
+    Evidence containment proves the words are what the fact cites; it does not prove the
+    full claim is said (that stays `claim_pending`). Without this, the length-ranked menu
+    can show only text outside the evidence (frozen case: 5 aligned options, 0 shown).
+    """
+    if not row.get("claims"):
+        return ranked
+    ev = [e for e in row.get("evidence") or [] if e]
+    # the full pool: containment dedupe may have dropped aligned options from `ranked`
+    aligned = [t for t in dict.fromkeys(list(ranked) + list(pool)) if any(t in e for e in ev)]
+    if not aligned:
+        return ranked
+    # longest first: keep as much of the cited content as one shot can carry; skip options
+    # wholly inside an already chosen one
+    head = []
+    for t in sorted(aligned, key=lambda t: -_han(t)):
+        if not any(t in h for h in head):
+            head.append(t)
+        if len(head) >= EVIDENCE_SLOTS:
+            break
+    return head + [t for t in ranked if t not in head]
 
 
 def _budget_menu(options):
@@ -286,7 +333,7 @@ def prepare(answer, novel, ids=None):
         r["editable"] = trim or r in bad
         if r["editable"]:
             ranked, r["_all_options"] = _options(r, novel, cap)
-            r["replacements"] = _menu(ranked)
+            r["replacements"] = _menu(_evidence_first(r, ranked, r["_all_options"]))
             r["deletable"] = trim and not r["claims"]
     goal = min(TARGET_SEC, ceiling) if over_time else seconds
     blocked = [{"id": r["id"], "reason": "超单镜或超 %d 字，被事实引用不能删，原文同段与绑定证据里都没有"

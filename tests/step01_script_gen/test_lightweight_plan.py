@@ -764,3 +764,67 @@ def test_compressed_menu_does_not_predict_unfixable_when_short_options_exist(mon
     assert res["executable"] is True, res["failure"]
     assert res["revision"]["scope"] == "trim"
     assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
+
+
+# ---------------------------------------------------------------------------
+# S07（2026-11-23）：长发言的句尾候选、事实绑定声音的证据内候选优先
+# ---------------------------------------------------------------------------
+#: 足够多的短分句：从发言开头枚举的窗口会先用满每段 40 条上限（冻结现场 D10 135 字即如此）
+_LONG_SPEECH = ("你这话说得轻巧！城里的情形，你又不是不知道，铺子这半年，处处碰壁，账上没钱，"
+                "伙计走了，客人少了，货也压着，想要翻身，全靠咱们，这几个人了。去年东家，"
+                "还能替咱们，出些本钱，帮咱们，撑起一间，小小分号，如今东家，自己都，周转不开，"
+                "东家的全部指望都押在咱们身上，你还指望东家会轻饶你吗？")
+_KEY = "东家的全部指望都押在咱们身上，你还指望东家会轻饶你吗？"
+NOVEL_L = ("夜里，乙在后堂坐下。\n掌柜冷笑道：“" + _LONG_SPEECH + "”\n乙低下头，不再说话。\n")
+
+
+#: 证据与冻结现场同形：一长段（从「去年东家」到句末，中间只有逗号），不是那一句短句
+_EVIDENCE_LONG = _LONG_SPEECH[_LONG_SPEECH.index("去年东家"):]
+
+
+def _answer_l(evidence=_EVIDENCE_LONG):
+    return {
+        "characters": ["掌柜", "乙"], "emotional_arc": "冷→惧", "climax": "掌柜斥责",
+        "end_hook": "乙低头", "omittable": [],
+        "events": [
+            {"summary": "乙进后堂", "beats": [_b("乙坐下", "夜里，乙在后堂坐下。")]},
+            {"summary": "掌柜斥责", "beats": [
+                _b("掌柜冷笑", "掌柜冷笑道", "dialogue", _LONG_SPEECH, "掌柜")]},
+            {"summary": "乙低头", "beats": [_b("乙低头", "乙低下头，不再说话。")]},
+        ],
+        "facts": [{"claim": "掌柜指出东家不会轻饶他们，因为东家的全部指望都押在他们身上",
+                   "evidence": evidence, "event": 2, "beat": 1, "carrier": "voice"}],
+    }
+
+
+def test_tail_sentence_of_a_long_speech_is_a_candidate():
+    """句尾那句（承载事实的那句）必须进候选池——旧实现只从发言开头枚举、到上限就停."""
+    ctx = vr.prepare(_answer_l(), NOVEL_L)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert any(_KEY in t or t in _KEY for t in row["_all_options"] if len(t) >= 10)
+    assert any(t.endswith("你还指望东家会轻饶你吗？") for t in row["_all_options"])
+
+
+def test_fact_bound_voice_menu_puts_evidence_options_first():
+    ctx = vr.prepare(_answer_l(), NOVEL_L)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    head = row["replacements"][:vr.EVIDENCE_SLOTS]
+    assert head and all(t in _EVIDENCE_LONG for t in head)        # 证据内候选排在最前
+    assert any(t.endswith("你还指望东家会轻饶你吗？") for t in row["replacements"])
+    assert len(row["replacements"]) <= vr.MAX_OPTIONS
+    svc = _Svc([_answer_l(), {"edits": [{"id": row["id"], "text": row["replacements"][0]}],
+                              "unfixable": []}])
+    res = lw.generate_lightweight_outline_result(NOVEL_L, service=svc)
+    assert res["executable"] is True, res["failure"]
+    assert res["plan"]["dialogue_lines"] == [row["replacements"][0]]
+    assert lw.dialogue_speakers(res["plan"])[row["replacements"][0]] == "掌柜"
+
+
+def test_evidence_first_does_not_apply_to_fact_free_voice():
+    a = _answer_l()
+    a["facts"] = [{"claim": "乙在后堂坐下", "evidence": "夜里，乙在后堂坐下。",
+                   "event": 1, "beat": 1, "carrier": "visual"}]
+    row = next(r for r in vr.prepare(a, NOVEL_L)["rows"] if r["editable"])
+    assert row["claims"] == []
+    ranked, _pool = vr._options(row, NOVEL_L, 11)
+    assert row["replacements"] == vr._menu(ranked)
