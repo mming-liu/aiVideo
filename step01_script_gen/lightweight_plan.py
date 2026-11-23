@@ -28,7 +28,12 @@ PLAN_MODE_LEGACY = "legacy"
 PLAN_MODE_LIGHTWEIGHT = "lightweight"
 PLAN_MODES = (PLAN_MODE_LEGACY, PLAN_MODE_LIGHTWEIGHT)
 CONTRACT_VERSION = "lightweight_outline.v1"
-MAX_ATTEMPTS = 3  # 一份原稿，最多两次定点声音修订
+#: 逻辑请求上限：首答 + 最多一次定点声音修订（2026-11-23 主线计划 S04）。非法回答也消耗这次
+#: 修订机会，不暗中重答；底层传输重试由 provider 另计，不占这里的次数。
+MAX_ATTEMPTS = 2
+
+#: 残余问题分账（不是"小说不可满足"的判定）：同一问题码只属于一类。
+RESIDUAL_CLASSES = ("budget", "structure", "source", "attribution", "claim_pending", "protocol")
 CACHE_FILE_NAME = "chapter_outline.lightweight.cache.json"
 
 
@@ -452,6 +457,100 @@ def _write_cache(path, key, plan) -> str:
         return "%s: %s" % (type(_exc).__name__, _exc)
 
 
+def _residual_class(code: str) -> str:
+    """问题码 → 残余类别（结构化分类，不从文案推断）."""
+    c = str(code or "")
+    if c.startswith(("budget_", "lightweight_voice_budget", "lightweight_voice_unfixable",
+                     "duration_")):
+        return "budget"
+    if "speaker" in c or "attribution" in c or "ambiguous" in c:
+        return "attribution"
+    if c.startswith(("source_", "fact_evidence_")):
+        return "source"
+    if c.startswith(("structure_", "carrier_", "lightweight_fact_carrier", "plan_no_",
+                     "acceptance_incomplete")):
+        return "structure"
+    if c.startswith(("lightweight_voice_edit", "lightweight_voice_declared", "response_not_json")):
+        return "protocol"
+    return "structure"
+
+
+def residual_report(problems, claim_pending=()) -> dict:
+    """按类分账的残余：{类别: [问题码…]}；`claim_pending` 单列需人工/后续核验的声音编号."""
+    out = {k: [] for k in RESIDUAL_CLASSES}
+    for p in problems or []:
+        code = str((p or {}).get("code") or "")
+        cls = _residual_class(code)
+        if code not in out[cls]:
+            out[cls].append(code)
+    out["claim_pending"] = sorted(set(claim_pending))
+    return {k: v for k, v in out.items() if v}
+
+
+def _budget_block(ctx) -> str:
+    """修订请求里的预算读数：硬上限与引导目标分开，条数/字数另列（数字全部由代码算）."""
+    from step01_script_gen import lightweight_voice_repair as vr
+    from step01_script_gen.plan_feasibility import budget_band
+    from step01_script_gen.timecode import active_shot_cap
+    _, ceiling = budget_band()
+    rows = ctx.get("rows") or []
+    sec = float(ctx.get("seconds") or 0.0)
+    lines, han = len(rows), sum(int(r.get("han") or 0) for r in rows)
+    cap = float(active_shot_cap())
+    out = ["", "# 本稿预算读数（代码按同一估时入口计算）"]
+    if sec > ceiling + 0.01:
+        out.append("- 声音总时长 %.2fs，**硬上限 %.0fs**：至少减 %.2fs 才不超硬上限；"
+                   "引导目标 %ds（至少减 %.2fs）。" % (sec, ceiling, sec - ceiling, vr.TARGET_SEC,
+                                                     max(0.0, sec - vr.TARGET_SEC)))
+    else:
+        out.append("- 声音总时长 %.2fs，未超硬上限 %.0fs（引导目标 %ds）。" % (sec, ceiling, vr.TARGET_SEC))
+    out.append("- 声音条数 %d（上限 %d）%s；汉字 %d（上限 %d）%s。"
+               % (lines, vr.MAX_LINES, "，超 %d 条" % (lines - vr.MAX_LINES) if lines > vr.MAX_LINES else "",
+                  han, vr.MAX_HAN, "，超 %d 字" % (han - vr.MAX_HAN) if han > vr.MAX_HAN else ""))
+    over = [r["id"] for r in rows if float(r.get("single_sec") or 0) > cap
+            or int(r.get("han") or 0) > vr.MAX_LINE_HAN]
+    if over:
+        out.append("- 单条超 %.0fs 或超 %d 字：%s。" % (cap, vr.MAX_LINE_HAN, "、".join(over)))
+    out.append("- 只有这一次修订机会；修订后仍不合格即停在计划层，不会再次请求。")
+    return "\n".join(out)
+
+
+def _over_limits(ctx) -> str:
+    """`lightweight_voice_budget` 的具体超限项（不再笼统写"条数、汉字数或时长"）."""
+    from step01_script_gen import lightweight_voice_repair as vr
+    from step01_script_gen.plan_feasibility import budget_band
+    from step01_script_gen.timecode import active_shot_cap
+    _, ceiling = budget_band()
+    rows = ctx.get("rows") or []
+    parts = []
+    if float(ctx.get("seconds") or 0) > ceiling + 0.01:
+        parts.append("总时长 %.2fs > %.0fs" % (ctx["seconds"], ceiling))
+    if len(rows) > vr.MAX_LINES:
+        parts.append("条数 %d > %d" % (len(rows), vr.MAX_LINES))
+    han = sum(int(r.get("han") or 0) for r in rows)
+    if han > vr.MAX_HAN:
+        parts.append("汉字 %d > %d" % (han, vr.MAX_HAN))
+    over = [r["id"] for r in rows if float(r.get("single_sec") or 0) > float(active_shot_cap())
+            or int(r.get("han") or 0) > vr.MAX_LINE_HAN]
+    if over:
+        parts.append("单条超限 %s" % "、".join(over))
+    return "；".join(parts) or "声音超限"
+
+
+def _claim_pending(first, final, ids) -> list:
+    """被事实引用、且正文换成了**非完整绑定证据**的声音编号：出处相关，主张是否完整待核."""
+    from step01_script_gen import lightweight_voice_repair as vr
+    if not isinstance(first, dict) or not isinstance(final, dict):
+        return []
+    before = {(r["event"], r["beat"]): r for r in vr.voices(first, ids)}
+    out = []
+    for r in vr.voices(final, ids):
+        b = before.get((r["event"], r["beat"]))
+        if b and b["claims"] and r["text"] != b["text"] and r["text"] not in b["evidence"]:
+            out.append(r["id"])
+    return out
+
+
 def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=None, *,
                                         deadline_monotonic=None, run_deadline_at=None,
                                         service=None) -> dict:
@@ -500,6 +599,8 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
     res["revision"]["scope"] = "none"   # replace / trim：基于当前基线的 edits 定点修正
     res["revision"]["voice_progress"] = []
     _last_problems: list = []
+    _first_answer = None
+    _first_ids = None
 
     def _blocked_stop(ctx):
         """修订前就能判定无合法动作：不发请求，给出逐条原因."""
@@ -516,7 +617,8 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                          attempts=_attempts)
         _req = TextGenerationRequest(
             system_prompt=_OUTLINE_SYSTEM_PROMPT,
-            user_prompt=(vr.prompt(scope) + "\n" + json.dumps(_last_problems, ensure_ascii=False)
+            user_prompt=(vr.prompt(scope) + _budget_block(scope) + "\n"
+                         + json.dumps(_last_problems, ensure_ascii=False)
                          if scope else prompt),
             max_tokens=_outline_max_tokens(), temperature=0.3,
             json_schema=vr.SCHEMA if scope else LIGHTWEIGHT_SCHEMA, model=model, deadline_monotonic=_dl)
@@ -553,11 +655,14 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                     remaining = vr.prepare(_data, novel_text, scope["ids"] if scope else None)
                     if remaining:
                         _last_problems.append(_rec("lightweight_voice_budget", "events",
-                                                   "声音条数、汉字数或可播时长超限"))
+                                                   _over_limits(remaining)))
         _codes = {str(x.get("code") or "") for x in _last_problems} - vr.VOICE_CODES
         if scope is None:
+            if isinstance(_data, dict):
+                _first_answer = _data
             if remaining:
                 original, scope, _base_codes = _data, remaining, _codes
+                _first_ids = scope["ids"]
                 res["revision"]["scope"] = scope["scope"]
         elif _plan is not None and not _codes <= _base_codes:
             # 合法事务但引入了声音修订解决不了的新问题：不推进基线
@@ -587,9 +692,13 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
         if scope and scope.get("blocked") and _last_problems:
             _last_problems = _last_problems + _blocked_stop(scope)
     res["plan"] = _last_plan
+    _pending = (_claim_pending(_first_answer, original, _first_ids)
+                if original is not None and original is not _first_answer else [])
+    res["revision"]["claim_pending"] = _pending
     res["acceptance"] = {"problems": problem_records(_last_problems),
                          "codes": sorted({str(x.get("code") or "") for x in _last_problems}),
                          "residual_class": "none" if not _last_problems else "content",
+                         "residual": residual_report(_last_problems, _pending),
                          "verdict": "ok" if not _last_problems else "blocked"}
     if _last_problems or _last_plan is None:
         return _fail(res, "outline_invalid",

@@ -166,26 +166,45 @@ def test_source_error_without_a_local_voice_fix_stops():
     assert svc.schemas == ["lightweight_outline"]
 
 
-def test_only_long_voice_is_replaced_after_illegal_redraw():
+def _long_n1_case():
     kept = "小船行到河心，忽然起了大风，船身剧烈摇晃。"
     line = "河面的水波一层一层朝两岸铺开，两个人看着远处渐渐升起的白雾，谁都没有出声。" + kept
     source = NOVEL.replace(kept, line)
     answer = _answer()
     answer["events"][1]["beats"][1]["voice_text"] = line
-    svc = _Svc([answer, _answer(), {"edits": [{"id": "N1", "text": kept}]}])
+    return kept, line, source, answer
+
+
+def test_only_long_voice_is_replaced_in_the_single_revision():
+    kept, line, source, answer = _long_n1_case()
+    svc = _Svc([answer, {"edits": [{"id": "N1", "text": kept}], "unfixable": []}])
     res = lw.generate_lightweight_outline_result(source, service=svc)
     assert res["executable"], res["failure"]
-    assert svc.schemas == ["lightweight_outline"] + ["lightweight_voice_edits"] * 2
+    assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
     assert all(value in svc.prompts[0] for value in ("10 条", "280 个汉字", "42 个汉字", "55–80 秒"))
+    assert "只有这一次修订机会" in svc.prompts[1]
     rows = vr.prepare(answer, source)["rows"]
     assert [r["id"] for r in rows if r["editable"]] == ["N1"]
     assert all(t in line and vr._check("narration", t, 11)["est_sec"] <= 11
                for t in rows[-1]["replacements"])
-    assert "不接受整稿" in svc.prompts[2]
     expected, _ = lw.build_plan(_answer(), source)
     for field in ("dialogue_lines", "narration_lines", "shot_beats", "main_events", "voice_units"):
         assert res["plan"][field] == expected[field]
     check_plan_before_generation(res["plan"], novel_text=source)
+
+
+def test_whole_answer_redraw_uses_up_the_only_revision(tmp_path):
+    """整稿重答是非法修订：消耗唯一一次修订机会，不再请求，基线保持、不写缓存."""
+    kept, line, source, answer = _long_n1_case()
+    svc = _Svc([answer, _answer()])
+    res = lw.generate_lightweight_outline_result(source, service=svc, cache_path=tmp_path / "c")
+    assert not res["executable"]
+    assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
+    assert res["acceptance"]["codes"] == ["lightweight_voice_edit_rejected"]
+    assert res["acceptance"]["residual"] == {"protocol": ["lightweight_voice_edit_rejected"]}
+    assert not (tmp_path / lw.CACHE_FILE_NAME).exists()
+    baseline, _ = lw.build_plan(answer, source)
+    assert res["plan"]["narration_lines"] == baseline["narration_lines"]
 
 
 def test_budget_trim_requires_full_reduction_and_preserves_beats():
@@ -203,22 +222,52 @@ def test_budget_trim_requires_full_reduction_and_preserves_beats():
     assert ctx["seconds"] > 90
     rows = [r for r in ctx["rows"] if r["text"] in {b["voice_text"] for b in additions}]
     deletes = [{"id": r["id"], "text": ""} for r in rows]
-    # 第 1 轮只删一条：合法的部分进展成为新基线；第 2 轮只处理残余，编号沿用首答
-    svc = _Svc([answer, {"edits": deletes[:1]}, {"edits": deletes[1:]}])
+    # trim 只改达标所需的几句：一次修订删掉超出部分即可，其余声音不动
+    need = ctx["seconds"] - 80
+    chosen, cut = [], 0.0
+    for r in sorted(rows, key=lambda r: -r["sec"]):
+        if cut >= need:
+            break
+        chosen.append({"id": r["id"], "text": ""})
+        cut += r["sec"]
+    assert len(chosen) < len(deletes)
+    svc = _Svc([answer, {"edits": chosen, "unfixable": []}])
     res = lw.generate_lightweight_outline_result(source, service=svc)
     assert res["executable"], res["failure"]
+    assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
     assert f"至少 {round(ctx['seconds'] - 80, 2)} 秒" in svc.prompts[1]
-    progress = res["revision"]["voice_progress"]
-    assert len(progress) == 2 and progress[0]["from_sec"] == ctx["seconds"]
-    assert progress[0]["to_sec"] < progress[0]["from_sec"]
-    listed = svc.prompts[2].split("声音清单", 1)[1]
-    assert '"id": "%s"' % deletes[0]["id"] not in listed           # 已删的不再出现
-    assert all('"id": "%s"' % d["id"] in listed for d in deletes[1:])  # 其余编号不前移
-    assert f"当前稿正文合计 {progress[0]['to_sec']} 秒" in svc.prompts[2]
+    assert "硬上限 90s" in svc.prompts[1] and "引导目标 80s" in svc.prompts[1]
     assert len(res["plan"]["shot_beats"]) == 6 + len(additions)
-    expected, _ = lw.build_plan(_answer(), source)
-    assert res["plan"]["voice_units"] == expected["voice_units"]
+    kept_texts = {b["voice_text"] for b in additions} - {
+        r["text"] for r in rows if r["id"] in {c["id"] for c in chosen}}
+    narr = [n["text"] if isinstance(n, dict) else n for n in res["plan"]["narration_lines"]]
+    assert kept_texts <= set(narr)                       # 没点名的声音原样保留
     check_plan_before_generation(res["plan"], novel_text=source)
+
+
+def test_partial_progress_stops_after_the_single_revision(tmp_path):
+    """有进展但仍超限：记录进展、给出分账残余，不再发第三次请求，不写缓存."""
+    answer = _answer()
+    source = NOVEL
+    for location in ("码头", "山坡", "田边", "路口", "溪边", "小桥", "山脚", "镇口", "岗亭"):
+        text = f"远处的{location}亮起一盏灯，人们提起手里的行李，沿着岸边慢慢走向等候的船只。"
+        source += text + "\n"
+        answer["events"][-1]["beats"].append(dict(text=f"{location}亮灯", purpose="交代环境",
+                                                  source=text, voice_kind="narration",
+                                                  voice_text=text, speaker=""))
+    ctx = vr.prepare(answer, source)
+    one = next(r for r in ctx["rows"] if r["deletable"])
+    svc = _Svc([answer, {"edits": [{"id": one["id"], "text": ""}], "unfixable": []}])
+    res = lw.generate_lightweight_outline_result(source, service=svc, cache_path=tmp_path / "c")
+    assert not res["executable"]
+    assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
+    prog = res["revision"]["voice_progress"]
+    assert len(prog) == 1 and prog[0]["to_sec"] < prog[0]["from_sec"]
+    assert "budget" in res["acceptance"]["residual"]
+    reason = next(p["reason"] for p in res["failure"]["problems"]
+                  if p["code"] == "lightweight_voice_budget")
+    assert "总时长" in reason and "> 90s" in reason
+    assert not (tmp_path / lw.CACHE_FILE_NAME).exists()
 
 
 @pytest.mark.parametrize("edit", [{"id":"D2","text":""}, {"id":"D100","text":"新增"},
@@ -228,9 +277,9 @@ def test_invalid_local_edits_leave_baseline_and_cache_untouched(edit, tmp_path):
     line = "屋檐的水滴落在青石板上，走廊的影子随着灯光晃动，守门人站在雨中又等了很久，等到最后一个行人也离开了渡口。"
     answer["events"][0]["beats"][0].update(voice_kind="narration", voice_text=line)
     source = NOVEL + line
-    svc = _Svc([answer] + [{"edits":[edit]}] * 2)
+    svc = _Svc([answer, {"edits": [edit]}])
     result = lw.generate_lightweight_outline_result(source, service=svc, cache_path=tmp_path/"cache")
-    assert not result["executable"] and len(svc.schemas) == 3
+    assert not result["executable"] and len(svc.schemas) == 2
     assert result["acceptance"]["codes"] == ["lightweight_voice_edit_rejected"]
     assert not (tmp_path / lw.CACHE_FILE_NAME).exists()
     expected, _ = lw.build_plan(answer, source)
@@ -542,14 +591,11 @@ def test_declared_unfixable_is_recorded_and_stops():
     assert "藏尸地点" in probs[0]["reason"]
 
 
-def test_empty_edits_without_reason_is_rejected_and_retried_on_same_baseline():
-    svc = _Svc([_answer_e(JOINED), {"edits": [], "unfixable": []},
-                {"edits": [], "unfixable": []}])
+def test_empty_edits_without_reason_is_rejected_without_retry():
+    svc = _Svc([_answer_e(JOINED), {"edits": [], "unfixable": []}])
     res = lw.generate_lightweight_outline_result(NOVEL_E, service=svc)
-    assert res["executable"] is False and len(svc.schemas) == 3
-    def _menu(p):          # 声音清单本身（不含附在末尾的上一轮拒收原因）
-        return p.split("声音清单")[1].rsplit("\n", 1)[0]
-    assert _menu(svc.prompts[1]) == _menu(svc.prompts[2])
+    assert res["executable"] is False and len(svc.schemas) == 2
+    assert res["acceptance"]["codes"] == ["lightweight_voice_edit_rejected"]
     assert res["revision"]["voice_progress"] == []
 
 
