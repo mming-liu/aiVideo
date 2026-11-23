@@ -2308,9 +2308,30 @@ class VerificationController:
                      % _st["error"][:120])
             return rec
         _bad2 = record_shape_problems(_rec2, where="核验确认响应")
+        if not _bad2:
+            # 复核响应与主核验过**同一份协议准入**（复核 2026-11-23 P1）：只判形状会让
+            # 「漏答/协议违约」的第二次回答取得空 verdict，把第一次的负面降成 advisory。
+            if not isinstance(_rec2, dict):
+                _bad2 = [{"code": "verify_confirmation_not_object", "path": "",
+                          "reason": "复核响应不是对象"}]
+            else:
+                _rec2 = dict(_rec2)
+                _rec2.setdefault("schema", SCHEMA_VERIFICATION)
+                _rec2.setdefault("status", "ok")
+                _rec2.setdefault("rule_version", self.rule_version)
+                _rec2["plan_digest"] = digest
+                if self.novel_digest:
+                    _rec2["novel_digest"] = self.novel_digest
+                _rec2.setdefault("obligation_basis", (rec or {}).get("obligation_basis"))
+                if str(_rec2.get("status") or "") != "ok":
+                    _bad2 = [{"code": "verify_confirmation_failed", "path": "status",
+                              "reason": "复核记录状态不是 ok（%s）" % _rec2.get("status")}]
+                elif self._validate_record is not None:
+                    _bad2 = list(self._validate_record(_rec2, view, digest) or [])
         if _bad2:
             _st["confirmation"] = "unavailable"
-            _st["error"] = "确认响应不满足记录契约"
+            _st["error"] = "确认响应不合格：%s" % "、".join(
+                str(x.get("code") or "") for x in _bad2[:3])
             rec["stability"] = _st
             self.log("[VERIFY] 稳定性确认响应不合格 ⇒ 负面结论保持阻断")
             return rec
@@ -2318,20 +2339,26 @@ class VerificationController:
         _v2 = _verdict_map(_rec2)
         _st["confirmation"] = "performed"
         _st["confirmation_call_id"] = str((_rec2 or {}).get("call_id") or "")
+        _st["missing"] = []
         for _kind, _uids in (("fact", _neg["facts"]), ("voice", _neg["voices"])):
             for _u in _uids:
                 _a = _v1.get((_kind, _u), "")
                 _b = _v2.get((_kind, _u), "")
                 _st["axis_samples"].setdefault(
                     "facts" if _kind == "fact" else "voices", {})[_u] = [_a, _b]
-                if _b and _b not in EXECUTABLE_VERDICTS:
+                if not _b:
+                    # **漏答 ≠ 复核为正面**：这一项不可复核，保留原负面继续阻断。
+                    _st["missing"].append("%s:%s" % (_kind, _u))
+                    continue
+                if _b not in EXECUTABLE_VERDICTS:
                     continue          # 两次一致负面 ⇒ 保持硬阻断
                 if _kind == "fact":
                     _st["advisory_facts"].append(_u)
                 else:
                     _st["advisory_voices"].append(_u)
         rec["stability"] = _st
-        self.log("[VERIFY] 稳定性确认：%d 项单次负面降为 advisory（复核一致负面的保持阻断）"
+        self.log("[VERIFY] 稳定性确认：%d 项单次负面降为 advisory（复核一致负面、漏答或"
+                 "协议不合格的保持阻断）"
                  % (len(_st["advisory_facts"]) + len(_st["advisory_voices"])))
         return rec
 

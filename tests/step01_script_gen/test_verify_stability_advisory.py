@@ -123,6 +123,19 @@ def test_protocol_problems_are_not_downgraded():
                or c.startswith("fact_basis_invalid") for c in codes), codes
 
 
+def test_confirmation_failed_status_keeps_blocking():
+    """复核记录自报失败（status != ok）不算正面结论：保留原阻断."""
+    view = _view()
+    seq = [_fact_negative(_base_record(view)),
+           dict(_base_record(view), status="failed")]
+    ctl = cv.VerificationController(verify=lambda v, d: seq.pop(0),
+                                    max_verifications=4, stability_confirmation=True)
+    rec = ctl.record_for(view, "d1")
+    st = rec.get("stability") or {}
+    assert st.get("confirmation") == "unavailable", st
+    assert "verify_fact_unsupported" in _acceptance_codes(rec, view)
+
+
 def test_confirmation_budget_is_bounded_and_fails_closed():
     view = _view()
     neg = _fact_negative(_base_record(view))
@@ -151,6 +164,46 @@ def test_confirmation_failure_keeps_the_negative_blocking():
     _verify.calls = 0
     ctl = cv.VerificationController(verify=_verify, max_verifications=4, stability_confirmation=True)
     rec = ctl.record_for(view, "d1")
+    st = rec.get("stability") or {}
+    assert st.get("confirmation") == "unavailable", st
+    assert "verify_fact_unsupported" in _acceptance_codes(rec, view)
+
+def _drop_fact(record, uid="f01"):
+    rec = copy.deepcopy(record)
+    rec["facts"] = [f for f in (rec.get("facts") or [])
+                    if str(f.get("fact_uid")) != uid]
+    return rec
+
+
+def test_confirmation_missing_a_negative_fact_keeps_it_blocking():
+    """复核没答到负面项 ≠ 复核为正面：缺项必须保留原阻断（2026-11-23 复核 P1）."""
+    view = _view()
+    seq = [_fact_negative(_base_record(view)), _drop_fact(_base_record(view))]
+    ctl = cv.VerificationController(verify=lambda v, d: seq.pop(0),
+                                    max_verifications=4, stability_confirmation=True)
+    rec = ctl.record_for(view, "d1")
+    st = rec.get("stability") or {}
+    assert "f01" not in (st.get("advisory_facts") or []), st
+    assert "verify_fact_unsupported" in _acceptance_codes(rec, view)
+
+
+def test_confirmation_must_pass_protocol_admission():
+    """复核响应也要过完整协议准入；不合格时保留原阻断，不降为 advisory."""
+    view = _view()
+    seq = [_fact_negative(_base_record(view)), _base_record(view)]
+    calls = {"n": 0}
+
+    def _validate(rec, v, d):
+        calls["n"] += 1
+        # 第一次是主核验；第二次是稳定性复核 ⇒ 模拟协议违约（如引文缺失）
+        return [] if calls["n"] == 1 else [
+            {"code": "verify_source_span_missing", "path": "facts[0]",
+             "reason": "复核没有给出原文片段"}]
+
+    ctl = cv.VerificationController(verify=lambda v, d: seq.pop(0),
+                                    max_verifications=4, stability_confirmation=True,
+                                    validate_record=_validate)
+    rec = ctl.record_for(view, "d1", allow_correction=False)
     st = rec.get("stability") or {}
     assert st.get("confirmation") == "unavailable", st
     assert "verify_fact_unsupported" in _acceptance_codes(rec, view)
