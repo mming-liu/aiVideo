@@ -933,7 +933,54 @@ def render_execution_contract(plan) -> str:
         "`\"beats\": [m], \"lines\": []`——`lines` **只填人物台词编号**，"
         "绝不填旁白编号；旁白原文逐字写进该镜 `narration_segment`。",
     ]
+    _timing = render_voice_timing(plan)
+    if _timing:
+        parts.append(_timing)
     return "\n".join(parts)
+
+
+def render_voice_timing(plan) -> str:
+    """执行契约「六、声音时长」：计划声音的同源估时与全章预算说明（S06，2026-11-23）.
+
+    读数全部来自 `plan_feasibility.voice_entry_costs`——与计划验收、单镜判据同一入口；
+    正式时间轴（`timecode._shot_content_duration`）按同一估算器把镜长补到"本镜声音读完"，
+    所以这里把下限**提前**交给模型，而不是事后加长。生成前还没有镜头分配，**不给逐镜
+    最短时长**；只说明每条声音自身需要多久、同镜多条按播出顺序相加、以及模型自己写下的
+    动作时段与关键帧同样是下限。不改任何声音文本或时长硬门。
+    """
+    from step01_script_gen.plan_feasibility import budget_band, voice_entry_costs
+    from step01_script_gen.lightweight_plan import dialogue_speakers
+    from step01_script_gen.timecode import active_shot_cap
+    try:
+        rows = voice_entry_costs(plan)
+    except Exception:                                    # noqa: BLE001 —— 契约其余部分照常
+        return ""
+    if not rows:
+        return ""
+    _lo, _hi = budget_band()
+    _cap = float(active_shot_cap())
+    _speakers = dialogue_speakers(plan)
+    _d = round(sum(r["body_sec"] for r in rows if r["kind"] == "dialogue"), 2)
+    _n = round(sum(r["body_sec"] for r in rows if r["kind"] == "narration"), 2)
+    _tot = round(_d + _n, 2)
+    out = ["六、声音时长（代码按同一估时入口计算；**这是下限，不得通过删字、截句或加速来满足**）："]
+    for r in rows:
+        if r["kind"] == "dialogue":
+            _who = _speakers.get(r["text"], "")
+            out.append("- 台词%s%s：播出正文约 %.2fs；写进 narration_segment 带「说话人道：」后约 %.2fs"
+                       % (r["index"], ("（%s）" % _who) if _who else "", r["body_sec"], r["est_sec"]))
+        else:
+            out.append("- N%s（旁白）：播出正文约 %.2fs" % (r["index"], r["body_sec"]))
+    out.append("全章声音合计约 %.2fs（台词 %.2fs + 旁白 %.2fs）；正片合法区间 %g–%gs，单镜上限 %gs。"
+               % (_tot, _d, _n, _lo, _hi, _cap))
+    out.append("画面与声音**同时发生**：声音合计不是要再加上的画面时长，剩余的约 %.2fs 是"
+               "**没有声音的镜头**和声音读完后的停留所能用的上限，不是必须填满的时长。"
+               % max(0.0, _hi - _tot))
+    out.append("每镜的 `duration_sec` 必须同时容纳：① 本镜 narration_segment 里**所有**声音按播出顺序"
+               "读完的时长（同镜两条就相加，不是取最长一句）；② 本镜 `motion_desc` 里你自己写的时段终点"
+               "（如写了「4–6 秒」就至少 6s）；③ 本镜最后一个关键帧的 `t_sec`。声明得比这三项短，"
+               "系统会按它们把镜长补齐，总时长就会超出你的预期。")
+    return "\n".join(out)
 
 
 def append_execution_contract(prompt: str, contract: str) -> str:

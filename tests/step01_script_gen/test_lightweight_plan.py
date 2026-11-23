@@ -603,3 +603,58 @@ def test_unfixable_must_name_an_editable_voice():
     ctx = vr.prepare(_answer_e(JOINED), NOVEL_E)
     with pytest.raises(ValueError, match="unfixable"):
         vr.apply(_answer_e(JOINED), ctx, {"edits": [], "unfixable": [{"id": "D9", "reason": "x"}]})
+
+
+# ---------------------------------------------------------------------------
+# S06（2026-11-23）：分镜请求里的声音时长说明——从实际发送的请求读
+# ---------------------------------------------------------------------------
+def _capture_storyboard_prompt(monkeypatch, plan, novel):
+    import step01_script_gen.main as m
+    box = {}
+
+    class _Stop(RuntimeError):
+        pass
+
+    class _Cap:
+        def generate(self, req):
+            box["prompt"] = req.user_prompt
+            box["schema"] = (req.json_schema or {}).get("name")
+            raise _Stop("stop-after-capture")
+    monkeypatch.setattr(m, "create_service", lambda *a, **k: _Cap())
+    with pytest.raises(_Stop):
+        m.gen_spy_script(novel, outline=copy.deepcopy(plan))
+    return box
+
+
+def test_storyboard_request_carries_same_source_voice_timing(monkeypatch):
+    from step01_script_gen.plan_feasibility import budget_band, voice_entry_costs
+    plan = _gen(_Svc([_answer()]))["plan"]
+    box = _capture_storyboard_prompt(monkeypatch, plan, NOVEL)
+    p = box["prompt"]
+    assert "六、声音时长" in p
+    rows = voice_entry_costs(plan)
+    assert rows
+    for r in rows:                                   # 每条声音都在，读数与验收同源
+        if r["kind"] == "dialogue":
+            assert "台词%s" % r["index"] in p
+            assert "%.2fs" % r["body_sec"] in p and "%.2fs" % r["est_sec"] in p
+        else:
+            assert "N%s（旁白）：播出正文约 %.2fs" % (r["index"], r["body_sec"]) in p
+    tot = round(sum(r["body_sec"] for r in rows), 2)
+    assert "全章声音合计约 %.2fs" % tot in p
+    _lo, _hi = budget_band()
+    assert "正片合法区间 %g–%gs" % (_lo, _hi) in p
+    assert "同时发生" in p and "相加" in p           # 不把声音和画面机械相加；同镜多条按顺序相加
+    # 不伪造逐镜最短时长；契约其余部分仍在（全部选用台词）
+    assert "镜头1" not in p.split("六、声音时长", 1)[1]
+    for line in plan["dialogue_lines"]:
+        assert (line if isinstance(line, str) else line["text"]) in p
+
+
+def test_dialogue_speaker_shown_in_timing_block(monkeypatch):
+    plan = _gen(_Svc([_answer()]))["plan"]
+    speakers = lw.dialogue_speakers(plan)
+    p = _capture_storyboard_prompt(monkeypatch, plan, NOVEL)["prompt"]
+    timing = p.split("六、声音时长", 1)[1]
+    for who in set(speakers.values()):
+        assert "（%s）" % who in timing
