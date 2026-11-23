@@ -658,3 +658,109 @@ def test_dialogue_speaker_shown_in_timing_block(monkeypatch):
     timing = p.split("六、声音时长", 1)[1]
     for who in set(speakers.values()):
         assert "（%s）" % who in timing
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-23（复核 3 项）：跨说话人候选、压缩菜单漏短句
+# ---------------------------------------------------------------------------
+LONG_X = ("这河水深得很，夜里行船最是危险，你若执意要走，出了事可怨不得我，"
+          "我这条船家也担待不起。")
+OTHER_X = "东岸药铺打烊了，今晚抓不到药了。"
+NOVEL_X = ("黄昏时分，阿青提着灯笼走进渡口。\n"
+           "老船夫摆手道：“" + LONG_X + "”\n"
+           "阿青低声道：“" + OTHER_X + "”\n"
+           "阿青摇头。\n")
+
+
+def _answer_x():
+    """老船夫一句超单镜台词；绑定事实的证据却摘自阿青另一条引语."""
+    return {
+        "characters": ["阿青", "老船夫"], "emotional_arc": "迟疑", "climax": "劝阻",
+        "end_hook": "阿青摇头", "omittable": [],
+        "events": [
+            {"summary": "阿青夜到渡口", "beats": [
+                _b("阿青提着灯笼站在渡口", "黄昏时分，阿青提着灯笼走进渡口。"),
+                _b("老船夫摆手劝阻", "老船夫摆手道", "dialogue", LONG_X, "老船夫")]},
+            {"summary": "阿青低语", "beats": [_b("阿青低声说话", "阿青低声道")]},
+            {"summary": "阿青摇头", "beats": [_b("阿青摇头", "阿青摇头。")]},
+        ],
+        "facts": [{"claim": "老船夫劝阿青不要连夜走", "evidence": OTHER_X,
+                   "event": 1, "beat": 2, "carrier": "voice"}],
+    }
+
+
+def test_cross_speaker_evidence_is_not_a_replacement_source():
+    """候选必须与原声音同一发言归属；别人的引语不能进「只改正文」的事务."""
+    ctx = vr.prepare(_answer_x(), NOVEL_X)
+    assert ctx["scope"] == "replace"
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert all("药铺" not in t for t in row["replacements"]), row["replacements"]
+    with pytest.raises(ValueError, match="不允许"):
+        vr.apply(_answer_x(), ctx, {"edits": [{"id": row["id"], "text": OTHER_X}]})
+
+
+W_LINES = [
+    "这河水深得很。夜里行船最是危险。你若执意要走就走吧。",
+    "我这条船小得很。风浪大了容易翻。你还是等天亮再走。",
+    "你一个人撑船。遇上急流怎么办。我实在放心不下。",
+    "天亮以后水面清。行船也稳当。何必急着这一夜。",
+    "夜里的风说来就来。谁也料不准。我劝你听一句。",
+    "河心的漩涡最厉害。船进去了出不来。别拿命去赌。",
+    "你带着药箱不方便。落水先顾哪一样。想想家里人等。",
+    "我撑了三十年船。见过太多翻船事。不差这一晚上。",
+    "家里人等不到你。比什么都着急。你该替他们想想。",
+    "你若执意要走。我也拦不住你。只盼你平安到岸。",
+]
+NOVEL_W = ("黄昏时分，阿青提着灯笼走进渡口。\n"
+           + "\n".join("老船夫第%d次开口道：“%s”" % (i + 1, t)
+                       for i, t in enumerate(W_LINES))
+           + "\n阿青摇头。\n")
+
+
+def _answer_w():
+    """10 条被事实引用的台词，每条 3 个短句：压缩时不能把首句短句全丢掉."""
+    events = [{"summary": "劝阻一", "beats": []}, {"summary": "劝阻二", "beats": []},
+              {"summary": "劝阻三", "beats": []}]
+    facts = []
+    for i, t in enumerate(W_LINES):
+        e = i // 4
+        events[e]["beats"].append(_b("老船夫开口劝阻%d" % (i + 1),
+                                     "老船夫第%d次开口道" % (i + 1),
+                                     "dialogue", t, "老船夫"))
+        facts.append({"claim": "老船夫的劝告%d" % (i + 1), "evidence": t,
+                      "event": e + 1, "beat": len(events[e]["beats"]), "carrier": "voice"})
+    events.append({"summary": "阿青摇头", "beats": [_b("阿青摇头", "阿青摇头。")]})
+    return {"characters": ["阿青", "老船夫"], "emotional_arc": "焦急", "climax": "劝阻",
+            "end_hook": "阿青摇头", "omittable": [], "events": events, "facts": facts}
+
+
+def test_non_verbatim_voice_does_not_borrow_another_speakers_quote():
+    """正文不逐字时只能从**归属同一说话人**的证据引语取候选；归属不符就不给候选."""
+    joined = OTHER_X + "你还是等天亮再去吧，这河水夜里实在走不得，我也不敢撑船。"
+    ans = _answer_x()
+    beat = ans["events"][0]["beats"][1]
+    beat["voice_text"] = joined
+    ctx = vr.prepare(ans, NOVEL_X)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert row["replacements"] == []
+    assert [b["id"] for b in ctx["blocked"]] == [row["id"]]
+
+
+def test_compressed_menu_does_not_predict_unfixable_when_short_options_exist(monkeypatch):
+    """不可修预判不能只看压缩后的菜单：保留首句短句后同一样本可以一次修订通过."""
+    monkeypatch.setattr("step01_script_gen.validation._REDGUO_DURATION_MAX", 30.0)
+    monkeypatch.setattr("step01_script_gen.validation._REDGUO_DURATION_MIN", 5.0)
+    ctx = vr.prepare(_answer_w(), NOVEL_W)
+    assert ctx["scope"] == "trim"
+    assert ctx["blocked"] == [], ctx["blocked"]
+    mn = {r["id"]: min(vr._estimate_duration(t) for t in r["replacements"])
+          for r in ctx["rows"] if r["editable"]}
+    assert sum(mn.values()) <= 30.0 + 0.01
+    assert all(v <= 3.1 for v in mn.values()), mn
+    edits = [{"id": rid, "text": min(r["replacements"], key=vr._estimate_duration)}
+             for r in ctx["rows"] for rid in [r["id"]] if r["editable"]]
+    svc = _Svc([_answer_w(), {"edits": edits, "unfixable": []}])
+    res = lw.generate_lightweight_outline_result(NOVEL_W, service=svc)
+    assert res["executable"] is True, res["failure"]
+    assert res["revision"]["scope"] == "trim"
+    assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
