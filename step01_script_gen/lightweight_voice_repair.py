@@ -79,9 +79,41 @@ def total(rows):
     return round(sum(pf.voice_seconds(rows, kind) for kind in ("dialogue", "narration")), 2)
 
 
-def _in_quote(paragraph, start):
-    before = paragraph[:start]
-    return sum(before.count(c) for c in _OPEN_QUOTE) > sum(before.count(c) for c in _CLOSE_QUOTE)
+def _quote_span(paragraph, start):
+    """`start` 所在引语的 `(open, close)`；不在引语内返回 `None`（不猜归属）."""
+    depth, open_i = 0, None
+    for i, ch in enumerate(paragraph[:start + 1]):
+        if ch in _OPEN_QUOTE:
+            if depth == 0:
+                open_i = i
+            depth += 1
+        elif ch in _CLOSE_QUOTE and depth:
+            depth -= 1
+    if not depth or open_i is None:
+        return None
+    depth = 0
+    for j in range(open_i, len(paragraph)):
+        ch = paragraph[j]
+        if ch in _OPEN_QUOTE:
+            depth += 1
+        elif ch in _CLOSE_QUOTE:
+            depth -= 1
+            if depth == 0:
+                return (open_i, j)
+    return (open_i, len(paragraph) - 1)
+
+
+def _quote_owner(paragraph, span):
+    """引语前的**归属叙述**（同一句内、开引号之前的文字）."""
+    head = paragraph[:span[0]]
+    cut = max(head.rfind(ch) for ch in "。！？!?\n")
+    return head[cut + 1:].strip()
+
+
+def _same_speaker(paragraph, span, speaker):
+    """引语的归属是否对得上这条声音声明的说话人（对不上就不许当候选）."""
+    name = str(speaker or "").strip()
+    return bool(name) and name in _quote_owner(paragraph, span)
 
 
 def _ends_sentence(paragraph, t):
@@ -119,40 +151,65 @@ def _verbatim_pieces(anchor, novel):
 
 
 def _sources(row, novel):
-    """(paragraph, anchor) pairs: the voice itself, then its bound evidence (verbatim pieces)."""
+    """`(paragraph, anchor, quote_span)` 候选来源：**本声音自身优先**，证据只作兜底.
+
+    - 本声音正文在原文里逐字可定位 ⇒ 只从它所在的引语取候选，不再拿绑定证据
+      扩展：证据可能是**另一个角色**的原话（复核 2026-11-23 P1），而应用器保留
+      旧 `speaker`，跨说话人替换会把别人的话安到旧说话人身上。
+    - 本声音正文定位不到（如旁白拼接了原文两段）⇒ 才用绑定证据；对白证据必须
+      落在**归属同一说话人**的引语里，归属核对不了就不给候选（fail-closed）。
+    """
     paragraphs = novel.splitlines()
+    own = str(row.get("text") or "")
+    if own and "\n" not in own:
+        for p in paragraphs:
+            pos = p.find(own)
+            if pos >= 0:
+                span = _quote_span(p, pos)
+                if row["kind"] == "dialogue" and span is None:
+                    return []
+                return [(p, own, span)]
     out = []
-    # The voice's own text seeds candidates only when it is verbatim; otherwise only the bound
-    # facts' evidence does, so a replacement keeps to what the fact actually cites.
-    anchors = [(row["text"], False)] + [(e, True) for e in row["evidence"]]
-    for anchor, split in anchors:
+    for anchor in (str(x or "").strip() for x in (row.get("evidence") or [])):
         if not anchor:
             continue
         verbatim = anchor in novel and "\n" not in anchor
-        for piece in ([anchor] if verbatim else _verbatim_pieces(anchor, novel) if split else []):
-            p = next((p for p in paragraphs if piece in p), None)
-            if p is not None and (p, piece) not in out:
-                out.append((p, piece))
+        for piece in ([anchor] if verbatim else _verbatim_pieces(anchor, novel)):
+            p = next((x for x in paragraphs if piece in x), None)
+            if p is None:
+                continue
+            span = _quote_span(p, p.find(piece))
+            if row["kind"] == "dialogue":
+                if span is None or not _same_speaker(p, span, row.get("speaker")):
+                    continue
+            elif span is not None:
+                continue          # 旁白不得借用某人的引语
+            if (p, piece, span) not in out:
+                out.append((p, piece, span))
     return out
 
 
 def _options(row, novel, cap):
-    """Short verbatim replacements that keep the voice kind; complete sentences first."""
+    """Short verbatim replacements that keep the voice kind; complete sentences first.
+
+    Returns the **full** ranked list; `prepare` decides the prompt menu, and the budget
+    precheck (`_best_case`) must not judge on the compressed menu alone.
+    """
     kind = row["kind"]
     valid = []
-    for paragraph, anchor in _sources(row, novel):
-        quoted = _in_quote(paragraph, paragraph.find(anchor))
+    for paragraph, anchor, span in _sources(row, novel):
         cands = [anchor] if anchor != row["text"] else []
         cands += pf.representable_replacements(anchor, paragraph)
         cands += _utterance_windows(anchor, cap)
         for t in dict.fromkeys(cands):
             t = t.strip()
             pos = paragraph.find(t)
-            # Stay on the anchor's side of the quotes: never turn narration into someone's
-            # speech or the reverse, and never mix another speaker's quote in.
+            # Stay inside the anchor's **own quote**: never turn narration into someone's
+            # speech or the reverse, and never borrow another speaker's utterance (the
+            # transaction only changes text, not `speaker`).
             if (not t or t == row["text"] or pos < 0 or t in [v[0] for v in valid]
                     or any(c in t for c in _OPEN_QUOTE + _CLOSE_QUOTE)
-                    or _in_quote(paragraph, pos) != quoted
+                    or _quote_span(paragraph, pos) != span
                     or not MIN_OPTION_HAN <= _han(t) <= MAX_LINE_HAN
                     or _estimate_duration(t) >= row["sec"]
                     or _check(kind, t, cap)["est_sec"] > cap):
@@ -170,19 +227,49 @@ def _options(row, novel, cap):
         texts = [v[0] for v in by_cls[c]]
         keep = [v for v in by_cls[c] if not any(v[0] != o and v[0] in o for o in texts)]
         ranked += sorted(keep, key=lambda v: -_han(v[0]))
-    return [v[0] for v in ranked[:MAX_OPTIONS]]
+    # `ranked` 是给提示的压缩菜单；`valid` 的完整集合留给预算预判与最短候选兜底
+    # （包含被「更长候选包含」而没进菜单的短句，复核 2026-11-23 P2）。
+    return [v[0] for v in ranked], [v[0] for v in valid]
 
 
-def _best_case(rows, ctx_trim):
-    """Lines / han / seconds after the strongest legal edit of every editable row."""
+def _menu(options):
+    """Default prompt menu: the first `MAX_OPTIONS` ranked options."""
+    return list(options[:MAX_OPTIONS])
+
+
+def _budget_menu(options):
+    """Menu that must contain a **budget-feasible short option** (complete sentence first).
+
+    The prompt is capped at `MAX_OPTIONS`; dropping every contained short sentence made
+    the model unable to reach the budget even when the full set had a legal path
+    (复核 2026-11-23 P2). Keep the shortest option and fill the rest from the ranking.
+    """
+    if len(options) <= MAX_OPTIONS:
+        return list(options)
+    closed = [t for t in options if t.rstrip(_CLOSE_QUOTE).endswith(tuple(_SENTENCE_END))]
+    short = min(closed or options, key=lambda t: (_estimate_duration(t), -_han(t)))
+    return [short] + [t for t in options if t != short][:MAX_OPTIONS - 1]
+
+
+def _best_case(rows, ctx_trim, *, full=True):
+    """Lines / han / seconds after the strongest legal edit of every editable row.
+
+    `full=True` uses the **full** option set (the only valid basis for "unfixable");
+    `full=False` answers "can the prompt menu itself reach the budget?".
+    """
     kept = []
     for r in rows:
         if r.get("editable") and r.get("deletable") and ctx_trim:
             continue
-        text = min(r["replacements"], key=_estimate_duration) if (
-            r.get("editable") and r.get("replacements")) else r["text"]
+        opts = ((r.get("_all_options") if full else r.get("replacements")) or [])
+        text = min(opts, key=_estimate_duration) if (r.get("editable") and opts) else r["text"]
         kept.append(dict(r, text=text, sec=round(_estimate_duration(text), 2), han=_han(text)))
     return {"lines": len(kept), "han": sum(r["han"] for r in kept), "seconds": total(kept)}
+
+
+def _fits_budget(best, goal, ceiling):
+    return (best["seconds"] <= min(goal, ceiling) + 0.01
+            and best["lines"] <= MAX_LINES and best["han"] <= MAX_HAN)
 
 
 def prepare(answer, novel, ids=None):
@@ -198,15 +285,29 @@ def prepare(answer, novel, ids=None):
     for r in rows:
         r["editable"] = trim or r in bad
         if r["editable"]:
-            r["replacements"] = _options(r, novel, cap)
+            ranked, r["_all_options"] = _options(r, novel, cap)
+            r["replacements"] = _menu(ranked)
             r["deletable"] = trim and not r["claims"]
     goal = min(TARGET_SEC, ceiling) if over_time else seconds
     blocked = [{"id": r["id"], "reason": "超单镜或超 %d 字，被事实引用不能删，原文同段与绑定证据里都没有"
                 "可表示的逐字短句" % MAX_LINE_HAN}
                for r in bad if not r["replacements"] and not (trim and r["deletable"])]
     best = _best_case(rows, trim)
-    if trim and not blocked and (best["seconds"] > min(goal, ceiling) + 0.01
-                                 or best["lines"] > MAX_LINES or best["han"] > MAX_HAN):
+    if trim and not blocked:
+        if not _fits_budget(best, goal, ceiling):
+            # 预判说「装不下」时先给每条补一条最短的合法候选再复算：提示菜单被压缩过，
+            # 但**不可修**只能由完整候选集判定（复核 2026-11-23 P2）。
+            for r in rows:
+                if r.get("editable") and r.get("_all_options"):
+                    r["replacements"] = _budget_menu(r["_all_options"])
+            best = _best_case(rows, trim)
+        elif not _fits_budget(_best_case(rows, trim, full=False), goal, ceiling):
+            # 完整候选集能装下、压缩后的菜单装不下 ⇒ 菜单必须补最短候选，
+            # 否则模型根本拿不到能达标的选项。
+            for r in rows:
+                if r.get("editable") and r.get("_all_options"):
+                    r["replacements"] = _budget_menu(r["_all_options"])
+    if trim and not blocked and not _fits_budget(best, goal, ceiling):
         blocked.append({"id": "*", "reason": "删光可删声音并全部换最短候选后仍超限："
                         "%d 条 / %d 字 / %.2fs" % (best["lines"], best["han"], best["seconds"])})
     return {"scope": "trim" if trim else "replace", "seconds": seconds, "goal": goal,
