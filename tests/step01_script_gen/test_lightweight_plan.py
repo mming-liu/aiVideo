@@ -203,11 +203,18 @@ def test_budget_trim_requires_full_reduction_and_preserves_beats():
     assert ctx["seconds"] > 90
     rows = [r for r in ctx["rows"] if r["text"] in {b["voice_text"] for b in additions}]
     deletes = [{"id": r["id"], "text": ""} for r in rows]
-    svc = _Svc([answer, {"edits": deletes[:1]}, {"edits": deletes}])
+    # 第 1 轮只删一条：合法的部分进展成为新基线；第 2 轮只处理残余，编号沿用首答
+    svc = _Svc([answer, {"edits": deletes[:1]}, {"edits": deletes[1:]}])
     res = lw.generate_lightweight_outline_result(source, service=svc)
     assert res["executable"], res["failure"]
     assert f"至少 {round(ctx['seconds'] - 80, 2)} 秒" in svc.prompts[1]
-    assert "净减量不足" in svc.prompts[2]
+    progress = res["revision"]["voice_progress"]
+    assert len(progress) == 2 and progress[0]["from_sec"] == ctx["seconds"]
+    assert progress[0]["to_sec"] < progress[0]["from_sec"]
+    listed = svc.prompts[2].split("声音清单", 1)[1]
+    assert '"id": "%s"' % deletes[0]["id"] not in listed           # 已删的不再出现
+    assert all('"id": "%s"' % d["id"] in listed for d in deletes[1:])  # 其余编号不前移
+    assert f"当前稿正文合计 {progress[0]['to_sec']} 秒" in svc.prompts[2]
     assert len(res["plan"]["shot_beats"]) == 6 + len(additions)
     expected, _ = lw.build_plan(_answer(), source)
     assert res["plan"]["voice_units"] == expected["voice_units"]
@@ -381,16 +388,21 @@ def test_replace_offers_only_same_utterance_candidates_and_keeps_speaker():
     ctx = vr.prepare(_answer_c(LONG_C), NOVEL_C)
     assert ctx["scope"] == "replace"
     (row,) = [r for r in ctx["rows"] if r["editable"]]
-    assert SHORT_C in row["replacements"]
-    assert "你若执意要走，出了事可怨不得我。" not in row["replacements"]
-    svc = _Svc([_answer_c(LONG_C), {"edits": [{"id": row["id"], "text": SHORT_C}]}])
+    opts = row["replacements"]
+    assert 0 < len(opts) <= vr.MAX_OPTIONS
+    assert all(t in LONG_C and vr._check("dialogue", t, 11)["est_sec"] <= 11 for t in opts)
+    assert not any(a != b and a in b for a in opts for b in opts)   # 不列被包含的碎片
+    assert "你若执意要走，出了事可怨不得我。" not in opts
+    pick = opts[0]
+    svc = _Svc([_answer_c(LONG_C), {"edits": [{"id": row["id"], "text": pick}],
+                                     "unfixable": []}])
     res = lw.generate_lightweight_outline_result(NOVEL_C, service=svc)
     assert res["executable"] is True, res["failure"]
     assert res["revision"]["scope"] == "replace"
     assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
     assert "%.2f" % est in svc.prompts[1] or str(round(est, 2)) in svc.prompts[1]
-    assert res["plan"]["dialogue_lines"] == [SHORT_C]
-    assert lw.dialogue_speakers(res["plan"])[SHORT_C] == "老船夫"
+    assert res["plan"]["dialogue_lines"] == [pick]
+    assert lw.dialogue_speakers(res["plan"])[pick] == "老船夫"
 
 
 NOVEL_T = ("黄昏时分，阿青提着灯笼走进渡口。\n"
@@ -463,3 +475,85 @@ def test_whole_answer_redraw_is_rejected_and_baseline_kept(_small_band):
     redraw["events"][2]["beats"][0].update(voice_kind="none", voice_text="", speaker="")
     with pytest.raises(ValueError, match="不接受整稿"):
         vr.apply(_answer_t(), vr.prepare(_answer_t(), NOVEL_T), redraw)
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-23：绑定证据取候选、不可修原因、无新问题守卫
+# ---------------------------------------------------------------------------
+PARA_A = "甲！"
+PARA_B = "那个人昨夜已经死了，此刻正躺在后院的马车里，天气太热，再拖下去就瞒不住了。"
+NOVEL_E = ("黄昏时分，乙推门进了小院。\n" + PARA_A + "\n" + PARA_B
+           + "\n乙沉默不语，半晌才低声道：“我早该想到的。”\n")
+
+
+def _answer_e(narration, evidence=PARA_B):
+    """一条旁白被事实引用；正文把原文两段连成一句（不逐字），证据本身逐字命中."""
+    return {
+        "characters": ["甲", "乙"], "emotional_arc": "惊→定", "climax": "乙得知死讯",
+        "end_hook": "乙沉默", "omittable": [],
+        "events": [
+            {"summary": "乙进院", "beats": [_b("乙推门进院", "黄昏时分，乙推门进了小院。")]},
+            {"summary": "死讯", "beats": [
+                _b("乙看向后院马车", PARA_B, "narration", narration, "")]},
+            {"summary": "乙沉默", "beats": [
+                _b("乙低头沉默", "乙沉默不语", "dialogue", "我早该想到的。", "乙")]},
+        ],
+        "facts": [{"claim": "那个人已死且尸体藏在后院马车里", "evidence": evidence,
+                   "event": 2, "beat": 1, "carrier": "voice"}],
+    }
+
+
+JOINED = (PARA_A + "那个人昨夜已经死了，此刻正躺在后院的马车里，天气太热，再拖下去就瞒不住了，"
+          "所有人都还以为他只是出门远行，谁也没有想到会有今天。")
+
+
+def test_non_verbatim_voice_gets_candidates_from_its_bound_evidence():
+    ctx = vr.prepare(_answer_e(JOINED), NOVEL_E)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert JOINED not in NOVEL_E and PARA_B in NOVEL_E
+    assert PARA_B in row["replacements"]
+    assert ctx["blocked"] == []
+    svc = _Svc([_answer_e(JOINED), {"edits": [{"id": row["id"], "text": PARA_B}],
+                                     "unfixable": []}])
+    res = lw.generate_lightweight_outline_result(NOVEL_E, service=svc)
+    assert res["executable"] is True, res["failure"]
+    assert [n["text"] for n in res["plan"]["narration_lines"]] == [PARA_B]
+    check_plan_before_generation(res["plan"], novel_text=NOVEL_E)
+
+
+def test_no_legal_option_stops_before_sending_with_a_reason():
+    """证据也不逐字（覆盖不了）⇒ 不发修订请求，记录逐条不可修原因."""
+    ctx = vr.prepare(_answer_e(JOINED, evidence="原文里没有的证据"), NOVEL_E)
+    assert [b["id"] for b in ctx["blocked"]] == ["N1"]
+    svc = _Svc([_answer_e(JOINED, evidence="原文里没有的证据")])
+    res = lw.generate_lightweight_outline_result(NOVEL_E, service=svc)
+    assert res["executable"] is False and svc.schemas == ["lightweight_outline"]
+    assert "lightweight_voice_unfixable" in res["acceptance"]["codes"]
+
+
+def test_declared_unfixable_is_recorded_and_stops():
+    row_id = next(r["id"] for r in vr.prepare(_answer_e(JOINED), NOVEL_E)["rows"] if r["editable"])
+    svc = _Svc([_answer_e(JOINED),
+                {"edits": [], "unfixable": [{"id": row_id, "reason": "缺了藏尸地点这一层"}]}])
+    res = lw.generate_lightweight_outline_result(NOVEL_E, service=svc)
+    assert res["executable"] is False and len(svc.schemas) == 2
+    probs = res["failure"]["problems"]
+    assert [p["code"] for p in probs] == ["lightweight_voice_declared_unfixable"]
+    assert "藏尸地点" in probs[0]["reason"]
+
+
+def test_empty_edits_without_reason_is_rejected_and_retried_on_same_baseline():
+    svc = _Svc([_answer_e(JOINED), {"edits": [], "unfixable": []},
+                {"edits": [], "unfixable": []}])
+    res = lw.generate_lightweight_outline_result(NOVEL_E, service=svc)
+    assert res["executable"] is False and len(svc.schemas) == 3
+    def _menu(p):          # 声音清单本身（不含附在末尾的上一轮拒收原因）
+        return p.split("声音清单")[1].rsplit("\n", 1)[0]
+    assert _menu(svc.prompts[1]) == _menu(svc.prompts[2])
+    assert res["revision"]["voice_progress"] == []
+
+
+def test_unfixable_must_name_an_editable_voice():
+    ctx = vr.prepare(_answer_e(JOINED), NOVEL_E)
+    with pytest.raises(ValueError, match="unfixable"):
+        vr.apply(_answer_e(JOINED), ctx, {"edits": [], "unfixable": [{"id": "D9", "reason": "x"}]})

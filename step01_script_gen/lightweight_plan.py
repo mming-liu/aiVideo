@@ -494,11 +494,22 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
     _archive = round_archive_writer()
     _attempts: list = []
     _last_plan = None
-    original = None
+    original = None        # 当前基线：首答，或最近一次被采纳的部分修订
     scope = None
-    res["revision"]["scope"] = "none"   # replace / trim：基于原稿的 edits 定点修正
+    _base_codes: set = set()
+    res["revision"]["scope"] = "none"   # replace / trim：基于当前基线的 edits 定点修正
+    res["revision"]["voice_progress"] = []
     _last_problems: list = []
+
+    def _blocked_stop(ctx):
+        """修订前就能判定无合法动作：不发请求，给出逐条原因."""
+        return [_rec("lightweight_voice_unfixable", str(b["id"]), b["reason"])
+                for b in ctx.get("blocked") or []]
+
     for _n in range(1, MAX_ATTEMPTS + 1):
+        if scope and scope.get("blocked"):
+            _last_problems = _last_problems + _blocked_stop(scope)
+            break
         if _dl is not None and time.monotonic() >= _dl:
             return _fail(res, "deadline_exhausted",
                          "规划截止时刻已到 ⇒ 不发轻量大纲请求（已尝试 %d 次）" % (_n - 1),
@@ -519,11 +530,17 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
         _data = _parse_outline_json(getattr(_r, "text", ""))
         _plan = None
         _last_problems = []
+        _declared = _voice_done = False
         if scope:
             try:
                 _data = vr.apply(original, scope, _data)
+            except vr.DeclaredUnfixable as exc:
+                _declared = True
+                _last_problems = [_rec("lightweight_voice_declared_unfixable", str(x["id"]),
+                                       str(x["reason"])[:240]) for x in exc.items]
             except ValueError as exc:
                 _last_problems = [_rec("lightweight_voice_edit_rejected", "edits", str(exc))]
+        remaining = None
         if not _last_problems:
             if not isinstance(_data, dict):
                 _last_problems = [_rec("response_not_json", "", "回答不是可解析的 JSON 对象")]
@@ -533,27 +550,42 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                     _plan["prop_state_candidates"] = _anchors
                     _last_problems = list(plan_acceptance_problems(_plan, novel_text) or [])
                 if not answer_problems(_data):
-                    remaining = vr.prepare(_data, novel_text)
+                    remaining = vr.prepare(_data, novel_text, scope["ids"] if scope else None)
                     if remaining:
                         _last_problems.append(_rec("lightweight_voice_budget", "events",
                                                    "声音条数、汉字数或可播时长超限"))
-                        if scope is None:
-                            original, scope = _data, remaining
-                            res["revision"]["scope"] = scope["scope"]
-        # Failed local transactions always retry against the same original.
-        if _plan is not None and (not scope or _data is original or not _last_problems):
+        _codes = {str(x.get("code") or "") for x in _last_problems} - vr.VOICE_CODES
+        if scope is None:
+            if remaining:
+                original, scope, _base_codes = _data, remaining, _codes
+                res["revision"]["scope"] = scope["scope"]
+        elif _plan is not None and not _codes <= _base_codes:
+            # 合法事务但引入了声音修订解决不了的新问题：不推进基线
+            _last_problems = [_rec("lightweight_voice_edit_regressed", "edits",
+                                   "修订后出现新问题：%s" % "、".join(sorted(_codes - _base_codes)))]
+            _plan = None
+        elif _plan is not None:
+            # 合法的部分进展成为新基线；编号沿用首答，下一轮只开放残余超限项
+            res["revision"]["voice_progress"].append(
+                {"round": _n, "from_sec": scope["seconds"],
+                 "to_sec": remaining["seconds"] if remaining else vr.total(vr.voices(_data))})
+            original, _base_codes = _data, _codes
+            if remaining:
+                scope = remaining
+                res["revision"]["scope"] = scope["scope"]
+            else:
+                _voice_done = True     # 声音已无残余；剩下的问题不是声音修订能解决的
+        if _plan is not None and (scope is None or _data is original):
             _last_plan = _plan
         _kind = "ok" if (_plan is not None and not _last_problems) else "illegal"
         _write_round(_archive, _n, _kind, _cid, _last_problems, _plan)
         _attempts.append({"code": _kind, "call_id": _cid,
                           "problems": [str(x.get("code") or "") for x in _last_problems]})
-        if _kind == "ok" or scope is None:
+        if _kind == "ok" or scope is None or _declared or _voice_done:
             break
-        if any(row["editable"] and not row["deletable"] and not row["replacements"]
-               for row in scope["rows"] if scope["scope"] == "replace"):
-            _last_problems.append(_rec("lightweight_voice_no_replacement", "events",
-                                       "原文同段没有合规的单镜替代"))
-            break
+    else:
+        if scope and scope.get("blocked") and _last_problems:
+            _last_problems = _last_problems + _blocked_stop(scope)
     res["plan"] = _last_plan
     res["acceptance"] = {"problems": problem_records(_last_problems),
                          "codes": sorted({str(x.get("code") or "") for x in _last_problems}),
