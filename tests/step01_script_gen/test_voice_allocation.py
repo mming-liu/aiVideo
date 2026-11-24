@@ -9,6 +9,7 @@ import pytest
 
 from step01_script_gen import lightweight_plan as lw
 from step01_script_gen import voice_allocation as va
+from step01_script_gen import lightweight_voice_repair as vr
 from step01_script_gen.outline import plan_acceptance_problems
 
 pytestmark = pytest.mark.v2_request
@@ -53,6 +54,15 @@ def _answer(evidence=L1, all_voice_facts=False):
 def _ctx(limits=None, evidence=L1, all_voice_facts=False):
     return va.build_voice_choices(_answer(evidence, all_voice_facts), NOVEL, limits=limits or {
         "single_shot_sec": 11, "max_sec": 90, "max_han": 280, "max_lines": 10})
+
+
+def test_line_limit_is_scoped_to_the_v2_experiment(monkeypatch):
+    monkeypatch.delenv("STEP01_VOICE_ALLOCATION_MAX_LINES", raising=False)
+    assert vr.line_limit() == 10
+    monkeypatch.setenv("STEP01_VOICE_ALLOCATION_MAX_LINES", "11")
+    assert vr.line_limit() == 11
+    monkeypatch.setenv("STEP01_VOICE_ALLOCATION_MAX_LINES", "99")
+    assert vr.line_limit() == 12
 
 
 def test_split_voice_and_multi_carrier_fact_reaches_a_valid_plan():

@@ -11,6 +11,7 @@ so "the menu has no budget solution" cannot be confused with "no legal candidate
 """
 import copy
 import json
+import os
 import re
 
 from step01_script_gen import plan_feasibility as pf
@@ -19,6 +20,16 @@ from step01_script_gen.timecode import _estimate_duration, active_shot_cap
 MAX_LINES, MAX_HAN, MAX_LINE_HAN = 10, 280, 42
 TARGET_SEC, REPLACEMENT_SEC = 80, 11
 MAX_OPTIONS, MIN_OPTION_HAN = 4, 4
+
+
+def line_limit() -> int:
+    """声音条数上限；默认 10。S13 v2 隔离实验可经环境显式放宽到 11（不静默改默认）."""
+    raw = os.environ.get("STEP01_VOICE_ALLOCATION_MAX_LINES")
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return MAX_LINES
+    return max(MAX_LINES, min(v, 12))
 #: Menu slots reserved for options inside the voice's own bound evidence (S07, 2026-11-23).
 EVIDENCE_SLOTS = 2
 #: Acceptance codes a voice edit can resolve; anything else is outside this protocol.
@@ -497,7 +508,7 @@ def _best_case(rows, ctx_trim, *, full=True):
 
 def _fits_budget(best, goal, ceiling):
     return (best["seconds"] <= min(goal, ceiling) + 0.01
-            and best["lines"] <= MAX_LINES and best["han"] <= MAX_HAN)
+            and best["lines"] <= line_limit() and best["han"] <= MAX_HAN)
 
 
 def _blocked_reason(row):
@@ -517,7 +528,7 @@ def prepare(answer, novel, ids=None):
     seconds = total(rows)
     _, ceiling = pf.budget_band()
     over_time = seconds > ceiling + 0.01
-    trim = over_time or len(rows) > MAX_LINES or sum(r["han"] for r in rows) > MAX_HAN
+    trim = over_time or len(rows) > line_limit() or sum(r["han"] for r in rows) > MAX_HAN
     bad = [r for r in rows if r["single_sec"] > active_shot_cap() or r["han"] > MAX_LINE_HAN]
     if not trim and not bad:
         return None
@@ -573,7 +584,7 @@ def prompt(ctx):
             + (f"必须处理的超限条目：{'、'.join(must)}。" if must else "")
             + "若某条在 replacements 里确实没有能保住其 claims 的选项，把它写进 unfixable 并说明缺了哪层内容，"
             "其余条目照常修订；unfixable 不能代替可做的修订。"
-            f"声音上限：{MAX_LINES} 条、{MAX_HAN} 个汉字、每条 {MAX_LINE_HAN} 字。"
+            f"声音上限：{line_limit()} 条、{MAX_HAN} 个汉字、每条 {MAX_LINE_HAN} 字。"
             f"当前稿正文合计 {ctx['seconds']} 秒，必须净缩短"
             + (f"至少 {reduction} 秒（到 {ctx['goal']} 秒以内）。" if reduction else "，锁定项不动。")
             + "\n声音清单（sec 为正文估时，single_sec 含对白前缀余量；locked 为锁定项）：\n"

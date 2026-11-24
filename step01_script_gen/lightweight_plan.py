@@ -438,7 +438,7 @@ def _prompt(novel_text: str) -> str:
     return LIGHTWEIGHT_PROMPT.format(cap=float(active_shot_cap()),
                                      band_min=float(_bmin),
                                      band_max=float(_bmax),
-                                     lines=vr.MAX_LINES, han=vr.MAX_HAN,
+                                     lines=vr.line_limit(), han=vr.MAX_HAN,
                                      line_han=vr.MAX_LINE_HAN, target=vr.TARGET_SEC,
                                      novel_text=str(novel_text or "")[:PROMPT_MAX_CHARS])
 
@@ -541,7 +541,8 @@ def _budget_block(ctx) -> str:
     else:
         out.append("- 声音总时长 %.2fs，未超硬上限 %.0fs（引导目标 %ds）。" % (sec, ceiling, vr.TARGET_SEC))
     out.append("- 声音条数 %d（上限 %d）%s；汉字 %d（上限 %d）%s。"
-               % (lines, vr.MAX_LINES, "，超 %d 条" % (lines - vr.MAX_LINES) if lines > vr.MAX_LINES else "",
+               % (lines, vr.line_limit(),
+                  "，超 %d 条" % (lines - vr.line_limit()) if lines > vr.line_limit() else "",
                   han, vr.MAX_HAN, "，超 %d 字" % (han - vr.MAX_HAN) if han > vr.MAX_HAN else ""))
     over = [r["id"] for r in rows if float(r.get("single_sec") or 0) > cap
             or int(r.get("han") or 0) > vr.MAX_LINE_HAN]
@@ -561,8 +562,8 @@ def _over_limits(ctx) -> str:
     parts = []
     if float(ctx.get("seconds") or 0) > ceiling + 0.01:
         parts.append("总时长 %.2fs > %.0fs" % (ctx["seconds"], ceiling))
-    if len(rows) > vr.MAX_LINES:
-        parts.append("条数 %d > %d" % (len(rows), vr.MAX_LINES))
+    if len(rows) > vr.line_limit():
+        parts.append("条数 %d > %d" % (len(rows), vr.line_limit()))
     han = sum(int(r.get("han") or 0) for r in rows)
     if han > vr.MAX_HAN:
         parts.append("汉字 %d > %d" % (han, vr.MAX_HAN))
