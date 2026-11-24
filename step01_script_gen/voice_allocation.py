@@ -30,6 +30,9 @@ SCHEMA = {"name": "lightweight_voice_allocation", "strict": True, "schema": {
             "type": "object", "additionalProperties": False, "required": ["id", "units"],
             "properties": {"id": {"type": "string"},
                            "units": {"type": "array", "items": {"type": "string"}}}}},
+        "dropped_facts": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["id", "reason"],
+            "properties": {"id": {"type": "string"}, "reason": {"type": "string"}}}},
         "unfixable": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["id", "reason"],
             "properties": {"id": {"type": "string"}, "reason": {"type": "string"}}}}}}}
@@ -143,7 +146,8 @@ def _unit_text(catalog, voice_id, unit_ref):
 def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
     """应用一次 v2 分配；返回 `(candidate_answer, problems)`，永不修改基线."""
     limits = dict(limits or ctx.get("limits") or {})
-    if (not isinstance(response, dict) or not set(response) <= {"voices", "facts", "unfixable"}
+    if (not isinstance(response, dict)
+            or not set(response) <= {"voices", "facts", "unfixable", "dropped_facts"}
             or not isinstance(response.get("voices"), list)
             or not isinstance(response.get("facts", []), list)):
         return None, [_problem("allocation_response_invalid", "", "只接受 voices/facts/unfixable")]
@@ -247,9 +251,36 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
             fact.pop("carriers", None)
     if problems:
         return None, problems
+    # 明确的事实取舍：模型必须逐条给出 id 与非空原因；删除后计入内容缺口，不静默。
+    drop_rows = response.get("dropped_facts") or []
+    if not isinstance(drop_rows, list):
+        return None, [_problem("allocation_dropped_facts_invalid", "", "dropped_facts 必须是数组")]
+    drop_ids = []
+    for row in drop_rows:
+        if (not isinstance(row, dict) or set(row) != {"id", "reason"}
+                or not str(row.get("reason") or "").strip()):
+            return None, [_problem("allocation_dropped_facts_invalid", "", "每项须 {id, reason}")]
+        drop_ids.append(str(row.get("id")))
+    if len(set(drop_ids)) != len(drop_ids):
+        return None, [_problem("allocation_dropped_facts_invalid", "", "事实 id 重复")]
+    by_id = {"f%02d" % (i + 1): f for i, f in enumerate(result["facts"])}
+    missing = [x for x in drop_ids if x not in by_id]
+    if missing:
+        return None, [_problem("allocation_dropped_facts_invalid", ",".join(missing), "事实不存在")]
+    dropped_info = [{"id": x, "claim": by_id[x].get("claim"), "reason": r["reason"]}
+                    for x, r in zip(drop_ids, drop_rows)]
+    if drop_ids:
+        result["facts"] = [f for i, f in enumerate(result["facts"], 1)
+                           if "f%02d" % i not in set(drop_ids)]
+        result["allocation_dropped_facts"] = dropped_info
     # 预算修复：只在**条数**超限时删除无事实绑定的声音（不碰任何事实的承载）。
     dropped = []
-    while len(vr.voices(result)) > int(limits.get("max_lines") or 10):
+    while True:
+        rows_now = vr.voices(result)
+        if (len(rows_now) <= int(limits.get("max_lines") or 10)
+                and vr.total(rows_now) <= float(limits.get("max_sec") or 90) + 0.01
+                and sum(r["han"] for r in rows_now) <= int(limits.get("max_han") or 280)):
+            break
         one = _drop_one_fact_free(result)
         if not one:
             break

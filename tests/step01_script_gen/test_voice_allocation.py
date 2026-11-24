@@ -114,6 +114,29 @@ def test_line_budget_drops_only_a_fact_free_voice():
     assert plan_acceptance_problems(plan, NOVEL) == []
 
 
+def test_dropped_facts_are_explicit_and_removed():
+    ctx = _ctx()
+    cand, problems = va.apply_voice_allocation(
+        _answer(), {"voices": [], "facts": [],
+                    "dropped_facts": [{"id": "f02", "reason": "画面事实，成片不需要"}]},
+        ctx, novel_text=NOVEL)
+    assert problems == [] and cand is not None
+    assert [f["claim"] for f in cand["facts"]] == ["甲劝乙不要连夜走"]
+    assert [d["id"] for d in cand["allocation_dropped_facts"]] == ["f02"]
+    plan, bprobs = lw.build_plan(cand, NOVEL)
+    assert plan is not None and bprobs == []
+
+
+def test_dropped_fact_without_reason_is_rejected():
+    ctx = _ctx()
+    cand, problems = va.apply_voice_allocation(
+        _answer(), {"voices": [], "facts": [],
+                    "dropped_facts": [{"id": "f02", "reason": " "}]},
+        ctx, novel_text=NOVEL)
+    assert cand is None
+    assert [p["code"] for p in problems] == ["allocation_dropped_facts_invalid"]
+
+
 def test_budget_conflict_when_no_droppable_fact_free_voice_exists():
     ctx = _ctx({"single_shot_sec": 11, "max_sec": 90, "max_han": 280, "max_lines": 3},
                all_voice_facts=True)
