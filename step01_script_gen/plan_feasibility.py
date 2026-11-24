@@ -42,7 +42,8 @@ import copy
 import json
 import re
 
-from step01_script_gen.timecode import (_estimate_duration,
+from step01_script_gen.timecode import (MIN_SHOT_DURATION,  # noqa: F401 公开面
+                                      _estimate_duration,
                                         active_shot_cap)
 from shared import voice_adaptation as _va
 

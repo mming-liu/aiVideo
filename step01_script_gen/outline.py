@@ -2043,6 +2043,7 @@ _FIX_CAPABILITY_OUT_OF_SCOPE = {
     "split_view_unreadable": "拆分视图不可读（候选层结构问题）",
     "verification_capacity_exhausted": "核验容量耗尽（运行级，不是计划验收问题）",
     "verification_unavailable": "核验不可用（运行级，不是计划验收问题）",
+    "carrier_fact_label_mismatch": "S13 轻量多承载结构校验：责任在计划生产/分配事务，不进旧操作式修订分流",
 }
 
 

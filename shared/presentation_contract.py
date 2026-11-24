@@ -1602,6 +1602,12 @@ def plan_from_view(view: dict) -> dict:
         _f = _frozen.get(_fu) or {}
         _b = _bind_by_fact.get(_fu) or {}
         _car = list(ref_items(_b.get("carriers"), "fact_bindings.carriers"))
+        if int(view.get("carrier_capacity") or 1) < 2:
+            # 旧形状/非多承载视图：保持历史投影（画面优先，其次第一条声音），
+            # 不把 display 用的承载文案扩成多条而改变计划身份。
+            _first_vis = next((c for c in _car if c.get("kind") == KIND_VISUAL), None)
+            _voice = next((c for c in _car if c.get("kind") in (KIND_DIALOGUE, KIND_NARRATION)), None)
+            _car = [_first_vis] if _first_vis is not None else ([_voice] if _voice is not None else [])
         _decls = []
         for _c in _car:
             _k = _c.get("kind")
