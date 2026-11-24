@@ -42,7 +42,7 @@ import copy
 import json
 import re
 
-from step01_script_gen.timecode import (MIN_SHOT_DURATION, _estimate_duration,
+from step01_script_gen.timecode import (_estimate_duration,
                                         active_shot_cap)
 from shared import voice_adaptation as _va
 
@@ -3785,6 +3785,64 @@ def plan_contract_problems(plan, *, novel_text: str = "",
         require_verification=require_verification))
 
 
+def _lightweight_multi_carrier_records(facts, beats, lines, narration_count: int) -> list:
+    """S13 轻量多承载：逐条结构校验（节拍存在、编号存在、节拍载体互指）.
+
+    多承载的**内容完整性**不在轻量计划门里判（与单承载同理，轻量模式不做内容核验）；
+    它只保证投影/回读不丢、引用闭合，语义由 S13 的分配事务与后续核验负责。
+    """
+    out: list = []
+    for i, fact in enumerate(facts, 1):
+        decl = fact_carrier(fact)
+        parts = [p.strip() for p in re.split("[、]", decl) if p.strip()]
+        if not parts:
+            out.append(_problem_record("carrier_fact_missing", "fact", i,
+                                       "required_facts[%d].承载" % (i - 1),
+                                       "必保留事实 F%d 未声明承载" % i, "计划契约：事实必须有承载"))
+            continue
+        for part in parts:
+            parsed = parse_carrier_decl(part)
+            if parsed is None:
+                out.append(_problem_record("carrier_fact_decl_invalid", "fact", i,
+                                           "required_facts[%d].承载" % (i - 1),
+                                           "F%d 的承载声明格式非法：%s" % (i, part[:24]),
+                                           "计划契约：承载须 B{n}/台词k、B{n}/画面、B{n}/旁白k"))
+                continue
+            b, mode, k = parsed
+            if not 1 <= b <= len(beats):
+                out.append(_problem_record("carrier_fact_beat_missing", "fact", i,
+                                           "required_facts[%d].承载" % (i - 1),
+                                           "F%d 声明的承载节拍 B%d 不存在（共 %d 条）"
+                                           % (i, b, len(beats)), "计划契约：承载节拍必须存在"))
+                continue
+            kind, tag_k = BeatRecord.parse(beats[b - 1]).carrier()
+            if mode == "台词":
+                if not 1 <= k <= len(lines):
+                    out.append(_problem_record("carrier_fact_line_missing", "fact", i,
+                                               "required_facts[%d].承载" % (i - 1),
+                                               "F%d 声明的承载台词 D%d 不存在" % (i, k),
+                                               "计划契约：承载台词必须存在"))
+                elif kind != "dialogue" or tag_k != k:
+                    out.append(_problem_record("carrier_fact_label_mismatch", "fact", i,
+                                               "required_facts[%d].承载" % (i - 1),
+                                               "F%d 指向 B%d/台词%d，但该节拍的载体是 %r"
+                                               % (i, b, k, beats[b - 1]),
+                                               "计划契约：事实承载与节拍载体必须互指"))
+            elif mode == "旁白":
+                if not 1 <= k <= narration_count:
+                    out.append(_problem_record("carrier_fact_narration_missing", "fact", i,
+                                               "required_facts[%d].承载" % (i - 1),
+                                               "F%d 声明的承载旁白 N%d 不存在" % (i, k),
+                                               "计划契约：承载旁白必须存在"))
+                elif kind != "narration" or tag_k != k:
+                    out.append(_problem_record("carrier_fact_label_mismatch", "fact", i,
+                                               "required_facts[%d].承载" % (i - 1),
+                                               "F%d 指向 B%d/旁白%d，但该节拍的载体是 %r"
+                                               % (i, b, k, beats[b - 1]),
+                                               "计划契约：事实承载与节拍载体必须互指"))
+    return out
+
+
 def plan_contract_records(plan, *, novel_text: str = "",
                         require_verification: bool = True) -> list:
     """**计划契约**验收：必保留事实与钩子是否有**有效承载**；返回问题清单（空=通过）.
@@ -3817,7 +3875,7 @@ def plan_contract_records(plan, *, novel_text: str = "",
         return _voice_order + presentation_records(plan, novel_text=novel_text,
                                 verification=(plan or {}).get("plan_verification"),
                                 require_verification=require_verification)
-    from shared.fact_metadata import (LEGACY_ACCEPTANCE_FIELD, LEGACY_ACCEPTANCE_VERSION,
+    from shared.fact_metadata import (LEGACY_ACCEPTANCE_FIELD,
                                       LIGHTWEIGHT_ACCEPTANCE_VERSION,
                                       SEMANTIC_ACCEPTANCE_VERSIONS)
     _semantic = LEGACY_ACCEPTANCE_FIELD in plan
@@ -3840,6 +3898,11 @@ def plan_contract_records(plan, *, novel_text: str = "",
         return _voice_order   # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`
     beats = [str(b) for b in (plan.get("shot_beats") or [])]
     lines = plan_dialogue_lines(plan)
+    # S13（2026-11-24）：轻量计划的多承载事实走**结构**校验；单承载事实仍走下面的完整
+    # 旧路径（语义交集判据不变）。多承载只在隔离实验里出现，v1 缓存不会被它命中。
+    if _lightweight and any("、" in fact_carrier(f) for f in facts):
+        return _voice_order + _lightweight_multi_carrier_records(
+            facts, beats, lines, len(plan_narration_entries(plan)))
     problems: list = list(_voice_order)
     # **格式先于承载语义**：分隔符写错（`；载体：` / `|载体：` / `｜载体:`）时
     # `BeatRecord.carrier()` 读不到载体段，后面每条事实都会误报「该节拍没有标载体」。

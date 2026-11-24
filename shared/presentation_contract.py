@@ -62,7 +62,13 @@ def fact_binding_policy(view):
     因此带声音的节拍**可以**同时作为某条事实的画面承载。
     `max_carriers`（旧模式 1 条）与 `selection`（replace）保持不变：本改动不放开多载体。
     """
-    single = str((view or {}).get('mode') or '') == MODE_LEGACY
+    # S13（2026-11-24）：视图可显式声明 `carrier_capacity`（轻量多声音实验），
+    # 旧模式默认仍是 1 条，调用方不声明时行为不变。
+    try:
+        _cap = int((view or {}).get('carrier_capacity') or 1)
+    except (TypeError, ValueError):
+        _cap = 1
+    single = str((view or {}).get('mode') or '') == MODE_LEGACY and _cap < 2
     return {'max_carriers': 1 if single else None,
             'selection': 'replace' if single else 'extend',
             'visual_requires_visual_beat': False}
@@ -1050,15 +1056,15 @@ def _view_from_legacy_plan(plan: dict, *, mode: str = MODE_LEGACY) -> tuple:
     _bind = []
     for _i, _f in enumerate(_facts, 1):
         _decl = _carrier_decl(_f)
-        _ref = _ref_from_decl(_decl, _beats_v, _units_d, _units_n)
-        if not _ref and _decl:
-            # **写了承载声明但解析不出** ⇒ 保留成 `kind=invalid` 的**第三种状态**：
-            # 不默清、也不在这里拒读（关系层 `parse_view` 会报 `view_binding_dangling`）。
-            # ⚠️ 旧写法的 `if _ref is None:` 分支是**死代码**——`_ref_from_decl` 从不返回
-            # `None`（空串、越界编号、认不出的写法一律返回 `[]`），所以那条
-            # `view_carrier_decl_invalid` 诊断**一次都没发过**：一条解析不出的声明被
-            # **静默**读成"这条事实没有载体"。
-            _ref = [{"kind": KIND_INVALID, "uid": "", "raw": _decl}]
+        _ref = []
+        for _one in _split_decls(_decl):
+            _parsed = _ref_from_decl(_one, _beats_v, _units_d, _units_n)
+            if _parsed:
+                _ref.extend(_parsed)
+            else:
+                # 写了承载声明但解析不出 ⇒ 保留 `kind=invalid` 的第三种状态：
+                # 不默清、不在这里拒读（关系层 `parse_view` 会报）。
+                _ref.append({"kind": KIND_INVALID, "uid": "", "raw": _one})
         _bind.append({"fact_uid": _fact_uids[_i - 1], "carriers": _ref})
 
     _hook_decls = [x for x in _split_decls(_hc_raw or "") if str(x).strip()]
@@ -1086,6 +1092,8 @@ def _view_from_legacy_plan(plan: dict, *, mode: str = MODE_LEGACY) -> tuple:
         "evidence_updates": [],
         "plan_basis": plan_basis(plan),
     }
+    if int(plan.get("carrier_capacity") or 1) > 1:
+        _view["carrier_capacity"] = int(plan["carrier_capacity"])
     return _view, _probs
 
 
@@ -1095,7 +1103,7 @@ def _split_decls(text) -> list:
     if not _t:
         return []
     _out = []
-    for _p in re.split("[；;]", _t):
+    for _p in re.split("[；;、]", _t):
         _p = _p.strip()
         if _p:
             _out.append(_p)
@@ -1594,20 +1602,26 @@ def plan_from_view(view: dict) -> dict:
         _f = _frozen.get(_fu) or {}
         _b = _bind_by_fact.get(_fu) or {}
         _car = list(ref_items(_b.get("carriers"), "fact_bindings.carriers"))
-        _first_vis = next((c for c in _car if c.get("kind") == KIND_VISUAL), None)
-        _voice = next((c for c in _car if c.get("kind") in (KIND_DIALOGUE, KIND_NARRATION)),
-                      None)
-        if _voice and _voice.get("kind") == KIND_NARRATION:
-            _nrefs.setdefault(ref_uid(_voice), []).append(_fi)
-        _decl = ""
-        if _first_vis is not None:
-            _decl = "B%d/画面" % _bidx.get(ref_uid(_first_vis), 0)
-        elif _voice is not None:
-            _decl = "B%d/%s" % (_bidx.get(_voice_beat_uid(view, _voice), 0),
-                                _carrier_text(_voice))
+        _decls = []
+        for _c in _car:
+            _k = _c.get("kind")
+            if _k == KIND_VISUAL:
+                _one = "B%d/画面" % _bidx.get(ref_uid(_c), 0)
+            elif _k == KIND_CARD:
+                _one = "B%d/卡片%d" % (_bidx.get(_voice_beat_uid(view, _c), 0),
+                                     _cidx.get(ref_uid(_c), 0))
+            elif _k in (KIND_DIALOGUE, KIND_NARRATION):
+                _one = "B%d/%s" % (_bidx.get(_voice_beat_uid(view, _c), 0),
+                                   _carrier_text(_c))
+                if _k == KIND_NARRATION:
+                    _nrefs.setdefault(ref_uid(_c), []).append(_fi)
+            else:
+                continue
+            if _one not in _decls:
+                _decls.append(_one)
         _txt = "%s｜原文证据：“%s”" % (str(_f.get("claim") or ""), str(_f.get("evidence") or ""))
-        if _decl:
-            _txt += "｜承载：" + _decl
+        if _decls:
+            _txt += "｜承载：" + "、".join(_decls)
         _facts_txt.append(_txt)
 
     _hb = view.get("hook_bindings") or {}
@@ -1651,6 +1665,9 @@ def plan_from_view(view: dict) -> dict:
         "plan_contract_version": PLAN_CONTRACT_VERSION_BY_MODE.get(
             _mode, PLAN_CONTRACT_VERSION_LEGACY),
     })
+    if int(view.get("carrier_capacity") or 1) > 1:
+        # S13：多承载能力随计划持久化，回读时不要退回单载体（否则重验会误判丢第二条）。
+        _out["carrier_capacity"] = int(view["carrier_capacity"])
     if view.get("voice_adaptations"):
         _out["voice_adaptations"] = copy.deepcopy(view["voice_adaptations"])
     # legacy 也持久化稳定事实身份：并行表，长度/顺序与 `required_facts` 一致。

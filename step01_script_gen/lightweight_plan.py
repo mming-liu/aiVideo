@@ -261,6 +261,34 @@ def answer_problems(answer) -> list:
             _p.append(_rec("lightweight_fact_carrier_invalid", _fp + ".carrier",
                            "事实 %d 声明由声音承载，但事件 %d 第 %d 条节拍没有声音"
                            % (_fi, _e, _b)))
+        # S13：可选的多承载（有序）；第一项必须与 event/beat 相同（身份不漂移）。
+        _cars = _f.get("carriers")
+        if _cars is not None:
+            if not isinstance(_cars, list) or not _cars:
+                _p.append(_rec("lightweight_fact_carriers_invalid", _fp + ".carriers",
+                               "carriers 必须是非空数组"))
+                continue
+            _first = (_cars[0] or {}) if isinstance(_cars[0], dict) else {}
+            if (_first.get("event"), _first.get("beat")) != (_e, _b):
+                _p.append(_rec("lightweight_fact_carriers_invalid", _fp + ".carriers",
+                               "carriers 的第一项必须与事实的 event/beat 相同"))
+            for _ci, _c in enumerate(_cars, 1):
+                if not isinstance(_c, dict):
+                    _p.append(_rec("lightweight_fact_carriers_invalid",
+                                   _fp + ".carriers[%d]" % (_ci - 1), "承载项必须是对象"))
+                    continue
+                _ce, _cb = _c.get("event"), _c.get("beat")
+                if (isinstance(_ce, bool) or isinstance(_cb, bool)
+                        or not isinstance(_ce, int) or not isinstance(_cb, int)
+                        or not 1 <= _ce <= len(_beats_per_event)
+                        or not 1 <= _cb <= len(_beats_per_event[_ce - 1])):
+                    _p.append(_rec("lightweight_fact_carriers_invalid",
+                                   _fp + ".carriers[%d]" % (_ci - 1),
+                                   "承载项指向的事件/节拍不存在"))
+                elif _car == "voice" and _beats_per_event[_ce - 1][_cb - 1] == "none":
+                    _p.append(_rec("lightweight_fact_carriers_invalid",
+                                   _fp + ".carriers[%d]" % (_ci - 1),
+                                   "承载项节拍没有声音"))
     return _p
 
 
@@ -293,14 +321,19 @@ def build_view(answer) -> dict:
                            "evidence": _s(_b.get("source")), "source": {},
                            "voice_ref": _ref})
     _frozen, _binds = [], []
+    _capacity = 1
     for _fi, _f in enumerate(answer["facts"], 1):
         _fu = "f%02d" % _fi
         _frozen.append({"uid": _fu, "claim": _s(_f.get("claim")),
                         "evidence": _s(_f.get("evidence"))})
-        _bu = _pos[(int(_f["event"]), int(_f["beat"]))]
-        _car = (_beat_voice[_bu] if _s(_f.get("carrier")) == "voice"
-                else {"kind": pc.KIND_VISUAL, "uid": _bu})
-        _binds.append({"fact_uid": _fu, "carriers": [_car]})
+        _targets = _f.get("carriers") or [{"event": _f["event"], "beat": _f["beat"]}]
+        _refs = []
+        for _t in _targets:
+            _bu = _pos[(int(_t["event"]), int(_t["beat"]))]
+            _refs.append(_beat_voice[_bu] if _s(_f.get("carrier")) == "voice"
+                         else {"kind": pc.KIND_VISUAL, "uid": _bu})
+        _capacity = max(_capacity, len(_refs))
+        _binds.append({"fact_uid": _fu, "carriers": _refs})
     _chain = "→".join(
         "%s（%s）" % (_events[_ei - 1], "、".join(
             "B%d" % int(_pos[(_ei, _bi)][1:])
@@ -316,12 +349,15 @@ def build_view(answer) -> dict:
         "key_scenes": list(_events),
         "omittable": [_s(x) for x in (answer.get("omittable") or []) if _s(x)],
     }
-    return {"schema": pc.PRESENTATION_SCHEMA, "mode": pc.MODE_LEGACY,
-            "event_binding": "declared", "frozen_facts": _frozen, "frozen_events": _events,
-            "beats": _beats, "dialogue_units": _dlg, "narration_units": _nar,
-            "screen_cards": [], "fact_bindings": _binds,
-            "hook_bindings": {"spoken_uids": [], "carriers": []},
-            "evidence_updates": [], "plan_basis": _basis}
+    _view = {"schema": pc.PRESENTATION_SCHEMA, "mode": pc.MODE_LEGACY,
+             "event_binding": "declared", "frozen_facts": _frozen, "frozen_events": _events,
+             "beats": _beats, "dialogue_units": _dlg, "narration_units": _nar,
+             "screen_cards": [], "fact_bindings": _binds,
+             "hook_bindings": {"spoken_uids": [], "carriers": []},
+             "evidence_updates": [], "plan_basis": _basis}
+    if _capacity > 1:
+        _view["carrier_capacity"] = _capacity
+    return _view
 
 
 def build_plan(answer, novel_text: str) -> tuple:
