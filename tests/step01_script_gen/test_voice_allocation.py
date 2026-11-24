@@ -26,7 +26,7 @@ def _b(text, src, kind="none", vt="", sp=""):
             "voice_text": vt, "speaker": sp}
 
 
-def _answer(evidence=L1):
+def _answer(evidence=L1, all_voice_facts=False):
     return {
         "characters": ["甲", "乙"], "emotional_arc": "迟疑", "climax": "劝阻",
         "end_hook": "乙摇头", "omittable": [],
@@ -45,12 +45,13 @@ def _answer(evidence=L1):
              "carrier": "voice"},
             {"claim": "乙摇头", "evidence": "乙摇头。", "event": 3, "beat": 2,
              "carrier": "visual"},
-        ],
+        ] + ([{"claim": "甲叮嘱乙小心", "evidence": "那你要小心些，风浪大时靠岸停一停。",
+               "event": 3, "beat": 1, "carrier": "voice"}] if all_voice_facts else []),
     }
 
 
-def _ctx(limits=None, evidence=L1):
-    return va.build_voice_choices(_answer(evidence), NOVEL, limits=limits or {
+def _ctx(limits=None, evidence=L1, all_voice_facts=False):
+    return va.build_voice_choices(_answer(evidence, all_voice_facts), NOVEL, limits=limits or {
         "single_shot_sec": 11, "max_sec": 90, "max_han": 280, "max_lines": 10})
 
 
@@ -69,9 +70,10 @@ def test_split_voice_and_multi_carrier_fact_reaches_a_valid_plan():
     assert plan_acceptance_problems(plan, NOVEL) == []
 
 
-def test_units_outside_the_bound_evidence_are_rejected():
+def test_a_unit_that_is_not_source_text_is_rejected():
     ctx = _ctx(evidence="这河水深得很，")
-    bad = next(u["unit"] for u in ctx["voices"]["D1"]["units"] if not u["in_evidence"])
+    bad = ctx["voices"]["D1"]["units"][0]["unit"]
+    ctx["voices"]["D1"]["units"][0]["text"] = "目录之外的一句"
     _cand, problems = va.apply_voice_allocation(
         _answer("这河水深得很，"), {"voices": [{"id": "D1", "units": [bad]}], "facts": []},
         ctx, novel_text=NOVEL)
@@ -87,12 +89,29 @@ def test_units_from_another_voice_are_rejected():
     assert [p["code"] for p in problems] == ["allocation_unit_unknown"]
 
 
-def test_budget_conflict_is_reported_not_silently_accepted():
+def test_line_budget_drops_only_a_fact_free_voice():
     ctx = _ctx({"single_shot_sec": 11, "max_sec": 90, "max_han": 280, "max_lines": 3})
     units = [u["unit"] for u in ctx["voices"]["D1"]["units"] if u["in_evidence"]][:2]
     cand, problems = va.apply_voice_allocation(
         _answer(), {"voices": [{"id": "D1", "units": units}],
                     "facts": [{"id": "f01", "units": ["D1:1", "D1:2"]}]},
+        ctx, novel_text=NOVEL)
+    assert problems == [] and cand is not None
+    dropped = cand.get("allocation_dropped") or []
+    assert len(dropped) == 1 and dropped[0]["text"]
+    plan, bprobs = lw.build_plan(cand, NOVEL)
+    assert plan is not None and bprobs == []
+    assert plan_acceptance_problems(plan, NOVEL) == []
+
+
+def test_budget_conflict_when_no_droppable_fact_free_voice_exists():
+    ctx = _ctx({"single_shot_sec": 11, "max_sec": 90, "max_han": 280, "max_lines": 3},
+               all_voice_facts=True)
+    units = [u["unit"] for u in ctx["voices"]["D1"]["units"] if u["in_evidence"]][:2]
+    cand, problems = va.apply_voice_allocation(
+        _answer(all_voice_facts=True),
+        {"voices": [{"id": "D1", "units": units}],
+         "facts": [{"id": "f01", "units": ["D1:1", "D1:2"]}]},
         ctx, novel_text=NOVEL)
     assert cand is None
     assert [p["code"] for p in problems] == ["allocation_budget_conflict"]

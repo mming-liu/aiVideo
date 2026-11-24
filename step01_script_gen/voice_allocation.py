@@ -59,6 +59,7 @@ def build_voice_choices(answer, novel_text, *, limits=None) -> dict:
         for i, c in enumerate(recs, 1):
             units.append({"unit": "%s:c%d" % (r["id"], i), "text": c["text"],
                           "line": c["line"], "start": c["start"], "end": c["end"],
+                          "source": "own" if c["origin"] == "own" else "evidence",
                           "in_evidence": bool(c["claim_aligned"]),
                           "sec": c["sec"], "han": c["han"]})
         catalog[r["id"]] = {"id": r["id"], "kind": r["kind"], "speaker": r["speaker"],
@@ -84,12 +85,46 @@ def prompt_text(catalog, facts, limits) -> str:
             "一条（units 只填一项）；2) 拆成多条有序单位（units 填多项，同一说话人、每条都在"
             "该声音的候选目录里，顺序即播出顺序）；3) 用 facts 指定某条事实由哪些单位共同承载"
             "（单位写成 `<声音id>:<序号>`，序号按 units 的顺序从 1 起）。\n"
-            "约束：不得新增声音种类/说话人；不得把不同角色的发言拼接；每条事实的**每段证据**"
-            "都必须被某条承载正文逐字覆盖；条数上限 %s、汉字上限 %s、单条 %s 秒。"
-            "超出预算或无法保住证据时，写进 unfixable 并说明缺哪一层。\n目录："
+            "约束：不得新增声音种类/说话人；不得把不同角色的发言拼接；每条承载正文必须逐字"
+            "来自该声音自己的正文（unit.source=own）或它绑定事实的证据（unit.source=evidence）。"
+            "**own 的 in_evidence=false 不是越界**——它本来就是这条声音的原文，可直接替换/拆分；"
+            "完整主张由后续内容核验判定，不要因此判不可修。条数上限 %s、汉字上限 %s、单条 %s 秒。"
+            "当前稿已有 %s 条声音，本协议最多允许 %s 条；拆分前先算剩余条数。"
+            "超出预算或确实无法保住内容时，写进 unfixable 并说明缺哪一层。\n目录："
             % (limits.get("max_lines", 10), limits.get("max_han", 280),
-               limits.get("single_shot_sec", 12))
+               limits.get("single_shot_sec", 12), limits.get("current_lines", "?"),
+               limits.get("max_lines", 10))
             + json.dumps({"voices": catalog, "facts": facts}, ensure_ascii=False))
+
+
+
+def _fact_positions(answer) -> set:
+    out = set()
+    for f in answer.get("facts") or []:
+        out.add((int(f["event"]) - 1, int(f["beat"]) - 1))
+        for c in f.get("carriers") or []:
+            out.add((int(c["event"]) - 1, int(c["beat"]) - 1))
+    return out
+
+
+def _drop_one_fact_free(answer):
+    """删除一条没有任何事实绑定的声音；返回删除记录或 None（确定性预算修复）."""
+    used = _fact_positions(answer)
+    for r in vr.voices(answer):
+        if r["claims"] or (r["event"], r["beat"]) in used:
+            continue
+        ev, b = r["event"], r["beat"]
+        if len(answer["events"][ev]["beats"]) <= 1:
+            continue                      # 事件不能清空：该声音是此事件唯一节拍，跳过
+        del answer["events"][ev]["beats"][b]
+        for f in answer.get("facts") or []:
+            if int(f["event"]) - 1 == ev and int(f["beat"]) - 1 > b:
+                f["beat"] = int(f["beat"]) - 1
+            for c in f.get("carriers") or []:
+                if int(c["event"]) - 1 == ev and int(c["beat"]) - 1 > b:
+                    c["beat"] = int(c["beat"]) - 1
+        return {"id": r["id"], "event": ev, "beat": b, "text": r["text"]}
+    return None
 
 
 def _unit_text(catalog, voice_id, unit_ref):
@@ -139,9 +174,13 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
         if len(texts) != len(units):
             continue
         entry = catalog[vid]
-        if entry["claims"] and any(not any(t in ev for ev in entry["evidence"]) for t in texts):
+        # 来源下限：单位必须逐字来自**该声音自己的正文**或它绑定事实的证据（二者都是
+        # 原文来源；自己的正文优先，避免把「事实证据在另一段旁白」误判成越界）。
+        if entry["claims"] and any(
+                not (t in entry["text"] or any(t in ev for ev in entry["evidence"]))
+                for t in texts):
             problems.append(_problem("allocation_unit_outside_evidence", vid,
-                                     "拆分单位必须逐字落在该声音绑定的事实证据内"))
+                                     "拆分单位必须逐字来自该声音正文或其事实证据"))
             continue
         row = next((r for r in vr.voices(answer)
                     if r["id"] == vid and r["text"] == entry["text"]), None)
@@ -201,16 +240,6 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
             vid = next((v for v, ps in positions.items()
                         if ps and ps[0] == pos_map.get(base_pos)), None)
             targets = positions[vid] if vid else [pos_map.get(base_pos, base_pos)]
-        # 来源下限：每条承载正文都必须在某段绑定证据内（逐字）。完整主张由后续内容
-        # 核验判定；这里不把"证据字数覆盖比例"当语义判据。
-        if str(fact.get("carrier") or "") == "voice":
-            evidence = _evidence_list(fact)
-            texts = [result["events"][e]["beats"][b].get("voice_text") or ""
-                     for e, b in targets]
-            for text in texts:
-                if text and evidence and not any(text in ev for ev in evidence):
-                    problems.append(_problem("allocation_unit_outside_evidence", fid,
-                                             "承载正文不在该事实的证据内：%s" % text[:40]))
         fact["event"], fact["beat"] = targets[0][0] + 1, targets[0][1] + 1
         if len(targets) > 1:
             fact["carriers"] = [{"event": e + 1, "beat": b + 1} for e, b in targets]
@@ -218,6 +247,15 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
             fact.pop("carriers", None)
     if problems:
         return None, problems
+    # 预算修复：只在**条数**超限时删除无事实绑定的声音（不碰任何事实的承载）。
+    dropped = []
+    while len(vr.voices(result)) > int(limits.get("max_lines") or 10):
+        one = _drop_one_fact_free(result)
+        if not one:
+            break
+        dropped.append(one)
+    if dropped:
+        result["allocation_dropped"] = dropped
     rows = vr.voices(result)
     seconds, han = vr.total(rows), sum(r["han"] for r in rows)
     if (seconds > float(limits.get("max_sec") or 90) + 0.01
