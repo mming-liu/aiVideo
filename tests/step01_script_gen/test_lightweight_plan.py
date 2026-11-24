@@ -440,7 +440,10 @@ def test_replace_offers_only_same_utterance_candidates_and_keeps_speaker():
     opts = row["replacements"]
     assert 0 < len(opts) <= vr.MAX_OPTIONS
     assert all(t in LONG_C and vr._check("dialogue", t, 11)["est_sec"] <= 11 for t in opts)
-    assert not any(a != b and a in b for a in opts for b in opts)   # 不列被包含的碎片
+    # replace 范围不塞预算最短项：菜单全部是完整候选（S11 ch1 的碎片诱因）
+    assert set(opts) <= set(row["_all_options"])
+    contained = [t for t in opts if any(t != o and t in o for o in opts)]
+    assert len(contained) <= 2, opts
     assert "你若执意要走，出了事可怨不得我。" not in opts
     pick = opts[0]
     svc = _Svc([_answer_c(LONG_C), {"edits": [{"id": row["id"], "text": pick}],
@@ -827,4 +830,91 @@ def test_evidence_first_does_not_apply_to_fact_free_voice():
     row = next(r for r in vr.prepare(a, NOVEL_L)["rows"] if r["editable"])
     assert row["claims"] == []
     ranked, _pool = vr._options(row, NOVEL_L, 11)
+    # 无事实绑定 ⇒ 没有证据位；replace 范围也不塞预算候选，菜单就是排名前四项
     assert row["replacements"] == vr._menu(ranked)
+
+# ---------------------------------------------------------------------------
+# 2026-11-24 S10：候选记录的身份、归属与窗口（复核 3 项 + 菜单/池同源）
+# ---------------------------------------------------------------------------
+LONG_A = ("这河水深得很，夜里行船最是危险，你若执意要走，出了事可怨不得我，"
+          "我这条船家也担待不起。")
+NOVEL_A = ("黄昏时分，甲站在渡口。\n"
+           "甲对乙说道：“" + LONG_A + "”\n"
+           "乙低声道：“东岸药铺打烊了，今晚抓不到药了。”\n")
+
+
+def _answer_speaker(text, speaker, source="甲对乙说道"):
+    return {
+        "characters": list(dict.fromkeys(["甲", "乙", speaker])), "emotional_arc": "迟疑", "climax": "劝阻",
+        "end_hook": "乙沉默", "omittable": [],
+        "events": [
+            {"summary": "甲到渡口", "beats": [
+                _b("甲站在渡口", "黄昏时分，甲站在渡口。"),
+                _b("甲开口劝阻", source, "dialogue", text, speaker)]},
+            {"summary": "乙低声", "beats": [_b("乙低声说话", "乙低声道")]},
+            {"summary": "乙沉默", "beats": [_b("乙沉默", "乙沉默不语。")]},
+        ],
+        "facts": [{"claim": "甲劝乙不要连夜走", "evidence": text,
+                   "event": 1, "beat": 2, "carrier": "voice"}],
+    }
+
+
+def test_addressee_name_is_not_the_speaker():
+    """「甲对乙说」的主体是甲：乙出现在引语前不能把甲的话归给乙（S10 反例）."""
+    ctx = vr.prepare(_answer_speaker(LONG_A, "乙"), NOVEL_A)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert row["replacements"] == [], row["replacements"]
+    assert ctx["blocked"] and "归属" in ctx["blocked"][0]["reason"]
+    # 同一段话归给甲时才是合法来源
+    ctx_a = vr.prepare(_answer_speaker(LONG_A, "甲"), NOVEL_A)
+    row_a = next(r for r in ctx_a["rows"] if r["editable"])
+    assert row_a["replacements"]
+    assert all("药铺" not in t for t in row_a["replacements"])
+
+
+def test_duplicate_utterance_uses_the_matching_speaker_occurrence():
+    """同一句在原文出现两次、归属不同：只用与声明说话人一致的那一处."""
+    dup = LONG_A
+    novel = ("甲道：“" + dup + "”\n"
+             "乙道：“" + dup + "”\n")
+    ans = _answer_speaker(dup, "乙", source="乙道")
+    ctx = vr.prepare(ans, novel)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert row["replacements"], row["_candidate_notes"]
+    assert all(c["line"] == 1 and c["origin"] == "own" for c in row["_pool"])
+
+
+def test_ambiguous_owner_blocks_with_reason_instead_of_guessing():
+    """引语前有两个名字（和/与）⇒ 主体歧义：不给候选，说明原因."""
+    dup = LONG_A
+    novel = "甲和乙都道：“" + dup + "”\n"
+    ans = _answer_speaker(dup, "甲", source="甲和乙都道")
+    ctx = vr.prepare(ans, novel)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert row["replacements"] == []
+    assert "归属" in ctx["blocked"][0]["reason"]
+
+
+def test_candidates_keep_line_span_identity():
+    """候选保存原文行号与绝对区间；文本必须等于该区间切片（不再事后 find 猜位置）."""
+    ctx = vr.prepare(_answer_c(LONG_C), NOVEL_C)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    lines = NOVEL_C.splitlines()
+    assert row["_pool"]
+    for c in row["_pool"]:
+        assert lines[c["line"]][c["start"]:c["end"]] == c["text"]
+        assert c["quote"] is not None and c["quote"][1] > c["end"] - 1
+
+
+def test_first_sentence_window_survives_pool_and_menu():
+    """首句也要有候选：长发言的第一句短句必须在池与菜单里（S10 窗口起点 0）."""
+    first = "东家不会轻饶你们。"
+    rest = ("后面那笔账还没算清，铺子里的人手也不够用，货还压在码头上，"
+            "你们倒先想着怎么分钱了，这事要是捅到衙门里去，谁担得起。")
+    text = first + rest
+    novel = "掌柜道：“" + text + "”\n"
+    ans = _answer_speaker(text, "掌柜", source="掌柜道")
+    ctx = vr.prepare(ans, novel)
+    (row,) = [r for r in ctx["rows"] if r["editable"]]
+    assert any(c["text"] == first for c in row["_pool"])
+    assert first in row["replacements"]

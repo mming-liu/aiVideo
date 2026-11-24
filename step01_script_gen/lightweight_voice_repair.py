@@ -3,24 +3,33 @@
 Each round edits the current baseline (the first answer, or the last accepted partial edit).
 Voice IDs are fixed by the first answer's (event, beat) positions, so deleting a voice never
 renumbers the others between rounds.
+
+Candidate handling (S10, 2026-11-24): every replacement keeps a **record** — source line,
+absolute span, enclosing quote, origin (own text vs bound evidence) and the attribution
+basis used to accept it. The prompt menu and the full pool are views of the same records,
+so "the menu has no budget solution" cannot be confused with "no legal candidate exists".
 """
 import copy
 import json
 import re
 
 from step01_script_gen import plan_feasibility as pf
-from step01_script_gen.plan_content_repair import _utterance_windows
 from step01_script_gen.timecode import _estimate_duration, active_shot_cap
 
 MAX_LINES, MAX_HAN, MAX_LINE_HAN = 10, 280, 42
 TARGET_SEC, REPLACEMENT_SEC = 80, 11
 MAX_OPTIONS, MIN_OPTION_HAN = 4, 4
+#: Menu slots reserved for options inside the voice's own bound evidence (S07, 2026-11-23).
+EVIDENCE_SLOTS = 2
 #: Acceptance codes a voice edit can resolve; anything else is outside this protocol.
 VOICE_CODES = frozenset({"budget_infeasible", "budget_unrepresentable", "lightweight_voice_budget"})
 _HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af]")
 _SENTENCE_END = "。！？…!?"
+_CLAUSE_END = "，、；：,;:"
 _CLOSE_QUOTE = "”」』"
 _OPEN_QUOTE = "“「『"
+_ADDRESSEE = "对向朝冲"
+_CONJUNCTION = "和与跟"
 SCHEMA = {"name": "lightweight_voice_edits", "strict": True, "schema": {
     "type": "object", "additionalProperties": False, "required": ["edits", "unfixable"],
     "properties": {
@@ -66,7 +75,9 @@ def voices(answer, ids=None):
                      and f["beat"] == bi + 1 and f.get("carrier") == "voice"]
             uid = (ids or {}).get((ei, bi)) or ("D" if kind == "dialogue" else "N") + str(counts[kind])
             rows.append({"id": uid, "event": ei, "beat": bi, "kind": kind,
-                         "speaker": beat.get("speaker", ""), "text": text, "han": _han(text),
+                         "speaker": str(beat.get("speaker") or "").strip(),
+                         "text": text, "han": _han(text),
+                         "beat_source": str(beat.get("source") or "").strip(),
                          "claims": [f["claim"] for f in bound],
                          "evidence": [str(f.get("evidence") or "") for f in bound],
                          "sec": round(_estimate_duration(text), 2),
@@ -77,6 +88,21 @@ def voices(answer, ids=None):
 def total(rows):
     # Match evaluate_plan: sum each voice kind, then combine the two subtotals.
     return round(sum(pf.voice_seconds(rows, kind) for kind in ("dialogue", "narration")), 2)
+
+
+# ---------------------------------------------------------------------------
+# Source identity and attribution
+# ---------------------------------------------------------------------------
+def _find_all(haystack, needle):
+    out, i = [], 0
+    if not needle:
+        return out
+    while True:
+        i = haystack.find(needle, i)
+        if i < 0:
+            return out
+        out.append(i)
+        i += 1
 
 
 def _quote_span(paragraph, start):
@@ -103,50 +129,101 @@ def _quote_span(paragraph, start):
     return (open_i, len(paragraph) - 1)
 
 
-def _quote_owner(paragraph, span):
-    """引语前的**归属叙述**（同一句内、开引号之前的文字）."""
-    head = paragraph[:span[0]]
+def _names_in(text, characters):
+    """Known character names occurring in `text`, longest match first (no alias guessing)."""
+    spans = []
+    for name in sorted(set(characters), key=len, reverse=True):
+        for i in _find_all(text, name):
+            if not any(a <= i < b for a, b in spans):
+                spans.append((i, i + len(name)))
+    return [text[a:b] for a, b in sorted(spans)]
+
+
+def _sentence_owner(paragraph, quote_open):
+    head = paragraph[:quote_open]
     cut = max(head.rfind(ch) for ch in "。！？!?\n")
     return head[cut + 1:].strip()
 
 
-def _same_speaker(paragraph, span, speaker):
-    """引语的归属是否对得上这条声音声明的说话人（对不上就不许当候选）."""
-    name = str(speaker or "").strip()
-    return bool(name) and name in _quote_owner(paragraph, span)
+def _resolve_speaker(paragraph, quote, characters):
+    """引语归属 → `(speaker, basis, status)`；`status` = ok / unresolved / ambiguous.
+
+    - 「甲对乙说」：`对/向/朝/冲` 之前的是主体，之后是受话人——受话人名字**不能**当说话人；
+    - 「甲和乙道」：两个名字都是主体 ⇒ ambiguous；
+    - 只有代词/头衔（「他低声道」「冯检校道」）或没有已知角色名 ⇒ unresolved
+      （本声音正文可依赖计划自己的说话人声明；绑定证据则不用 unresolved 来源）。
+    """
+    owner = _sentence_owner(paragraph, quote[0])
+    if not owner:
+        return "", "", "unresolved"
+    for mark in _ADDRESSEE:
+        j = owner.find(mark)
+        if j > 0:
+            left = list(dict.fromkeys(_names_in(owner[:j], characters)))
+            if len(left) == 1:
+                return left[0], owner, "ok"
+            return "", owner, "ambiguous" if left else "unresolved"
+    uniq = list(dict.fromkeys(_names_in(owner, characters)))
+    if any(mark in owner for mark in _CONJUNCTION):
+        return (uniq[0], owner, "ok") if len(uniq) == 1 else ("", owner, "ambiguous")
+    if len(uniq) == 1:
+        return uniq[0], owner, "ok"
+    return "", owner, "ambiguous" if uniq else "unresolved"
 
 
-def _ends_sentence(paragraph, t):
-    i = paragraph.find(t)
-    nxt = paragraph[i + len(t):i + len(t) + 1] if i >= 0 else ""
-    return t[-1:] in _SENTENCE_END or nxt in _SENTENCE_END + _CLOSE_QUOTE or nxt == ""
+def _closed_at(paragraph, end):
+    nxt = paragraph[end:end + 1]
+    return (paragraph[end - 1:end] in _SENTENCE_END
+            or nxt in _SENTENCE_END + _CLOSE_QUOTE or nxt == "")
 
 
-_CLAUSE_END = "，、；：,;:"
-
-
-def _clause_starts(text):
-    """Offsets where a clause or sentence begins inside `text` (0 included)."""
-    stops = _SENTENCE_END + _CLAUSE_END
-    out = [0]
-    for i, ch in enumerate(text):
-        if ch in stops and i + 1 < len(text) and text[i + 1] not in stops:
-            out.append(i + 1)
-    return out
-
-
-def _starts_sentence(paragraph, t):
-    i = paragraph.find(t)
-    prev = paragraph[i - 1:i] if i > 0 else ""
+def _sentence_start_at(paragraph, start):
+    prev = paragraph[start - 1:start] if start > 0 else ""
     return prev == "" or prev in _SENTENCE_END + _OPEN_QUOTE + "：:"
 
 
-def _verbatim_pieces(anchor, novel):
-    """Split `anchor` into maximal pieces that each occur verbatim on one line of `novel`.
+def _prefix_spans(paragraph, quote):
+    """引语内按句末收尾的前缀 `(start, end)`（含引号内起点）."""
+    if quote is None:
+        return []
+    qs, qe = quote
+    out = []
+    for k, ch in enumerate(paragraph[qs + 1:qe]):
+        if ch in _SENTENCE_END:
+            out.append((qs + 1, qs + 2 + k))
+    return out
 
-    A planner often joins two source paragraphs or swaps a comma for a full stop; the pieces
-    are still the author's words and can seed candidates.
-    """
+
+def _window_spans(text, cap):
+    """All contiguous clause windows (every clause start, sentence start included), ≤ cap."""
+    bounds, i, n = [0], 0, len(text)
+    while i < n:
+        if text[i] in _SENTENCE_END + _CLAUSE_END:
+            j = i
+            while j < n and text[j] in _SENTENCE_END + _CLAUSE_END:
+                j += 1
+            if j != bounds[-1]:
+                bounds.append(j)
+            i = j
+            continue
+        i += 1
+    if bounds[-1] != n:
+        bounds.append(n)
+    out = []
+    for a in range(len(bounds) - 1):
+        for b in range(a + 1, len(bounds)):
+            s, e = bounds[a], bounds[b]
+            w = text[s:e].strip()
+            if not w:
+                continue
+            if float(_estimate_duration(w)) > float(cap) + 0.01:
+                break
+            out.append((s, e))
+    return out
+
+
+def _verbatim_pieces(anchor, novel):
+    """Split `anchor` into maximal pieces that each occur verbatim on one line of `novel`."""
     pieces, i = [], 0
     anchor = anchor.replace("\n", "")
     while i < len(anchor):
@@ -163,153 +240,257 @@ def _verbatim_pieces(anchor, novel):
     return pieces
 
 
-def _sources(row, novel):
-    """`(paragraph, anchor, quote_span)` 候选来源：**本声音自身优先**，证据只作兜底.
+def _source_note(row, notes, code, detail):
+    item = {"code": code, "detail": str(detail or "")[:160]}
+    if item not in notes:
+        notes.append(item)
 
-    - 本声音正文在原文里逐字可定位 ⇒ 只从它所在的引语取候选，不再拿绑定证据
-      扩展：证据可能是**另一个角色**的原话（复核 2026-11-23 P1），而应用器保留
-      旧 `speaker`，跨说话人替换会把别人的话安到旧说话人身上。
-    - 本声音正文定位不到（如旁白拼接了原文两段）⇒ 才用绑定证据；对白证据必须
-      落在**归属同一说话人**的引语里，归属核对不了就不给候选（fail-closed）。
+
+def _sources(row, novel, characters):
+    """Candidate sources as records + ambiguity notes.
+
+    Source order: the voice's **own** text (all occurrences, attributed to the declared
+    speaker, disambiguated by the beat's 原文依据) and, only when the own text cannot be
+    located, the bound facts' evidence (same speaker for dialogue, outside quotes for
+    narration). Nothing is resolved by `find()` after the fact.
     """
-    paragraphs = novel.splitlines()
-    own = str(row.get("text") or "")
-    if own and "\n" not in own:
-        for p in paragraphs:
-            pos = p.find(own)
-            if pos >= 0:
-                span = _quote_span(p, pos)
-                if row["kind"] == "dialogue" and span is None:
-                    return []
-                return [(p, own, span)]
-    out = []
-    for anchor in (str(x or "").strip() for x in (row.get("evidence") or [])):
-        if not anchor:
-            continue
-        verbatim = anchor in novel and "\n" not in anchor
-        for piece in ([anchor] if verbatim else _verbatim_pieces(anchor, novel)):
-            p = next((x for x in paragraphs if piece in x), None)
-            if p is None:
-                continue
-            span = _quote_span(p, p.find(piece))
+    lines = novel.splitlines()
+    characters = list(dict.fromkeys([c for c in characters if c]))
+    own, notes = str(row.get("text") or ""), []
+    occurrences, conflict, ambiguous = [], "", ""
+    for ln, paragraph in enumerate(lines):
+        for start in _find_all(paragraph, own):
+            quote = _quote_span(paragraph, start)
             if row["kind"] == "dialogue":
-                if span is None or not _same_speaker(p, span, row.get("speaker")):
+                if quote is None:
                     continue
-            elif span is not None:
-                continue          # 旁白不得借用某人的引语
-            if (p, piece, span) not in out:
-                out.append((p, piece, span))
+                speaker, basis, status = _resolve_speaker(paragraph, quote, characters)
+                if status == "ok" and speaker != row["speaker"]:
+                    conflict = "原文引语归属 %r，与计划声明的说话人 %r 不一致" % (
+                        speaker, row["speaker"])
+                    continue
+                if status == "ambiguous":
+                    ambiguous = "引语前有多个已知角色名（%s），主体无法唯一确定" % basis
+                    continue
+                # status == ok (same speaker) or unresolved (title/pronoun): own text is
+                # authoritative for the voice; the basis records what was checkable.
+                occurrences.append({"line": ln, "start": start, "end": start + len(own),
+                                    "quote": quote, "origin": "own", "anchor": own,
+                                    "basis": basis if status == "ok" else "归属未核对（%s）" % basis})
+            else:
+                if quote is not None:
+                    continue
+                occurrences.append({"line": ln, "start": start, "end": start + len(own),
+                                    "quote": None, "origin": "own", "anchor": own,
+                                    "basis": ""})
+    if len(occurrences) > 1:
+        src = row.get("beat_source") or ""
+        hit = [o for o in occurrences if src and src in lines[o["line"]]]
+        if len(hit) == 1:
+            occurrences = hit
+    if len(occurrences) == 1:
+        return occurrences, notes
+    if len(occurrences) > 1:
+        if row["kind"] == "narration":
+            return occurrences[:1], notes          # same text; position is equivalent
+        _source_note(row, notes, "attribution_ambiguous",
+                     "本声音正文在原文出现 %d 次，无法用原文依据唯一定位" % len(occurrences))
+        return [], notes
+    if ambiguous:
+        _source_note(row, notes, "attribution_ambiguous", ambiguous)
+        return [], notes
+    if conflict:
+        _source_note(row, notes, "attribution_conflict", conflict)
+        return [], notes
+    out = []
+    for evidence in (str(x or "").strip() for x in (row.get("evidence") or [])):
+        if not evidence:
+            continue
+        pieces = ([evidence] if evidence in novel and "\n" not in evidence
+                  else _verbatim_pieces(evidence, novel))
+        for piece in pieces:
+            for ln, paragraph in enumerate(lines):
+                for start in _find_all(paragraph, piece):
+                    quote = _quote_span(paragraph, start)
+                    if row["kind"] == "dialogue":
+                        if quote is None:
+                            continue
+                        speaker, basis, status = _resolve_speaker(paragraph, quote, characters)
+                        if status != "ok" or speaker != row["speaker"]:
+                            if status == "ambiguous":
+                                _source_note(row, notes, "attribution_ambiguous",
+                                             "绑定证据的引语归属无法核对到 %r" % row["speaker"])
+                            continue
+                    elif quote is not None:
+                        continue
+                    item = {"line": ln, "start": start, "end": start + len(piece),
+                            "quote": quote, "origin": "evidence", "anchor": piece,
+                            "basis": basis if row["kind"] == "dialogue" else ""}
+                    if item not in out:
+                        out.append(item)
+    return out, notes
+
+
+def _make_candidate(paragraph, line_no, start, end, row, quote, origin, anchor, cap, evidence_texts):
+    raw = paragraph[start:end]
+    lead = len(raw) - len(raw.lstrip())
+    trail = len(raw) - len(raw.rstrip())
+    start, end = start + lead, end - trail
+    text = paragraph[start:end]
+    if (not text or text == row["text"] or "\n" in text
+            or any(ch in text for ch in _OPEN_QUOTE + _CLOSE_QUOTE)
+            or not MIN_OPTION_HAN <= _han(text) <= MAX_LINE_HAN
+            or _estimate_duration(text) >= row["sec"]):
+        return None
+    check = _check(row["kind"], text, cap)
+    if check["est_sec"] > cap:
+        return None
+    return {"text": text, "line": line_no, "start": start, "end": end, "quote": quote,
+            "origin": origin, "anchor": anchor,
+            "claim_aligned": any(text in ev for ev in evidence_texts),
+            "han": _han(text), "sec": round(_estimate_duration(text), 2),
+            "single_sec": round(float(check["est_sec"]), 2),
+            "closed": _closed_at(paragraph, end),
+            "sentence_start": _sentence_start_at(paragraph, start)}
+
+
+def _ends_clause(text):
+    return bool(text) and text[-1] in _CLAUSE_END
+
+
+def _trimmed_end(paragraph, start, end):
+    """Span variants: the raw slice and the slice with trailing clause punctuation removed."""
+    out = [(start, end)]
+    raw = paragraph[start:end]
+    stripped = raw.rstrip(_CLAUSE_END)
+    if stripped and len(stripped) < len(raw):
+        out.append((start, start + len(stripped)))
     return out
 
 
-def _options(row, novel, cap):
-    """Short verbatim replacements that keep the voice kind; complete sentences first.
+def _candidate_records(row, novel, characters=None, cap=None):
+    """All legal replacement records for one voice (source identity preserved)."""
+    cap = active_shot_cap() if cap is None else cap
+    characters = ([row.get("speaker")] if characters is None and row.get("speaker")
+                  else list(characters or []))
+    lines = novel.splitlines()
+    sources, notes = _sources(row, novel, characters)
+    evidence_texts = [str(e) for e in (row.get("evidence") or []) if e]
+    out, seen = [], set()
 
-    Returns the **full** ranked list; `prepare` decides the prompt menu, and the budget
-    precheck (`_best_case`) must not judge on the compressed menu alone.
-    """
-    kind = row["kind"]
-    valid = []
-    for paragraph, anchor, span in _sources(row, novel):
-        cands = [anchor] if anchor != row["text"] else []
-        cands += pf.representable_replacements(anchor, paragraph)
-        # `_utterance_windows` enumerates from the start of the text and stops at its per-span
-        # cap, so the tail of a long speech never got a candidate (S07 2026-11-23: the
-        # claim-bearing last clause pair of a 135-字 line was absent from the whole pool).
-        # Seed windows from every clause start as well; each suffix stops at the time cap.
-        for start in _clause_starts(anchor)[1:]:
-            cands += _utterance_windows(anchor[start:], cap)
-        for t in dict.fromkeys(cands):
-            t = t.strip()
-            pos = paragraph.find(t)
-            # Stay inside the anchor's **own quote**: never turn narration into someone's
-            # speech or the reverse, and never borrow another speaker's utterance (the
-            # transaction only changes text, not `speaker`).
-            if (not t or t == row["text"] or pos < 0 or t in [v[0] for v in valid]
-                    or any(c in t for c in _OPEN_QUOTE + _CLOSE_QUOTE)
-                    or _quote_span(paragraph, pos) != span
-                    or not MIN_OPTION_HAN <= _han(t) <= MAX_LINE_HAN
-                    or _estimate_duration(t) >= row["sec"]
-                    or _check(kind, t, cap)["est_sec"] > cap):
+    def _add(line_no, start, end, quote, origin, anchor):
+        for s, e in _trimmed_end(lines[line_no], start, end):
+            key = (line_no, s, e, origin)
+            if key in seen:
                 continue
-            valid.append((t, paragraph, anchor != row["text"]))
-    # Rank whole sentences, then sentence-final tails, then clause fragments. Within one class,
-    # drop options wholly contained in another (same words, less content).
-    def _cls(v):
-        return (0 if _starts_sentence(v[1], v[0]) else 1) if _ends_sentence(v[1], v[0]) else 2
+            cand = _make_candidate(lines[line_no], line_no, s, e, row, quote, origin,
+                                   anchor, cap, evidence_texts)
+            if cand is not None:
+                seen.add(key)
+                out.append(cand)
+
+    for src in sources:
+        paragraph = lines[src["line"]]
+        _add(src["line"], src["start"], src["end"], src["quote"], src["origin"], src["anchor"])
+        for start, end in _prefix_spans(paragraph, src["quote"]):
+            _add(src["line"], start, end, src["quote"], src["origin"], src["anchor"])
+        base = src["start"]
+        for start, end in _window_spans(paragraph[base:src["end"]], cap):
+            _add(src["line"], base + start, base + end, src["quote"], src["origin"], src["anchor"])
+    return out, notes
+
+
+def _rank_records(records):
+    """Whole sentences, then sentence-final tails, then clause fragments; containment dedupe."""
+    def _cls(c):
+        return (0 if c["sentence_start"] else 1) if c["closed"] else 2
     by_cls = {}
-    for v in valid:
-        by_cls.setdefault(_cls(v), []).append(v)
+    for c in records:
+        by_cls.setdefault(_cls(c), []).append(c)
     ranked = []
-    for c in sorted(by_cls):
-        texts = [v[0] for v in by_cls[c]]
-        keep = [v for v in by_cls[c] if not any(v[0] != o and v[0] in o for o in texts)]
-        ranked += sorted(keep, key=lambda v: -_han(v[0]))
-    # `ranked` 是给提示的压缩菜单；`valid` 的完整集合留给预算预判与最短候选兜底
-    # （包含被「更长候选包含」而没进菜单的短句，复核 2026-11-23 P2）。
-    return [v[0] for v in ranked], [v[0] for v in valid]
+    for cls in sorted(by_cls):
+        texts = [c["text"] for c in by_cls[cls]]
+        keep = [c for c in by_cls[cls] if not any(c["text"] != o and c["text"] in o for o in texts)]
+        ranked += sorted(keep, key=lambda c: (-c["han"], c["line"], c["start"]))
+    return ranked
+
+
+def _dedupe_text(records):
+    out, seen = [], set()
+    for c in records:
+        if c["text"] in seen:
+            continue
+        seen.add(c["text"])
+        out.append(c)
+    return out
+
+
+def _option_records(row, novel, cap, characters=None):
+    records, notes = _candidate_records(row, novel, characters, cap)
+    ranked = _rank_records(records)
+    return ranked, _dedupe_text(records), notes
+
+
+def _options(row, novel, cap, characters=None):
+    """Compatibility view: `(ranked text list, full pool text list)`."""
+    ranked, pool, _ = _option_records(row, novel, cap, characters)
+    return [c["text"] for c in ranked], [c["text"] for c in pool]
 
 
 def _menu(options):
-    """Default prompt menu: the first `MAX_OPTIONS` ranked options."""
+    """Default prompt menu for a text list: the first `MAX_OPTIONS` entries."""
     return list(options[:MAX_OPTIONS])
 
 
-#: Menu slots reserved for options inside the voice's own bound evidence (S07, 2026-11-23).
-EVIDENCE_SLOTS = 2
+def _menu_records(row, ranked, pool, *, trim=False):
+    """Prompt menu from the **same records** as the pool (evidence slots + budget witness)."""
+    picks = []
 
+    def _add(rec):
+        if rec is not None and rec["text"] not in [x["text"] for x in picks]:
+            picks.append(rec)
 
-def _evidence_first(row, ranked, pool=()):
-    """For a fact-bound voice, options lying **inside its bound evidence** come first.
-
-    Evidence containment proves the words are what the fact cites; it does not prove the
-    full claim is said (that stays `claim_pending`). Without this, the length-ranked menu
-    can show only text outside the evidence (frozen case: 5 aligned options, 0 shown).
-    """
-    if not row.get("claims"):
-        return ranked
-    ev = [e for e in row.get("evidence") or [] if e]
-    # the full pool: containment dedupe may have dropped aligned options from `ranked`
-    aligned = [t for t in dict.fromkeys(list(ranked) + list(pool)) if any(t in e for e in ev)]
-    if not aligned:
-        return ranked
-    # longest first: keep as much of the cited content as one shot can carry; skip options
-    # wholly inside an already chosen one
-    head = []
-    for t in sorted(aligned, key=lambda t: -_han(t)):
-        if not any(t in h for h in head):
-            head.append(t)
-        if len(head) >= EVIDENCE_SLOTS:
+    if row.get("claims"):
+        used = 0
+        # 证据位优先展示**不以逗号截断**的候选（句末收尾或去尾后的完整片段）；
+        # 逗号结尾的窗口仍留在池/排名里，但不占证据展示位。
+        aligned = [c for c in pool if c["claim_aligned"] and not _ends_clause(c["text"])]
+        for rec in sorted(aligned, key=lambda c: (not c["closed"], -c["han"], c["line"], c["start"])):
+            if used >= EVIDENCE_SLOTS:
+                break
+            if any(rec["text"] in x["text"] for x in picks if x is not rec):
+                continue
+            _add(rec)
+            used += 1
+    if trim and pool:
+        # Budget witness only when the chapter is over budget: a replace-scope menu must not
+        # push a shortest fragment to the front and invite content loss (S11 ch1 observed).
+        _add(min(pool, key=lambda c: (c["sec"], not c["closed"], c["han"])))
+    for rec in ranked:
+        if len(picks) >= MAX_OPTIONS:
             break
-    return head + [t for t in ranked if t not in head]
-
-
-def _budget_menu(options):
-    """Menu that must contain a **budget-feasible short option** (complete sentence first).
-
-    The prompt is capped at `MAX_OPTIONS`; dropping every contained short sentence made
-    the model unable to reach the budget even when the full set had a legal path
-    (复核 2026-11-23 P2). Keep the shortest option and fill the rest from the ranking.
-    """
-    if len(options) <= MAX_OPTIONS:
-        return list(options)
-    closed = [t for t in options if t.rstrip(_CLOSE_QUOTE).endswith(tuple(_SENTENCE_END))]
-    short = min(closed or options, key=lambda t: (_estimate_duration(t), -_han(t)))
-    return [short] + [t for t in options if t != short][:MAX_OPTIONS - 1]
+        _add(rec)
+    return [c["text"] for c in picks[:MAX_OPTIONS]]
 
 
 def _best_case(rows, ctx_trim, *, full=True):
     """Lines / han / seconds after the strongest legal edit of every editable row.
 
-    `full=True` uses the **full** option set (the only valid basis for "unfixable");
+    `full=True` uses the **pool** (the only valid basis for "unfixable");
     `full=False` answers "can the prompt menu itself reach the budget?".
     """
     kept = []
     for r in rows:
         if r.get("editable") and r.get("deletable") and ctx_trim:
             continue
-        opts = ((r.get("_all_options") if full else r.get("replacements")) or [])
-        text = min(opts, key=_estimate_duration) if (r.get("editable") and opts) else r["text"]
+        if full:
+            opts = r.get("_pool") or []
+            text = (min(opts, key=lambda c: (c["sec"], -c["han"]))["text"]
+                    if r.get("editable") and opts else r["text"])
+        else:
+            texts = r.get("replacements") or []
+            text = (min(texts, key=_estimate_duration)
+                    if r.get("editable") and texts else r["text"])
         kept.append(dict(r, text=text, sec=round(_estimate_duration(text), 2), han=_han(text)))
     return {"lines": len(kept), "han": sum(r["han"] for r in kept), "seconds": total(kept)}
 
@@ -319,8 +500,20 @@ def _fits_budget(best, goal, ceiling):
             and best["lines"] <= MAX_LINES and best["han"] <= MAX_HAN)
 
 
+def _blocked_reason(row):
+    for note in row.get("_candidate_notes") or []:
+        if note.get("code") == "attribution_ambiguous":
+            return "候选来源的发言归属无法唯一确定：%s；只有能核对到同一说话人的逐字短句才进菜单" % note["detail"]
+        if note.get("code") == "attribution_conflict":
+            return "本声音正文在原文里的归属与计划声明的说话人 %r 不一致：%s；不跨说话人替换" % (
+                row.get("speaker"), note["detail"])
+    return ("超单镜或超 %d 字，被事实引用不能删，原文同段与绑定证据里都没有"
+            "可表示的逐字短句" % MAX_LINE_HAN)
+
+
 def prepare(answer, novel, ids=None):
     rows = voices(answer, ids)
+    characters = [str(x).strip() for x in (answer.get("characters") or []) if str(x).strip()]
     seconds = total(rows)
     _, ceiling = pf.budget_band()
     over_time = seconds > ceiling + 0.01
@@ -332,35 +525,35 @@ def prepare(answer, novel, ids=None):
     for r in rows:
         r["editable"] = trim or r in bad
         if r["editable"]:
-            ranked, r["_all_options"] = _options(r, novel, cap)
-            r["replacements"] = _menu(_evidence_first(r, ranked, r["_all_options"]))
+            ranked, pool, notes = _option_records(r, novel, cap, characters)
+            r["_ranked"], r["_pool"] = ranked, pool
+            r["_candidate_notes"] = notes
+            r["_all_options"] = [c["text"] for c in pool]
+            r["replacements"] = _menu_records(r, ranked, pool, trim=trim)
             r["deletable"] = trim and not r["claims"]
     goal = min(TARGET_SEC, ceiling) if over_time else seconds
-    blocked = [{"id": r["id"], "reason": "超单镜或超 %d 字，被事实引用不能删，原文同段与绑定证据里都没有"
-                "可表示的逐字短句" % MAX_LINE_HAN}
-               for r in bad if not r["replacements"] and not (trim and r["deletable"])]
+    blocked = []
+    for r in bad:
+        if r["replacements"] or (trim and r["deletable"]):
+            continue
+        blocked.append({"id": r["id"], "reason": _blocked_reason(r)})
     best = _best_case(rows, trim)
     if trim and not blocked:
         if not _fits_budget(best, goal, ceiling):
-            # 预判说「装不下」时先给每条补一条最短的合法候选再复算：提示菜单被压缩过，
-            # 但**不可修**只能由完整候选集判定（复核 2026-11-23 P2）。
-            for r in rows:
-                if r.get("editable") and r.get("_all_options"):
-                    r["replacements"] = _budget_menu(r["_all_options"])
-            best = _best_case(rows, trim)
+            blocked.append({"id": "*", "reason": "删光可删声音并全部换最短候选后仍超限："
+                            "%d 条 / %d 字 / %.2fs" % (best["lines"], best["han"], best["seconds"])})
         elif not _fits_budget(_best_case(rows, trim, full=False), goal, ceiling):
-            # 完整候选集能装下、压缩后的菜单装不下 ⇒ 菜单必须补最短候选，
-            # 否则模型根本拿不到能达标的选项。
+            # The pool has a solution but the compressed menu does not: the menu must keep the
+            # budget witness for every row (S10: "菜单压缩后必须再次验证").
             for r in rows:
-                if r.get("editable") and r.get("_all_options"):
-                    r["replacements"] = _budget_menu(r["_all_options"])
-    if trim and not blocked and not _fits_budget(best, goal, ceiling):
-        blocked.append({"id": "*", "reason": "删光可删声音并全部换最短候选后仍超限："
-                        "%d 条 / %d 字 / %.2fs" % (best["lines"], best["han"], best["seconds"])})
+                if r.get("editable") and r.get("_pool"):
+                    r["replacements"] = _menu_records(r, r["_ranked"], r["_pool"], trim=True)
+            if not _fits_budget(_best_case(rows, trim, full=False), goal, ceiling):
+                blocked.append({"id": "*", "reason": "菜单无法同时保留预算解与身份约束："
+                                "池内可行但展示菜单无解"})
     return {"scope": "trim" if trim else "replace", "seconds": seconds, "goal": goal,
             "rows": rows, "ids": {(r["event"], r["beat"]): r["id"] for r in rows},
             "best_case": best, "blocked": blocked}
-
 
 def _row_view(r):
     if not r.get("editable"):
