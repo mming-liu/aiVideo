@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 from shared.config import (DURATION_MIN_SEC, DURATION_MAX_SEC,
-                           DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC)
+                           DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC,
+                           duration_band, voice_allocation_limits)
 
 from shared.fact_metadata import (FACT_METADATA_VERSION, LEGACY_ACCEPTANCE_FIELD,
                                   LEGACY_ACCEPTANCE_VERSION)
@@ -153,7 +154,8 @@ OUTLINE_PROMPT = """
   **旁白按 20~35 字一条写**（约 5~9 秒；单条不超过 {{NARR_MAX_CHARS}} 字 / {{SHOT_CAP}} 秒），
   一条旁白只讲一个信息点，不要把一整段身世/前情塞进一条。
   **先算发声账再定条数**：对白＋旁白按 4 字/秒估时，**合计不得超过 {{DURATION_MAX}} 秒**
-  （安全值 ≤ {{TARGET_MAX}} 秒）——这是总下界，画面动作不占它。算下来装不下的内容，
+  （合法区间 {{DURATION_MIN}}-{{DURATION_MAX}} 秒；优先目标 {{TARGET_MIN}}-{{TARGET_MAX}} 秒，
+  但**不在目标带不是失败**，不要为凑目标机械增删声音）——这是总下界，画面动作不占它。算下来装不下的内容，
   要么改由画面承载，要么**不列进 required_facts**；不要先把事实全登记上、再指望修订轮
   加声音解决——事实一旦登记就冻结，修订层改不掉，只会把整集挤爆。
   **先定表达方式，再登记事实**（2026-09-30 复核第 5 轮：实跑的计划反复把身份/年龄/来历
@@ -175,7 +177,8 @@ OUTLINE_PROMPT = """
   「计划未选用任何逐字台词」拒收整份计划。只收真正要拍的句子，宁少勿滥——每一句都占用
   时长，而时长由代码逐句估算（自报秒数不参与判定）
 - omittable: 本集**可省略的内容**（不拍也不影响主线的原文段落），供预算不够时重选
-- 时长预算（**先算再选，v6.132**）：本集正片**合法 {{DURATION_MIN}}-{{DURATION_MAX}} 秒**、**规划目标 {{TARGET_MIN}}-{{TARGET_MAX}} 秒**。
+- 时长预算（**先算再选，v6.132**）：本集正片**合法 {{DURATION_MIN}}-{{DURATION_MAX}} 秒**、**规划目标 {{TARGET_MIN}}-{{TARGET_MAX}} 秒（优先，不是硬门）**。
+  目标带是引导，不是硬门：装得下、节奏合理时，不要为了落在目标带内填充或压缩内容。
   对白是时长的最大一项，**必须给画面动作/反应/过场留出时间**——每场只留最关键的一两句，
   不要把整段对话都列进来。**选多了本集就装不下**：会被预算门打回重选（反馈会带上代码
   算出的秒数），白费一轮；更严重的是会把整集挤爆。
@@ -5204,6 +5207,9 @@ def _fail(res: dict, code: str, detail: str, problems=None, attempts=None,
     if attempts:
         _f["attempts"] = list(attempts)
     res["failure"] = _f
+    # 失败结果必须显式不可执行：缓存/内层入口可能已经把 executable 置 True，
+    # 只写 failure 会让消费方按 executable 继续下发（S29 实测）。
+    res["executable"] = False
     res["revision"]["stop_reason"] = str(code)
     # 时间门早停时 `deadline_exhausted` 也要置位（复核之六 P1）：否则结构化结果自相矛盾
     # ——`stop_reason="deadline_exhausted"` 而 `deadline_exhausted=False`，消费方按后者
@@ -5350,6 +5356,10 @@ def generate_outline_result(novel_text: str, model: str | None = None,
             # v6.125.2：候选锚点进缓存键——**提取规则变化**（同一段原文得出不同
             # 候选）必须让缓存失效，否则旧锚点会被当成新规则的结果复用。
             "prop_anchors": _prop_anchors,
+            # S34：时长带与声音策略是产出该计划的**配置身份**。60-90/70-80 与
+            # 60-120/85-110、10/280 与 12/360 不能互相命中缓存。
+            "duration_band": duration_band(),
+            "voice_limits": voice_allocation_limits(),
         }
         cache_key = hashlib.sha256(json.dumps(
             cache_source, ensure_ascii=False, sort_keys=True
@@ -7074,7 +7084,7 @@ def _validate_outline(outline: dict | None, novel_text: str = "") -> dict | None
     return _baseline
 
 
-# 与 prompts.py「总时长硬约束」同源的规划目标（合法区间 60-90s，规划目标 70-80s）
+# 与 prompts.py「总时长合同」同源：合法区间是硬门，目标带只是优先（S34）。
 _TARGET_MIN_SEC = DURATION_TARGET_MIN_SEC
 _TARGET_MAX_SEC = DURATION_TARGET_MAX_SEC
 # 匹配「30s」「30秒」「30 s」
@@ -7085,16 +7095,16 @@ def _calibrate_time_budget(budget: str) -> str:
     """把大纲的时间预算**校准到目标区间**（v6.116，审核）.
 
     实测缓存大纲写「对白约30s；动作约60s；反应约30s」≈ **120s**，而生成约束的规划
-    目标是 **70-80s**——两个信号互相矛盾（`_validate_outline` 此前不检查这一项），
-    模型会照着大纲超配时长。校准按**原比例**缩放到目标中点，其余文字不变；解析不出
-    数字时原样返回（自由文本没有矛盾数字，注入无害）。
+    目标带（70-80s 或 85-110s）只是优先：**落在合法区间内就不校准**。只有总量
+    超出 `[DURATION_MIN, DURATION_MAX]` 时才按原比例收到目标中点；其余文字不变。
+    解析不出数字时原样返回（自由文本没有矛盾数字，注入无害）。
     """
     text = str(budget or "").strip()
     if not text:
         return ""
     nums = [float(m.group(1)) for m in _BUDGET_NUM_RE.finditer(text)]
     total = sum(nums)
-    if not nums or (_TARGET_MIN_SEC <= total <= _TARGET_MAX_SEC):
+    if not nums or (DURATION_MIN_SEC <= total <= DURATION_MAX_SEC):
         return text
     target = (_TARGET_MIN_SEC + _TARGET_MAX_SEC) / 2.0
     scaled = iter(round(n * target / total, 1) for n in nums)

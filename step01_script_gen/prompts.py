@@ -304,97 +304,60 @@ def _dur_range(lo: float, hi: float, cap: float) -> str:
 
 
 def _build_total_duration_constraint(shot_count_min: int, shot_count_max: int) -> str:
-    """v6.41 P19 闭环：红果 60-90s 总时长硬约束（08-23 增，08-23 改 8-10 镜）.
+    """总时长合同（S34）：合法区间是硬门，规划目标只是优先，不是成功条件.
 
-    8-22 跑批实测 LLM 生成的 duration_sec 总和 30-40s，距红果 60-90s 下限差 20+s。
-    旧版仅在 hard_fix 层后置拉伸（W6 _hard_fix_runtime_extend），但受 motion_desc
-    物理动作时长约束，单镜最多加 2s × 8 镜 = +16s，仍达不到 60s。
+    历史问题（本版修正）：旧提示把 70-80s 当默认分配值，并写「未到 85 加秒、
+    超过 110 减秒/合镜、超时强制截断」。放宽到 60-120s 后，84s 的完整稿和 116s
+    的合格稿都会**仅因偏离目标带**被要求改写。现在提示明确：
 
-    根因：prompts 模板只规定单镜 duration 范围（特写 2-4s / 中景 3-6s / 远景 5-8s），
-    没规定 SUM(duration_sec) 的总时长。LLM 按每镜 3-5s 规划自然落入 30-40s。
+    - `[DURATION_MIN, DURATION_MAX]` 是唯一合法门；
+    - `[TARGET_MIN, TARGET_MAX]` 是优先规划范围，落在合法带内但不在目标带 **不**
+      自动填充、压缩、合镜；
+    - 超过硬上限时**重新安排表达与镜头**，不按比例压缩、不截断声音/动作；
+    - 镜头数按内容安排，不规定必须 N 镜；下面的镜数只是反推参考。
 
-    修法：prompt 末尾追加"总时长 60-90s"硬约束 + 镜头数→平均时长推导，让 LLM
-    在第一次生成就把每镜 duration_sec 拉到合理区间（结合 ≤8s 单镜 cap）。
-
-    08-23 v6.41 P19.2：原 3-8 镜 + 平均 7.5s → LLM 默认按 6s/镜规划 → 8 镜 48s
-    不到 60s 红果下限。改为 **8-10 镜 + 平均 6-9s/镜** → 48-90s 覆盖红果区间。
-
-    08-23 v6.43 用户规则：**正片分镜总时长（不含钩子）≥ 60s，单镜 ≤ 8s，
-    钩子时长另算；镜头数不限（SHOT_COUNT_MIN/MAX<=0 即视为不限）**。
-    单镜 cap 从 12s 收紧到 8s；60s 下限只统计正片分镜，钩子不进总时长。
-    镜头数不限时，提示「按需拆镜」+ 用「每镜平均时长」作为软目标，不再硬塞 N 镜。
-
-    09-13 A/B 实测（doubao 94.0 / deepseek 95.1 后唯一短板）：旧引导「每镜平均
-    6-7.5s、四类镜头全 6-8s」在镜头数不限（实际 15+ 镜）下必然顶格——doubao
-    一刀切默认 6s/镜（12/15 镜 6s + 2 镜 8s）→ 92s，deepseek 79-83s。
-    红果 60-90s 是合法区间不变，规划目标先收紧为 60-70s（DeepSeek raw 66s 达标，
-    doubao 87s 仍超）；**09-13 用户决策再放宽为 70-80s（按 ~75s 分配）**——避免
-    时长压太短导致场景被过度压缩。每镜平均 4-5s，按镜头类型拉开时长差
-    （对话 5-6s / 动作 3-5s / 空镜 3-4s），禁止全章统一 6s。
-    W6 runtime_extend 仍只守 ≥60s 下限，超顶侧全靠本引导。
+    单镜上限仍来自 `active_shot_cap()`（模型能力与项目上限取严），不写死。
     """
-    from shared.model_caps import active_video_duration_cap
-    from shared.constants import DEFAULT_VIDEO_DURATION_FALLBACK
-    cap = active_video_duration_cap() or DEFAULT_VIDEO_DURATION_FALLBACK
-    # 规划目标 70-80s → 平均每镜 4-5s（单镜硬上限 = 运行时生效值，见下）
-    min_per_shot = 4.0
-    target_per_shot = 5.0
-    # v6.98（2026-09-22 审核 P1-1）：单镜硬上限**只有一个源**。
-    #
-    # 原实现是 `min(8.0, cap)`——项目上限早已放宽到 15s（v6.93），这里却仍把 8s
-    # 当模板硬上限，于是**生成层主动把 8-12s 的合法镜头拆开**（下面还写着
-    # 「超 8s 必拆镜」），而质量门按 12s 收——多出来的镜头受最短时长（3.5s）约束
-    # 后又抬高总时长，是「正片顶格」的一个**代码侧**来源（审核 P1-1 的实测推论）。
-    # 现在与门禁同源。
     from step01_script_gen.timecode import active_shot_cap
     max_per_shot = active_shot_cap()
+    target_mid = (DURATION_TARGET_MIN_SEC + DURATION_TARGET_MAX_SEC) / 2.0
 
-    # v6.43 镜头数不限：min/max 任一 ≤0 时按"按需拆镜"措辞，不再硬塞 N 镜数字
     unlimited = shot_count_min <= 0 or shot_count_max <= 0
     if unlimited:
+        _lo = max(1, int(DURATION_TARGET_MIN_SEC / 5.0))
+        _hi = max(_lo, int(DURATION_TARGET_MAX_SEC / 4.5))
         plan_line = (
-            f"**镜头数不限**，按动作密度自然拆分：总时长目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s ÷ 每镜平均 "
-            f"4.5-{target_per_shot:.1f}s ≈ {int(DURATION_TARGET_MIN_SEC / target_per_shot)}-{int(DURATION_TARGET_MAX_SEC / 4.5)} 镜"
-            f"（单镜 ≤ {max_per_shot:.0f}s 硬上限，超 {max_per_shot:.0f}s 必拆镜）。\n"
+            f"**镜头数不限**，按内容与动作密度自然安排；若按每镜平均 4.5-5s 反推，"
+            f"目标带约 ≈ {_lo}-{_hi} 镜——这只是参考，不是必须凑到的镜数。"
+            f"单镜 ≤ {max_per_shot:.0f}s（硬上限）。\n"
         )
     else:
         plan_line = (
-            f"按 {shot_count_min}-{shot_count_max} 镜规划：每镜平均 {min_per_shot:.1f}-{target_per_shot:.1f}s"
-            f"（以总时长 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s ÷ 实际镜数反推每镜时长为准，勿逐镜顶格）。\n"
+            f"按 {shot_count_min}-{shot_count_max} 镜安排，但**镜头数由内容决定**："
+            f"不要为了凑镜数拆空镜或合并不同事件。单镜 ≤ {max_per_shot:.0f}s。\n"
         )
 
-    if DURATION_MAX_SEC == 90:
-        uniform_example = "15 镜 × 6s = 90s 顶格贴线、毫无快慢节奏"
-    else:
-        _flat_n = max(int(DURATION_MAX_SEC // 6), 1)
-        uniform_example = ("%d 镜 × 6s = %gs 接近上限但缺少节奏变化"
-                           % (_flat_n, _flat_n * 6))
     return (
-        f"\n\n### ⏰ 总时长硬约束（合法区间 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s，规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s，最高优先级）\n"
-        f"本章是抖音 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 竖屏短剧，**正片分镜（不含钩子，钩子时长另算）duration_sec 之和必须落在 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 合法区间内，规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s（按 ~{(DURATION_TARGET_MIN_SEC + DURATION_TARGET_MAX_SEC) / 2:g}s 分配每镜时长）**。\n"
+        f"\n\n### ⏰ 总时长合同（合法 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s；"
+        f"优先规划 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s）\n"
+        f"正片分镜（不含钩子；钩子单独计时并另行报告）duration_sec 之和必须落在 "
+        f"**{DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 合法区间**。"
+        f"**{DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s 是优先规划范围，不是硬门**："
+        f"内容充分、节奏合理时，处于目标带之外（例如 84s 或 116s）不因时长数字被自动填充或压缩。\n"
         f"{plan_line}"
-        f"\n"
-        f"**规划方式**（按镜头类型拉开时长差，禁止一刀切）：\n"
-        f"- 开场/建立镜：4-5s（含人物姿态、空间关系建立）\n"
-        f"- 对话/反应镜：5-6s（必须能念完台词+展示反应）\n"
-        f"- 打斗/动作镜：{_dur_range(3.5, 5, max_per_shot)}（动作链拆多镜短镜快切，不靠拉长单镜；**不得低于 3.5s**）\n"
-        f"- 空镜/过渡镜：{_dur_range(3.5, 4.5, max_per_shot)}（无对白无关键动作，从简；**不得低于 3.5s**）\n"
-        f"- 末镜/留白镜：4-5s（情绪渲染时间）\n"
-        f"\n"
-        f"**硬约束**：\n"
-        f"- 正片分镜 SUM(duration_sec) ≥ {DURATION_MIN_SEC:g}s（差 1s 都会被打回；钩子不计入，钩子时长另算）\n"
-        f"- 正片分镜 SUM(duration_sec) ≤ {DURATION_MAX_SEC:g}s（超时会被强制截断）；规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s，超 {DURATION_TARGET_MAX_SEC:g}s 说明每镜时长分多了\n"
-        f"- 末镜 duration_sec ≥ 4s（红果末镜情绪渲染下限）\n"
-        f"- 单镜 ≤ {max_per_shot:.0f}s（硬上限，超过必被打回夹取）\n"
-        f"\n"
-        f"**禁止**：\n"
-        f"- 单镜 2-3s 短镜堆叠（15 镜 × 3s = 45s，差 15s 必返工）\n"
-        f"- 全章一刀切默认 6s（{uniform_example}，按规划失败处理）\n"
-        f"- 单镜 > {max_per_shot:.0f}s 长镜头（动作链必须拆多镜，每镜 ≤ {max_per_shot:.0f}s）\n"
-        f"\n"
-        f"**自检**：写完每个 shot 后，累计正片分镜 SUM(duration_sec)（不含钩子），"
-        f"未到 {DURATION_TARGET_MIN_SEC:g}s 可把对话镜/末镜 +1s（仍 ≤ {max_per_shot:.0f}s）让场景充分展开；"
-        f"超过 {DURATION_TARGET_MAX_SEC:g}s 就把无对白的过渡镜/空镜 -1s 或合并同场景过渡镜。\n"
+        f"\n**时长分配原则**：\n"
+        f"- 先按实际发声（逐句估时）和动作/反应需要分配，再核对总和；\n"
+        f"- 对话/反应镜要真的念得完台词并看得到反应，动作镜按动作链拆多镜快切，"
+        f"空镜/过渡镜从简；\n"
+        f"- 末镜 ≥ 4s（情绪留白），单镜不得低于 3.5s、不得超过 {max_per_shot:.0f}s；\n"
+        f"- 目标带中点约 {target_mid:g}s 只用于提醒节奏，不要求每章顶格。\n"
+        f"\n**硬门与合法修法**：\n"
+        f"- 总和 < {DURATION_MIN_SEC:g}s：补**有内容的**动作/反应/过场，不靠 1-2s 短镜堆叠；\n"
+        f"- 总和 > {DURATION_MAX_SEC:g}s：**重新安排表达与镜头**（拆分/重排/删重复过渡），"
+        f"不得按比例压缩、不得截断已选声音或动作，也不得靠加速朗读；\n"
+        f"- 钩子不计入正片总和，单独报告含钩子的总时长。\n"
+        f"\n**禁止**：把「不在目标带」当失败；为凑目标给镜头机械加秒；为回到目标"
+        f"把不同事件硬合镜；超硬上限后强制截断声音/动作。\n"
     )
 
 
@@ -665,10 +628,12 @@ def _build_regen_iron_rules() -> str:
     _cap = active_shot_cap()
     return (
         "\n\n# ★ 重生成铁律（最高优先级，违反本轮拒收）\n"
-        f"1. **正片分镜 SUM(duration_sec) 必须在 [{DURATION_MIN_SEC:g}s, {DURATION_MAX_SEC:g}s]，规划目标 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s**（不含钩子），"
+        f"1. **正片分镜 SUM(duration_sec) 必须在 [{DURATION_MIN_SEC:g}s, {DURATION_MAX_SEC:g}s]**（不含钩子；"
+        f"优先规划 {DURATION_TARGET_MIN_SEC:g}-{DURATION_TARGET_MAX_SEC:g}s，但**不在目标带不算失败**），"
         f"每镜 ≥3.5s 且 ≤ {_cap:.0f}s 上限（对话镜 {_dur_range(6, 15, _cap)} / 动作镜 {_dur_range(3.5, 8, _cap)} / 空镜 {_dur_range(3.5, 6, _cap)}）；"
-        "禁止 1-2s 短镜堆叠凑镜头数，也禁止全章一刀切默认 6s——写时长时先算 SUM，"
-        f"不足 {DURATION_MIN_SEC:g}s 就加长对话镜/加反应镜，超 {DURATION_TARGET_MAX_SEC:g}s 就压缩无对白过渡镜。\n"
+        "禁止 1-2s 短镜堆叠凑镜头数，也禁止全章一刀切默认 6s。写时长时先算 SUM；"
+        f"**只有低于 {DURATION_MIN_SEC:g}s 或高于 {DURATION_MAX_SEC:g}s 才需要改**。"
+        "低于下限补有内容的动作/反应；高于上限重新安排表达与镜头，不按比例压缩、不截断声音/动作。\n"
         "2. **台词（narration_segment/subtitle）必须逐字来自原文**——禁止编造原文没有的"
         "对白（如凭空给角色编一句「你逃不掉了」这类原文不存在的台词）。\n"
         "3. **合规**：禁止「击杀/杀人/尸体」等敏感词，用「出人命/倒地/倒下」替换。\n"

@@ -132,6 +132,81 @@ def duration_band_matches(record: dict) -> bool:
                     and actual[k] == v for k, v in expected.items()))
 
 
+# ============================================================================
+# 声音分配预算（S34，2026-11-25）
+# ============================================================================
+#: 条数默认值：旧模式保持 10；新候选可用 `STEP01_VOICE_ALLOCATION_MAX_LINES` 显式放宽。
+VOICE_ALLOCATION_MAX_LINES_DEFAULT = 10
+#: 实验协议硬上限：超出这个值不是"章节不可行"，而是当前选择策略不满足。
+VOICE_ALLOCATION_MAX_LINES_CAP = 12
+#: 总汉字默认值：旧模式保持 280；新候选显式设置 360 才生效（不静默改旧默认）。
+VOICE_ALLOCATION_MAX_HAN_DEFAULT = 280
+#: 单条声音的汉字策略（本包保留 42 字；实际估时仍由 `timecode` 判可表示性）。
+VOICE_ALLOCATION_MAX_LINE_HAN = 42
+#: 单条声音在协议里最多拆成几个有序单位（与 voice_allocation.MAX_UNITS_PER_VOICE 同源）。
+VOICE_ALLOCATION_MAX_UNITS_PER_VOICE = 4
+
+
+def _positive_int_setting(name: str, default: int, *, minimum: int = 1,
+                          maximum: int | None = None, clamp: bool = False) -> int:
+    """读取正整数配置；非法值在发送前显式失败，越界按实验协议处理.
+
+    条数上限保留历史行为：显式大值**夹到协议硬上限 12**（不静默改默认值）；
+    总汉字数没有协议硬上限，非法值直接失败（不能靠夹取掩盖配置错误）。
+    """
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return int(default)
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("%s=%r: must be a positive integer" % (name, raw)) from exc
+    if value < minimum:
+        raise ValueError("%s=%r: must be >= %d" % (name, raw, minimum))
+    if maximum is not None and value > maximum:
+        if clamp:
+            return int(maximum)
+        raise ValueError("%s=%r: must be <= %d" % (name, raw, maximum))
+    return value
+
+
+def voice_allocation_limits() -> dict:
+    """声音分配的唯一配置读数（条数/总汉字/单条策略/硬上限/软目标）.
+
+    所有提示、候选池、预算判断、应用器、残余报告与缓存身份都消费这一份结果。
+    - `max_lines`：本次策略上限（默认 10，显式可到 12）；
+    - `max_han`：本次总汉字策略上限（默认 280，显式可到 360 或更高）；
+    - `max_line_han`：单条策略（保留 42 字，不等于实际秒数）；
+    - `max_sec`：声音合计的**硬上限** = 本次正片合法上限；
+    - `target_sec`：**软目标** = 当前目标带中点，夹在合法带内；
+    - `single_shot_sec`：单镜有效上限，来自模型能力入口（不写死 12 秒）；
+    - `target_min`/`target_max`：目标带，供提示区分"优先"与"合法"。
+    """
+    max_lines = _positive_int_setting(
+        "STEP01_VOICE_ALLOCATION_MAX_LINES", VOICE_ALLOCATION_MAX_LINES_DEFAULT,
+        maximum=VOICE_ALLOCATION_MAX_LINES_CAP, clamp=True)
+    max_han = _positive_int_setting(
+        "STEP01_VOICE_ALLOCATION_MAX_HAN", VOICE_ALLOCATION_MAX_HAN_DEFAULT)
+    from step01_script_gen.timecode import active_shot_cap
+    single_shot = float(active_shot_cap())
+    target_min = float(DURATION_TARGET_MIN_SEC)
+    target_max = float(DURATION_TARGET_MAX_SEC)
+    target = min(max((target_min + target_max) / 2.0, DURATION_MIN_SEC),
+                 DURATION_MAX_SEC)
+    return {
+        "max_lines": int(max_lines),
+        "max_han": int(max_han),
+        "max_line_han": int(VOICE_ALLOCATION_MAX_LINE_HAN),
+        "max_units_per_voice": int(VOICE_ALLOCATION_MAX_UNITS_PER_VOICE),
+        "max_sec": float(DURATION_MAX_SEC),
+        "target_sec": round(float(target), 2),
+        "target_min": target_min,
+        "target_max": target_max,
+        "single_shot_sec": single_shot,
+        "min_sec": float(DURATION_MIN_SEC),
+    }
+
+
 def _TEXT_PROVIDER_DEFAULT_GAP_ATTEMPTS() -> str:
     """GAP 重试默认值按 TEXT_PROVIDER 区分（v6.62.1，09-06）.
 

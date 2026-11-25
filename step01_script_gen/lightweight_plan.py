@@ -26,7 +26,10 @@ from pathlib import Path
 PLAN_MODE_ENV = "STEP01_PLAN_MODE"
 PLAN_MODE_LEGACY = "legacy"
 PLAN_MODE_LIGHTWEIGHT = "lightweight"
-PLAN_MODES = (PLAN_MODE_LEGACY, PLAN_MODE_LIGHTWEIGHT)
+#: S29：共同生产入口。规划源可为 legacy / lightweight；默认 lightweight +
+#: 独立内容核验（把原版的 VerificationController 接到轻量计划上）。
+PLAN_MODE_UNIFIED = "unified"
+PLAN_MODES = (PLAN_MODE_LEGACY, PLAN_MODE_LIGHTWEIGHT, PLAN_MODE_UNIFIED)
 CONTRACT_VERSION = "lightweight_outline.v1"
 #: 逻辑请求上限：首答 + 最多一次定点声音修订（2026-11-23 主线计划 S04）。非法回答也消耗这次
 #: 修订机会，不暗中重答；底层传输重试由 provider 另计，不占这里的次数。
@@ -48,9 +51,9 @@ def plan_mode_setting(explicit: str | None = None) -> str:
 
 
 def preflight_problems() -> str:
-    """发送前的组合检查：轻量模式只支持旧呈现模式（legacy_audio）."""
+    """发送前的组合检查：轻量/统一模式只支持旧呈现模式（legacy_audio）."""
     _mode = plan_mode_setting()
-    if _mode != PLAN_MODE_LIGHTWEIGHT:
+    if _mode not in (PLAN_MODE_LIGHTWEIGHT, PLAN_MODE_UNIFIED):
         return ""
     from step01_script_gen.outline import presentation_mode
     from shared.presentation_contract import MODE_LEGACY
@@ -71,8 +74,11 @@ def identity_problems(plan, novel_text: str = "") -> str:
         return "缺 `lightweight_plan` 身份块"
     if str(_blk.get("contract_version") or "") != CONTRACT_VERSION:
         return "合同版本 %r ≠ %s" % (_blk.get("contract_version"), CONTRACT_VERSION)
-    if str(_blk.get("content_verification") or "") != "not_run":
-        return "content_verification 必须如实记为 not_run"
+    _cv = str(_blk.get("content_verification") or "")
+    if _cv not in ("not_run", "verified"):
+        return "content_verification 必须是 not_run 或 verified"
+    if _cv == "verified" and not isinstance(plan.get("plan_verification"), dict):
+        return "content_verification=verified 但没有 plan_verification 记录"
     if novel_text and str(_blk.get("novel_digest") or "") != _novel_digest(novel_text):
         return "原文摘要与本次原文不符"
     return ""
@@ -429,23 +435,16 @@ def build_plan(answer, novel_text: str) -> tuple:
 # ---------------------------------------------------------------------------
 # S21：完整关系视图上的**声音/承载重分配**统一编译入口
 # ---------------------------------------------------------------------------
-#: 编译时**不得改变**的视图块（主张/证据/事件/父子谱系/钩子/卡片/出处修正）。
-#: 只冻结"内容身份"，不冻结编号：编号由投影按候选顺序派生（本入口的职责之一）。
-FROZEN_VIEW_BLOCKS = ("frozen_facts", "frozen_events", "hook_bindings",
-                      "screen_cards", "evidence_updates")
+#: 编译时**不得改变**的视图块（S27：单一事实源已抽到 `plan_transaction`）。
+#: 这里保留别名，旧调用方与测试仍从本模块读取同一份清单。
+from step01_script_gen.plan_transaction import (  # noqa: F401 - 兼容别名
+    FROZEN_VIEW_BLOCKS, frozen_drift,
+    frozen_payload as _frozen_payload, mutable_payload as _rel_view)
 
 
-def _rel_view(view) -> dict:
-    """视图里**允许重分配**的关系块（用于变更清单，不参与判据）."""
-    out = {}
-    for _k in ("beats", "dialogue_units", "narration_units", "fact_bindings"):
-        _v = (view or {}).get(_k)
-        out[_k] = copy.deepcopy(_v) if isinstance(_v, list) else []
-    return out
-
-
-def _frozen_payload(view) -> dict:
-    return {_k: copy.deepcopy((view or {}).get(_k)) for _k in FROZEN_VIEW_BLOCKS}
+def _admission_problems(view) -> list:
+    from step01_script_gen.plan_transaction import admission_problems
+    return admission_problems(view)
 
 
 def _fact_texts(plan) -> list:
@@ -558,14 +557,12 @@ def compile_reallocated_plan(base_plan, candidate_view, *, novel_text):
         return _fail("realloc_base_view_invalid", "", "基线投影不可读：%s" % _vp[:2])
     if not isinstance(candidate_view, dict) or not candidate_view:
         return _fail("realloc_view_missing", "", "候选视图缺失")
-    _adm = pc.view_admission_problems(candidate_view)
+    _adm = _admission_problems(candidate_view)
     if _adm:
         return None, _adm, {"accepted": False, "problems": _adm}
     # ---- 1. 冻结块逐字节比对（内容身份不得在重分配里漂移）----
-    _bf, _cf = _frozen_payload(_base_view), _frozen_payload(candidate_view)
-    _drift = [_k for _k in FROZEN_VIEW_BLOCKS if _bf.get(_k) != _cf.get(_k)]
-    _basis_drift = 1 if (_base_view.get("plan_basis") or {}) != (candidate_view.get("plan_basis") or {}) else 0
-    if _drift or _basis_drift:
+    _drift = frozen_drift(_base_view, candidate_view)
+    if _drift:
         return _fail("realloc_frozen_changed", ",".join(_drift) or "plan_basis",
                      "重分配改动了冻结内容（事实/证据/事件/谱系/钩子/卡片/计划基座）")
     if str((candidate_view or {}).get("mode") or "") != str(_base_view.get("mode") or ""):
@@ -714,25 +711,33 @@ def _prompt(novel_text: str) -> str:
     from step01_script_gen.timecode import active_shot_cap
     from step01_script_gen import lightweight_voice_repair as vr
     _bmin, _bmax = budget_band()   # 与验收链同源，不另读配置常量
+    _lim = vr.voice_limits()
     return LIGHTWEIGHT_PROMPT.format(cap=float(active_shot_cap()),
                                      band_min=float(_bmin),
                                      band_max=float(_bmax),
-                                     lines=vr.line_limit(), han=vr.MAX_HAN,
-                                     line_han=vr.MAX_LINE_HAN, target=vr.TARGET_SEC,
+                                     lines=_lim["max_lines"], han=_lim["max_han"],
+                                     line_han=_lim["max_line_han"],
+                                     target=_lim["target_sec"],
                                      novel_text=str(novel_text or "")[:PROMPT_MAX_CHARS])
 
 
 def _cache_key(prompt: str, model) -> str:
     from _text_gen.config import TextGenCfg
     from shared.fact_metadata import LIGHTWEIGHT_ACCEPTANCE_VERSION
+    from step01_script_gen import lightweight_voice_repair as vr
     from step01_script_gen.outline import _outline_max_tokens
     from step01_script_gen.plan_coherence import VERSION as COHERENCE_VERSION
+    from shared.config import duration_band
     _src = {"plan_mode": PLAN_MODE_LIGHTWEIGHT, "contract_version": CONTRACT_VERSION,
             "acceptance_version": LIGHTWEIGHT_ACCEPTANCE_VERSION,
             "coherence_version": COHERENCE_VERSION, "prompt": prompt,
             "schema": LIGHTWEIGHT_SCHEMA, "provider": TextGenCfg.PROVIDER,
             "model": model or TextGenCfg.default_text_model(), "temperature": 0.3,
-            "max_tokens": _outline_max_tokens()}
+            "max_tokens": _outline_max_tokens(),
+            # 时长带与声音策略进缓存身份：换 60-90/70-80 或 60-120/85-110、换
+            # 10/280 或 12/360，都不能命中旧身份的缓存。
+            "duration_band": duration_band(),
+            "voice_limits": vr.voice_limits()}
     return hashlib.sha256(json.dumps(_src, ensure_ascii=False, sort_keys=True)
                           .encode("utf-8")).hexdigest()
 
@@ -805,28 +810,29 @@ def residual_report(problems, claim_pending=()) -> dict:
 def _budget_block(ctx) -> str:
     """修订请求里的预算读数：硬上限与引导目标分开，条数/字数另列（数字全部由代码算）."""
     from step01_script_gen import lightweight_voice_repair as vr
-    from step01_script_gen.plan_feasibility import budget_band
-    from step01_script_gen.timecode import active_shot_cap
-    _, ceiling = budget_band()
+    _lim = vr.voice_limits()
+    ceiling = float(_lim["max_sec"])
     rows = ctx.get("rows") or []
     sec = float(ctx.get("seconds") or 0.0)
     lines, han = len(rows), sum(int(r.get("han") or 0) for r in rows)
-    cap = float(active_shot_cap())
+    cap = float(_lim["single_shot_sec"])
     out = ["", "# 本稿预算读数（代码按同一估时入口计算）"]
     if sec > ceiling + 0.01:
         out.append("- 声音总时长 %.2fs，**硬上限 %.0fs**：至少减 %.2fs 才不超硬上限；"
-                   "引导目标 %ds（至少减 %.2fs）。" % (sec, ceiling, sec - ceiling, vr.TARGET_SEC,
-                                                     max(0.0, sec - vr.TARGET_SEC)))
+                   "软目标约 %.0fs（仅优先，不是硬门）。" % (sec, ceiling, sec - ceiling,
+                                                          float(_lim["target_sec"])))
     else:
-        out.append("- 声音总时长 %.2fs，未超硬上限 %.0fs（引导目标 %ds）。" % (sec, ceiling, vr.TARGET_SEC))
-    out.append("- 声音条数 %d（上限 %d）%s；汉字 %d（上限 %d）%s。"
-               % (lines, vr.line_limit(),
-                  "，超 %d 条" % (lines - vr.line_limit()) if lines > vr.line_limit() else "",
-                  han, vr.MAX_HAN, "，超 %d 字" % (han - vr.MAX_HAN) if han > vr.MAX_HAN else ""))
+        out.append("- 声音总时长 %.2fs，未超硬上限 %.0fs（软目标约 %.0fs，仅优先）。"
+                   % (sec, ceiling, float(_lim["target_sec"])))
+    out.append("- 声音条数 %d（策略 %d）%s；汉字 %d（策略 %d）%s。"
+               % (lines, _lim["max_lines"],
+                  "，超 %d 条" % (lines - _lim["max_lines"]) if lines > _lim["max_lines"] else "",
+                  han, _lim["max_han"],
+                  "，超 %d 字" % (han - _lim["max_han"]) if han > _lim["max_han"] else ""))
     over = [r["id"] for r in rows if float(r.get("single_sec") or 0) > cap
-            or int(r.get("han") or 0) > vr.MAX_LINE_HAN]
+            or int(r.get("han") or 0) > _lim["max_line_han"]]
     if over:
-        out.append("- 单条超 %.0fs 或超 %d 字：%s。" % (cap, vr.MAX_LINE_HAN, "、".join(over)))
+        out.append("- 单条超 %.0fs 或超 %d 字：%s。" % (cap, _lim["max_line_han"], "、".join(over)))
     out.append("- 只有这一次修订机会；修订后仍不合格即停在计划层，不会再次请求。")
     return "\n".join(out)
 
@@ -834,20 +840,19 @@ def _budget_block(ctx) -> str:
 def _over_limits(ctx) -> str:
     """`lightweight_voice_budget` 的具体超限项（不再笼统写"条数、汉字数或时长"）."""
     from step01_script_gen import lightweight_voice_repair as vr
-    from step01_script_gen.plan_feasibility import budget_band
-    from step01_script_gen.timecode import active_shot_cap
-    _, ceiling = budget_band()
+    _lim = vr.voice_limits()
+    ceiling = float(_lim["max_sec"])
     rows = ctx.get("rows") or []
     parts = []
     if float(ctx.get("seconds") or 0) > ceiling + 0.01:
         parts.append("总时长 %.2fs > %.0fs" % (ctx["seconds"], ceiling))
-    if len(rows) > vr.line_limit():
-        parts.append("条数 %d > %d" % (len(rows), vr.line_limit()))
+    if len(rows) > _lim["max_lines"]:
+        parts.append("条数 %d > %d" % (len(rows), _lim["max_lines"]))
     han = sum(int(r.get("han") or 0) for r in rows)
-    if han > vr.MAX_HAN:
-        parts.append("汉字 %d > %d" % (han, vr.MAX_HAN))
-    over = [r["id"] for r in rows if float(r.get("single_sec") or 0) > float(active_shot_cap())
-            or int(r.get("han") or 0) > vr.MAX_LINE_HAN]
+    if han > _lim["max_han"]:
+        parts.append("汉字 %d > %d" % (han, _lim["max_han"]))
+    over = [r["id"] for r in rows if float(r.get("single_sec") or 0) > float(_lim["single_shot_sec"])
+            or int(r.get("han") or 0) > _lim["max_line_han"]]
     if over:
         parts.append("单条超限 %s" % "、".join(over))
     return "；".join(parts) or "声音超限"
@@ -922,12 +927,9 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
     _use_va_v2 = os.getenv(va.ENV, "v1").strip().lower() == "v2"
 
     def _va_limits():
-        from step01_script_gen.plan_feasibility import budget_band
-        from step01_script_gen.timecode import active_shot_cap
-        _, _ceil = budget_band()
-        return {"max_lines": vr.line_limit(), "max_han": vr.MAX_HAN,
-                "max_sec": float(_ceil), "single_shot_sec": float(active_shot_cap()),
-                "current_lines": len(vr.voices(original)) if original else 0}
+        _lim = dict(vr.voice_limits())
+        _lim["current_lines"] = len(vr.voices(original)) if original else 0
+        return _lim
 
     def _blocked_stop(ctx):
         """修订前就能判定无合法动作：不发请求，给出逐条原因."""

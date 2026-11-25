@@ -181,7 +181,8 @@ def test_only_long_voice_is_replaced_in_the_single_revision():
     res = lw.generate_lightweight_outline_result(source, service=svc)
     assert res["executable"], res["failure"]
     assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
-    assert all(value in svc.prompts[0] for value in ("10 条", "280 个汉字", "42 个汉字", "55–80 秒"))
+    assert all(value in svc.prompts[0]
+               for value in ("10 条", "280 个汉字", "42 个汉字", "55–75"))
     assert "只有这一次修订机会" in svc.prompts[1]
     rows = vr.prepare(answer, source)["rows"]
     assert [r["id"] for r in rows if r["editable"]] == ["N1"]
@@ -223,7 +224,7 @@ def test_budget_trim_requires_full_reduction_and_preserves_beats():
     rows = [r for r in ctx["rows"] if r["text"] in {b["voice_text"] for b in additions}]
     deletes = [{"id": r["id"], "text": ""} for r in rows]
     # trim 只改达标所需的几句：一次修订删掉超出部分即可，其余声音不动
-    need = ctx["seconds"] - 80
+    need = ctx["seconds"] - vr.target_sec()
     chosen, cut = [], 0.0
     for r in sorted(rows, key=lambda r: -r["sec"]):
         if cut >= need:
@@ -235,8 +236,9 @@ def test_budget_trim_requires_full_reduction_and_preserves_beats():
     res = lw.generate_lightweight_outline_result(source, service=svc)
     assert res["executable"], res["failure"]
     assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
-    assert f"至少 {round(ctx['seconds'] - 80, 2)} 秒" in svc.prompts[1]
-    assert "硬上限 90s" in svc.prompts[1] and "引导目标 80s" in svc.prompts[1]
+    assert f"至少 {round(ctx['seconds'] - vr.target_sec(), 2)} 秒" in svc.prompts[1]
+    assert "硬上限 90s" in svc.prompts[1]
+    assert f"软目标约 {vr.target_sec():.0f}s" in svc.prompts[1]
     assert len(res["plan"]["shot_beats"]) == 6 + len(additions)
     kept_texts = {b["voice_text"] for b in additions} - {
         r["text"] for r in rows if r["id"] in {c["id"] for c in chosen}}

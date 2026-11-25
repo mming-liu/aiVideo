@@ -82,12 +82,15 @@ def run(manifest_path: Path, output_base: Path) -> Path:
             from step01_script_gen.constraints.duration_budget import DurationBudgetConstraint
             from step01_script_gen.main import _build_step01_quality_gate
             script = copy.deepcopy(inputs["script"])
-            ctx = ConstraintContext.from_script(script, novel_text=novel)
+            # 约束/质检可能写派生字段；回放必须在**工作副本**上跑，冻结输入本体
+            # 只用于身份比对（此前直接跑在 script 上，input_unchanged 恒为 false）。
+            working = copy.deepcopy(script)
+            ctx = ConstraintContext.from_script(working, novel_text=novel)
             constraints = apply_constraints(ctx, only=(DurationBudgetConstraint,))
-            quality = _build_step01_quality_gate(script, novel)
+            quality = _build_step01_quality_gate(working, novel)
             issues = quality["hard"] + quality["visual_risk"] + quality["advisory"]
             report["script"] = {
-                "total_sec": sum(float(s.get("duration_sec") or 0) for s in script["shots"]),
+                "total_sec": sum(float(s.get("duration_sec") or 0) for s in working["shots"]),
                 "duration_violations": [v.message for v in constraints.violations_remaining],
                 "quality_duration_issues": [i for i in issues if i["code"] == "duration_budget"],
                 "other_quality_codes": sorted({i["code"] for i in issues if i["code"] != "duration_budget"}),

@@ -1332,11 +1332,11 @@ def _kf_mismatch_targets(shot: dict, shot_id: str, index: int) -> list:
 
 
 def _duration_budget_issues(script: dict) -> list[Issue]:
-    """Make the project's 60-90s acceptance range a blocking invariant.
+    """Make the configured legal duration range a blocking invariant.
 
-    The prompt plans for 70-80s and the old redguo checker only emitted
-    advisory warnings.  Without this gate, a 100s script could pass while
-    still being outside the product target.
+    S34：`DURATION_TARGET_*` 只是优先规划范围，**不**在这里当硬门。合法区间由
+    `DURATION_MIN_SEC`/`DURATION_MAX_SEC` 决定（旧默认 60-90，新候选 60-120）；
+    超出时要求重新安排镜头/表达，而不是按比例压缩或截断声音。
     """
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
     if not shots:
@@ -1353,8 +1353,10 @@ def _duration_budget_issues(script: dict) -> list[Issue]:
     targets: list = []
     hint = ""
     if total > DURATION_MAX_SEC:
-        msg = (f"正片总时长 {total:.1f}s > {DURATION_MAX_SEC:g}s，违反 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 验收区间；"
-               "需精简剧情/动作或合并镜头，不能静默截断台词或动作")
+        msg = (f"正片总时长 {total:.1f}s > {DURATION_MAX_SEC:g}s，违反 "
+               f"{DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s 验收区间；"
+               "需**重新安排表达与镜头**（合并重复/无信息镜头、重排动作），"
+               "不按比例压缩、不静默截断台词或动作")
         # 2026-11-07（run17 r1 实测）：这条问题唯一合法的修法是改各镜 duration，
         # 但旧 Issue 没有 repair_targets、code 也不在 _REPAIR_CODE_FIELDS 里 ⇒ 授权
         # 面为空；模型一改 duration 就被整轮判越权（rejected_by_validation）。

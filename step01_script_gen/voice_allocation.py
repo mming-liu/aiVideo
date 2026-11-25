@@ -55,13 +55,26 @@ def _evidence_list(fact) -> list:
     return [str(x) for x in (ev or []) if str(x)]
 
 
+def effective_limits(limits=None) -> dict:
+    """补齐本次声音事务的完整预算读数；调用方只覆盖它显式知道的键.
+
+    条数/汉字/单条/硬上限/软目标/单镜能力**全部来自** `voice_allocation_limits()`；
+    调用方传 `current_lines` 等上下文键时不会丢掉其余配置。
+    """
+    out = dict(vr.voice_limits())
+    for key, value in dict(limits or {}).items():
+        if value is not None:
+            out[key] = value
+    return out
+
+
 def build_voice_choices(answer, novel_text, *, limits=None,
                         allow_drop_facts: bool = True) -> dict:
     """冻结回答 → 候选目录（声音、事实、受限动作）；不调用模型、不写文件."""
-    limits = dict(limits or {})
+    limits = effective_limits(limits)
     rows = vr.voices(answer)
     characters = [str(x).strip() for x in (answer.get("characters") or []) if str(x).strip()]
-    cap = float(limits.get("single_shot_sec") or 11)
+    cap = float(limits["single_shot_sec"])
     catalog = {}
     for r in rows:
         recs, notes = vr._candidate_records(r, novel_text, characters, cap)
@@ -102,12 +115,14 @@ def prompt_text(catalog, facts, limits, *, allow_drop_facts: bool = True) -> str
             "约束：不得新增声音种类/说话人；不得把不同角色的发言拼接；每条承载正文必须逐字"
             "来自该声音自己的正文（unit.source=own）或它绑定事实的证据（unit.source=evidence）。"
             "**own 的 in_evidence=false 不是越界**——它本来就是这条声音的原文，可直接替换/拆分；"
-            "完整主张由后续内容核验判定，不要因此判不可修。%s条数上限 %s、汉字上限 %s、单条 %s 秒。"
-            "当前稿已有 %s 条声音，本协议最多允许 %s 条；拆分前先算剩余条数。"
+            "完整主张由后续内容核验判定，不要因此判不可修。%s条数策略 %s、总汉字策略 %s、"
+            "单条策略 %s 字、总量硬上限 %s 秒、软目标约 %s 秒（高于软目标不等于不合法）、"
+            "单镜上限 %s 秒。"
+            "当前稿已有 %s 条声音；超出策略时先减无事实绑定的声音，不能删必保留事实。"
             "超出预算或确实无法保住内容时，写进 unfixable 并说明缺哪一层。\n目录："
-            % (drop_rule, limits.get("max_lines", 10), limits.get("max_han", 280),
-               limits.get("single_shot_sec", 12), limits.get("current_lines", "?"),
-               limits.get("max_lines", 10))
+            % (drop_rule, limits["max_lines"], limits["max_han"], limits["max_line_han"],
+               limits["max_sec"], limits["target_sec"], limits["single_shot_sec"],
+               limits.get("current_lines", "?"))
             + json.dumps({"voices": catalog, "facts": facts}, ensure_ascii=False))
 
 
@@ -161,7 +176,7 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None,
     位置由**基线稳定坐标**（event, beat）一次性计算，不依赖模型数组的排列顺序；
     拆分只改变节拍布局，不改说话人/声音种类，也不删除画面节拍。
     """
-    limits = dict(limits or ctx.get("limits") or {})
+    limits = effective_limits(limits or ctx.get("limits") or {})
     if (not isinstance(response, dict)
             or not set(response) <= {"voices", "facts", "unfixable", "dropped_facts"}
             or not isinstance(response.get("voices"), list)
@@ -307,9 +322,9 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None,
     dropped = []
     while True:
         rows_now = vr.voices(result)
-        if (len(rows_now) <= int(limits.get("max_lines") or 10)
-                and vr.total(rows_now) <= float(limits.get("max_sec") or 90) + 0.01
-                and sum(r["han"] for r in rows_now) <= int(limits.get("max_han") or 280)):
+        if (len(rows_now) <= int(limits["max_lines"])
+                and vr.total(rows_now) <= float(limits["max_sec"]) + 0.01
+                and sum(r["han"] for r in rows_now) <= int(limits["max_han"])):
             break
         one = _drop_one_fact_free(result)
         if not one:
@@ -319,14 +334,13 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None,
         result["allocation_dropped"] = dropped
     rows = vr.voices(result)
     seconds, han = vr.total(rows), sum(r["han"] for r in rows)
-    if (seconds > float(limits.get("max_sec") or 90) + 0.01
-            or han > int(limits.get("max_han") or 280)
-            or len(rows) > int(limits.get("max_lines") or 10)):
+    if (seconds > float(limits["max_sec"]) + 0.01
+            or han > int(limits["max_han"])
+            or len(rows) > int(limits["max_lines"])):
         return None, [_problem("allocation_budget_conflict", "",
-                               "分配后仍超限：%d 条 / %d 字 / %.2fs（上限 %d 条 / %d 字 / %ss）"
-                               % (len(rows), han, seconds, int(limits.get("max_lines") or 10),
-                                  int(limits.get("max_han") or 280),
-                                  limits.get("max_sec") or 90))]
+                               "分配后仍超限：%d 条 / %d 字 / %.2fs（策略上限 %d 条 / %d 字 / 硬上限 %ss）"
+                               % (len(rows), han, seconds, int(limits["max_lines"]),
+                                  int(limits["max_han"]), limits["max_sec"]))]
     return result, []
 
 

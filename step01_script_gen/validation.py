@@ -8130,13 +8130,15 @@ def _check_redguo_standard(shots, characters=None):
             over = total_dur - _REDGUO_DURATION_MAX
             warnings.append(
                 f"红果总时长 {total_dur:.1f}s > {DURATION_MAX_SEC:g}s（超 {over:.1f}s，不含钩子）。"
-                f"v6.43 红果标准正片 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s——必须砍次要冲突/次要人物/铺垫段。"
+                f"合法区间 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s——重新安排表达与镜头，"
+                f"不按比例压缩、不截断声音或动作。"
             )
         elif total_dur < _REDGUO_DURATION_MIN:
             under = _REDGUO_DURATION_MIN - total_dur
             warnings.append(
                 f"红果总时长 {total_dur:.1f}s < {DURATION_MIN_SEC:g}s（差 {under:.1f}s，不含钩子）。"
-                f"v6.43 红果标准正片 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s——可增加镜头数或拉长对话/反应镜头 duration"
+                f"合法区间 {DURATION_MIN_SEC:g}-{DURATION_MAX_SEC:g}s——补有内容的动作/反应镜头，"
+                f"不用短镜堆叠或机械加秒"
                 f"（单镜 ≤ {_redguo_shot_duration_max():.0f}s）。"
             )
 

@@ -11,25 +11,56 @@ so "the menu has no budget solution" cannot be confused with "no legal candidate
 """
 import copy
 import json
-import os
 import re
 
 from step01_script_gen import plan_feasibility as pf
 from step01_script_gen.timecode import _estimate_duration, active_shot_cap
 
+#: 兼容常量：默认值。**所有判定与提示必须经下面的函数读生效值**，不要直接消费它们
+#: （S34：旧实现散落读取 280/80，新配置无法贯通）。
 MAX_LINES, MAX_HAN, MAX_LINE_HAN = 10, 280, 42
 TARGET_SEC, REPLACEMENT_SEC = 80, 11
 MAX_OPTIONS, MIN_OPTION_HAN = 4, 4
 
 
+def voice_limits() -> dict:
+    """本进程生效的声音预算（单一来源：`shared.config.voice_allocation_limits`）."""
+    from shared.config import voice_allocation_limits
+    out = voice_allocation_limits()
+    # 单镜能力仍走 `timecode.active_shot_cap()`（模型能力与项目上限取严）；
+    # 保留模块级别名也让既有测试/工具对 cap 的替换继续作用在本层判断上。
+    out["single_shot_sec"] = float(active_shot_cap())
+    return out
+
+
 def line_limit() -> int:
-    """声音条数上限；默认 10。S13 v2 隔离实验可经环境显式放宽到 11（不静默改默认）."""
-    raw = os.environ.get("STEP01_VOICE_ALLOCATION_MAX_LINES")
-    try:
-        v = int(raw)
-    except (TypeError, ValueError):
-        return MAX_LINES
-    return max(MAX_LINES, min(v, 12))
+    """声音条数策略上限（默认 10；显式配置可到 12，非法值在发送前失败）."""
+    return int(voice_limits()["max_lines"])
+
+
+def han_limit() -> int:
+    """声音总汉字策略上限（默认 280；新候选显式配置 360 才生效）."""
+    return int(voice_limits()["max_han"])
+
+
+def max_line_han() -> int:
+    """单条声音的汉字策略（保留 42 字；实际可播性仍由单镜估时判）."""
+    return int(voice_limits()["max_line_han"])
+
+
+def target_sec() -> float:
+    """声音的**软目标**：当前目标带中点，不是硬门，也不能冒充成功条件."""
+    return float(voice_limits()["target_sec"])
+
+
+def ceiling_sec() -> float:
+    """声音合计的**硬上限**：当前正片合法上限（与验收同源）."""
+    return float(voice_limits()["max_sec"])
+
+
+def single_shot_sec() -> float:
+    """单镜有效上限（模型能力与项目上限取严），不写死 12 秒."""
+    return float(active_shot_cap())
 #: Menu slots reserved for options inside the voice's own bound evidence (S07, 2026-11-23).
 EVIDENCE_SLOTS = 2
 #: Acceptance codes a voice edit can resolve; anything else is outside this protocol.
@@ -81,7 +112,7 @@ def voices(answer, ids=None):
                 continue
             counts[kind] += 1
             text = str(beat.get("voice_text") or "").strip()
-            check = _check(kind, text, active_shot_cap())
+            check = _check(kind, text, single_shot_sec())
             bound = [f for f in answer["facts"] if f["event"] == ei + 1
                      and f["beat"] == bi + 1 and f.get("carrier") == "voice"]
             uid = (ids or {}).get((ei, bi)) or ("D" if kind == "dialogue" else "N") + str(counts[kind])
@@ -350,7 +381,7 @@ def _make_candidate(paragraph, line_no, start, end, row, quote, origin, anchor, 
     text = paragraph[start:end]
     if (not text or text == row["text"] or "\n" in text
             or any(ch in text for ch in _OPEN_QUOTE + _CLOSE_QUOTE)
-            or not MIN_OPTION_HAN <= _han(text) <= MAX_LINE_HAN
+            or not MIN_OPTION_HAN <= _han(text) <= max_line_han()
             or _estimate_duration(text) >= row["sec"]):
         return None
     check = _check(row["kind"], text, cap)
@@ -381,7 +412,7 @@ def _trimmed_end(paragraph, start, end):
 
 def _candidate_records(row, novel, characters=None, cap=None):
     """All legal replacement records for one voice (source identity preserved)."""
-    cap = active_shot_cap() if cap is None else cap
+    cap = single_shot_sec() if cap is None else cap
     characters = ([row.get("speaker")] if characters is None and row.get("speaker")
                   else list(characters or []))
     lines = novel.splitlines()
@@ -507,8 +538,10 @@ def _best_case(rows, ctx_trim, *, full=True):
 
 
 def _fits_budget(best, goal, ceiling):
-    return (best["seconds"] <= min(goal, ceiling) + 0.01
-            and best["lines"] <= line_limit() and best["han"] <= MAX_HAN)
+    # 目标只影响"是否值得修"，**不能**把软目标当硬门：只要 ≤ 合法上限、条数/字数
+    # 在本次策略内，就是合法解；高于目标不等于没有合法解。
+    return (best["seconds"] <= min(float(goal), float(ceiling)) + 0.01
+            and best["lines"] <= line_limit() and best["han"] <= han_limit())
 
 
 def _blocked_reason(row):
@@ -519,7 +552,7 @@ def _blocked_reason(row):
             return "本声音正文在原文里的归属与计划声明的说话人 %r 不一致：%s；不跨说话人替换" % (
                 row.get("speaker"), note["detail"])
     return ("超单镜或超 %d 字，被事实引用不能删，原文同段与绑定证据里都没有"
-            "可表示的逐字短句" % MAX_LINE_HAN)
+            "可表示的逐字短句" % max_line_han())
 
 
 def prepare(answer, novel, ids=None):
@@ -528,11 +561,11 @@ def prepare(answer, novel, ids=None):
     seconds = total(rows)
     _, ceiling = pf.budget_band()
     over_time = seconds > ceiling + 0.01
-    trim = over_time or len(rows) > line_limit() or sum(r["han"] for r in rows) > MAX_HAN
-    bad = [r for r in rows if r["single_sec"] > active_shot_cap() or r["han"] > MAX_LINE_HAN]
+    trim = over_time or len(rows) > line_limit() or sum(r["han"] for r in rows) > han_limit()
+    bad = [r for r in rows if r["single_sec"] > single_shot_sec() or r["han"] > max_line_han()]
     if not trim and not bad:
         return None
-    cap = active_shot_cap() if trim else min(REPLACEMENT_SEC, active_shot_cap())
+    cap = single_shot_sec() if trim else min(REPLACEMENT_SEC, single_shot_sec())
     for r in rows:
         r["editable"] = trim or r in bad
         if r["editable"]:
@@ -542,7 +575,7 @@ def prepare(answer, novel, ids=None):
             r["_all_options"] = [c["text"] for c in pool]
             r["replacements"] = _menu_records(r, ranked, pool, trim=trim)
             r["deletable"] = trim and not r["claims"]
-    goal = min(TARGET_SEC, ceiling) if over_time else seconds
+    goal = min(target_sec(), ceiling) if over_time else seconds
     blocked = []
     for r in bad:
         if r["replacements"] or (trim and r["deletable"]):
@@ -577,14 +610,15 @@ def _row_view(r):
 def prompt(ctx):
     reduction = round(ctx["seconds"] - ctx["goal"], 2)
     must = [r["id"] for r in ctx["rows"] if r.get("editable")
-            and (r["single_sec"] > active_shot_cap() or r["han"] > MAX_LINE_HAN)]
+            and (r["single_sec"] > single_shot_sec() or r["han"] > max_line_han())]
     return ("基于当前稿，只提交 edits（id 和新 text），不要重抄整稿；未点名的字段保持原样。"
             "替换必须从该条 replacements 里逐字选一条，保持原说话人、语意、事实与节拍；"
             "仅 deletable=true 的条目可用空串删除；不得新增声音或删节拍。"
             + (f"必须处理的超限条目：{'、'.join(must)}。" if must else "")
             + "若某条在 replacements 里确实没有能保住其 claims 的选项，把它写进 unfixable 并说明缺了哪层内容，"
             "其余条目照常修订；unfixable 不能代替可做的修订。"
-            f"声音上限：{line_limit()} 条、{MAX_HAN} 个汉字、每条 {MAX_LINE_HAN} 字。"
+            f"声音策略：{line_limit()} 条、{han_limit()} 个汉字、每条 {max_line_han()} 字；"
+            f"合法总时长硬上限 {ceiling_sec():g} 秒，软目标约 {target_sec():g} 秒（高于软目标不等于不合法）。"
             f"当前稿正文合计 {ctx['seconds']} 秒，必须净缩短"
             + (f"至少 {reduction} 秒（到 {ctx['goal']} 秒以内）。" if reduction else "，锁定项不动。")
             + "\n声音清单（sec 为正文估时，single_sec 含对白前缀余量；locked 为锁定项）：\n"

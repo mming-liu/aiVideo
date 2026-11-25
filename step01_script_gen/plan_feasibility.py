@@ -3894,6 +3894,11 @@ def plan_contract_records(plan, *, novel_text: str = "",
             return _voice_order + [_problem_record(
                 "lightweight_plan_identity_invalid", "plan", None, "lightweight_plan",
                 "轻量计划身份不成立（%s）——不能凭验收版本号免除内容核验记录" % _lw_bad)]
+        # S27/S29：统一入口完成独立内容核验后把该块置为 verified；从这一刻起
+        # 计划不再享受"轻量计划按设计免核验"的豁免，必须走完整记录验收。
+        _blk = plan.get("lightweight_plan") or {}
+        _lightweight = (str(_blk.get("content_verification") or "not_run")
+                        != "verified")
     facts = [str(f) for f in (plan.get("required_facts") or [])]
     if not facts:
         return _voice_order   # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`

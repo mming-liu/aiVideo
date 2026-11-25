@@ -505,9 +505,10 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
         if duration_over:
             _mrt._logger.warn(
                 f"[DURATION] 正片 {shots_total:.1f}s > {_mrt.DURATION_MAX_SEC:g}s，"
-                f"反馈 LLM 精简/合并到 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s（尝试 {attempt}/{max_attempts}）..."
+                f"反馈 LLM 重新安排表达与镜头（合法 {_mrt.DURATION_MIN_SEC:g}-{_mrt.DURATION_MAX_SEC:g}s；"
+                f"目标 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s 仅优先，尝试 {attempt}/{max_attempts}）..."
             )
-            _mrt._console(f"  [时长] 正片 {shots_total:.1f}s 超 {_mrt.DURATION_MAX_SEC:g}s，重新规划为 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s（{attempt}/{max_attempts}）...")
+            _mrt._console(f"  [时长] 正片 {shots_total:.1f}s 超 {_mrt.DURATION_MAX_SEC:g}s，重新安排镜头（{attempt}/{max_attempts}）...")
 
         feedback = ""
         if over_max:
@@ -529,13 +530,12 @@ def _regen_over_limit(script: dict, novel_text: str, bank=None, objects_bank=Non
             feedback += (
                 f"\n\n# ★ 正片时长硬约束（本轮拒收，最高优先级）\n"
                 f"当前正片分镜合计 {shots_total:.1f}s，超过 {_mrt.DURATION_MAX_SEC:g}s 上限。\n"
-                f"**本轮必须把正片分镜 duration_sec 之和压到 {_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s，最多 {_mrt.DURATION_MAX_SEC:g}s**。\n"
-                f"禁止删掉关键剧情（开篇冲突/刺杀/高潮/收尾）、致命伤、武器归属或台词原文依据。\n"
-                f"允许的压缩方式：\n"
-                f"1. 合并同地点、同主体、连续动作或重复信息镜头；\n"
-                f"2. 删除纯重复反应、无信息过渡、重复空镜；\n"
-                f"3. 精简 motion_desc 的冗余动作，不为凑时长保留重复动作；\n"
-                f"4. 按台词实际语速和动作分段重新分配时长，禁止靠加速朗读压缩。\n"
+                f"**本轮只要求回到合法区间 {_mrt.DURATION_MIN_SEC:g}-{_mrt.DURATION_MAX_SEC:g}s；"
+                f"{_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s 是优先目标，不是必须达到的值**。\n"
+                f"**合法修法：重新安排表达与镜头**——合并同地点/同主体/连续动作的重复镜头，"
+                f"删纯重复反应与无信息过渡，按实际发声和动作需要重新分镜。\n"
+                f"禁止：按比例压缩所有镜头、加速朗读、截断声音或动作、删掉关键剧情"
+                f"（开篇冲突/刺杀/高潮/收尾）、致命伤、武器归属或台词原文依据。\n"
             )
         # v6.33（08-12）：附加 checklist 聚合反馈——镜头数收敛之外，把内容密度/景别
         # 跳跃/致命伤等真实缺陷也喂给 LLM（此前只喂镜头数/覆盖率，LLM 重生成还是老问题）
@@ -701,7 +701,9 @@ def _structural_feedback(issues: list) -> str:
         f"   每个子镜的台词估时都必须 ≤ {_shot_cap():.0f}s（留余量，目标 4-7s）。\n"
         "2. **时长低于下限**：把该镜合并进相邻的同地点连续剧情，或补足动作/台词——\n"
         "   禁止靠事后加秒数凑时长。\n"
-        f"3. 单镜 duration_sec 必须落在 3.5-{_shot_cap():.0f}s；正片合计 {_mrt.DURATION_MIN_SEC:g}-{_mrt.DURATION_MAX_SEC:g}s（钩子另算）。\n"
+        f"3. 单镜 duration_sec 必须落在 3.5-{_shot_cap():.0f}s；正片合计 "
+        f"{_mrt.DURATION_MIN_SEC:g}-{_mrt.DURATION_MAX_SEC:g}s（钩子另算；"
+        f"{_mrt.DURATION_TARGET_MIN_SEC:g}-{_mrt.DURATION_TARGET_MAX_SEC:g}s 只是优先）。\n"
         "4. 禁止复制字段制造 ff==lf 的空壳子镜；每个子镜都要有独立的事件与画面。\n"
         "5. **开篇空镜过多**：抖音黄金 3 秒必须有主体入场——把多余的开篇空镜"
         "**合并或替换成带主体的建立镜**（人物入画、手持道具、明确动作），"
@@ -1115,49 +1117,95 @@ def _scoped_split_one(shot: dict, novel_text: str, *, cap: float, fps: float,
     return None
 
 
+def generate_shot_design_result(novel_text: str, plan, *, script: dict, issues: list,
+                                bank=None, objects_bank=None, model=None,
+                                deadline_monotonic=None) -> dict:
+    """结构修订路径的**按需镜头设计**（S30）：只重做被点名的超载镜头.
+
+    只在结构修订路径使用；普通章节不增加这次调用。输出沿用完整镜头字段（由既有
+    `_scoped_split_one` 生成），并给出**明确的前后映射**。本函数不做以下事情：
+
+    - 不让 `temporal_plan` 驱动自动合镜；
+    - 不按相似度猜引用（子镜的 `plan_refs` 由父镜显式继承）；
+    - 不为超过 120s 的整稿做比例压缩（那走整稿重规划）。
+
+    Returns:
+        `{"ok", "replacements": [{"parent_index", "children", "position"}],
+          "problems", "calls", "changed"}`；失败时 `ok=False`，调用方保留基线。
+    """
+    from step01_script_gen.quality_issues import STRUCTURAL_SHOT_CODES
+    if not isinstance(script, dict):
+        return {"ok": False, "changed": False, "replacements": [],
+                "problems": [{"code": "shot_design_script_missing",
+                              "reason": "缺少完整分镜，无法做镜头设计"}], "calls": 0}
+    over = [i for i in (issues or [])
+            if str(getattr(i, "code", "")) == "shot_content_over_cap"
+            and str(getattr(i, "code", "")) in STRUCTURAL_SHOT_CODES]
+    if not over:
+        return {"ok": True, "changed": False, "replacements": [], "problems": [], "calls": 0}
+    cap = _shot_cap()
+    fps = script.get("fps", 24)
+    shots = script.get("shots") or []
+    replacements, problems = [], []
+    done = 0
+    for issue in over:
+        if done >= _STRUCT_SPLIT_MAX_SHOTS:
+            problems.append({"code": "shot_design_budget_exhausted",
+                             "shot": str(issue.shot_id),
+                             "reason": "单轮定向拆分上限 %d" % _STRUCT_SPLIT_MAX_SHOTS})
+            break
+        pos = next((n for n, s in enumerate(shots)
+                    if isinstance(s, dict) and str(s.get("index")) == str(issue.shot_id)),
+                   None)
+        if pos is None:
+            problems.append({"code": "shot_design_parent_missing",
+                             "shot": str(issue.shot_id), "reason": "点名镜头不在稿件里"})
+            continue
+        parent = shots[pos]
+        _mrt._logger.info("[DESIGN] 镜头%s 需要 %.1fs > %.1fs，请求重做该镜镜头设计…"
+                          % (issue.shot_id, _content_need(parent), cap))
+        subs = _scoped_split_one(parent, novel_text, cap=cap, fps=fps, model=model)
+        if not subs:
+            problems.append({"code": "shot_design_rejected", "shot": str(issue.shot_id),
+                             "reason": "子镜未通过容量/连续性/视觉重复判据，保留基线"})
+            continue
+        mapping = {"parent_index": parent.get("index"),
+                   "children": [s.get("index") for s in subs],
+                   "position": pos,
+                   "plan_refs_inherited": bool(isinstance(parent.get("plan_refs"), dict))}
+        replacements.append({"parent_index": parent.get("index"),
+                             "position": pos, "children": subs, "mapping": mapping})
+        done += 1
+    return {"ok": bool(replacements) and not problems, "changed": bool(replacements),
+            "replacements": replacements, "problems": problems, "calls": done,
+            "deadline_monotonic": deadline_monotonic}
+
+
 def _scoped_split_over_cap_shots(script: dict, novel_text: str, *, model=None) -> dict:
     """把超载镜头逐个定向拆分（最多 `_STRUCT_SPLIT_MAX_SHOTS` 个）；原地改 `shots`."""
     over = [i for i in _structural_shot_issues(script)
             if i.code == "shot_content_over_cap"]
     if not over:
         return script
-    cap = _shot_cap()
+    design = generate_shot_design_result(novel_text, script.get("chapter_outline"),
+                                         script=script, issues=over, model=model)
+    if not design.get("changed"):
+        return script
     shots = script.get("shots") or []
-    fps = script.get("fps", 24)
-    done = 0
-    for issue in over:
-        if done >= _STRUCT_SPLIT_MAX_SHOTS:
-            _mrt._logger.info(
-                "[SPLIT] 已达单轮拆分上限 %d，其余超载镜头交整脚本 regen"
-                % _STRUCT_SPLIT_MAX_SHOTS
-            )
-            break
-        pos = next((n for n, s in enumerate(shots)
-                    if isinstance(s, dict) and str(s.get("index")) == str(issue.shot_id)),
-                   None)
-        if pos is None:
-            continue
-        parent = shots[pos]
+    # 从后往前替换，位置不会因前一次插入而漂移；映射由设计结果显式给出。
+    for item in sorted(design["replacements"], key=lambda x: x["position"], reverse=True):
+        shots[item["position"]:item["position"] + 1] = item["children"]
         _mrt._logger.info(
-            "[SPLIT] 镜头%s 需要 %.1fs > %.1fs，请求定向拆分…"
-            % (issue.shot_id, _content_need(parent), cap)
-        )
-        subs = _scoped_split_one(parent, novel_text, cap=cap, fps=fps, model=model)
-        if not subs:
-            continue
-        shots[pos:pos + 1] = subs
-        done += 1
-        _mrt._logger.info(
-            "[SPLIT] 镜头%s 已拆为 %d 镜：%s（台词逐字连续 ✓）"
-            % (issue.shot_id, len(subs),
-               [round(float(s.get("duration") or 0), 2) for s in subs])
-        )
-        _mrt._console("  [拆分] 镜头%s → %d 镜（超载已消）" % (issue.shot_id, len(subs)))
-    if done:
-        try:
-            _mrt.write_timeline_from_durations(script)
-        except Exception as e:
-            _mrt._logger.warn("[SPLIT] 拆分后 timeline 序列化失败: %s" % e)
+            "[SPLIT] 镜头%s 已拆为 %d 镜：%s（映射 %s，台词逐字连续 ✓）"
+            % (item["parent_index"], len(item["children"]),
+               [round(float(s.get("duration") or 0), 2) for s in item["children"]],
+               item["mapping"]["children"]))
+        _mrt._console("  [拆分] 镜头%s → %d 镜（超载已消）"
+                      % (item["parent_index"], len(item["children"])))
+    try:
+        _mrt.write_timeline_from_durations(script)
+    except Exception as e:
+        _mrt._logger.warn("[SPLIT] 拆分后 timeline 序列化失败: %s" % e)
     return script
 
 
