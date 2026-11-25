@@ -148,6 +148,11 @@ def settle_batch(chapter_path, reservation_id, batch_path):
         settle_unknown(chapter_path, reservation_id,
                        reason="batch structure invalid: %r" % (b,))
         return {"status": "unknown", "chapter_after": _read(chapter_path).get("used")}
+    if b.get("reservation_id") is not None and str(b.get("reservation_id")) != str(reservation_id):
+        settle_unknown(chapter_path, reservation_id,
+                       reason="batch reservation_id mismatch: %r != %r"
+                       % (b.get("reservation_id"), reservation_id))
+        return {"status": "unknown", "chapter_after": _read(chapter_path).get("used")}
     try:
         settle(chapter_path, reservation_id, b["used"], b.get("attempts") or [])
     except QuotaError as exc:
@@ -155,6 +160,62 @@ def settle_batch(chapter_path, reservation_id, batch_path):
         return {"status": "unknown", "chapter_after": _read(chapter_path).get("used")}
     return {"status": "settled", "spent": b["used"],
             "chapter_after": _read(chapter_path).get("used")}
+
+
+def reserve_batch(chapter_path, batch_path, n, *, tag="") -> str:
+    """在章节账本预占 `n` 次，并写出带 `reservation_id` 的批次账本."""
+    bp = Path(batch_path)
+    if bp.exists():
+        raise QuotaError("batch ledger already exists: %s" % bp)
+    rid = reserve(chapter_path, n, tag=tag or bp.name)
+    _write(bp, {"max": int(n), "used": 0, "attempts": [],
+                "chapter_ledger": str(chapter_path), "reservation_id": rid})
+    return rid
+
+
+def has_reservation(chapter_path, reservation_id) -> bool:
+    """检查章节账本中是否存在处于 `reserved` 状态的预占 ID."""
+    rid = str(reservation_id or "").strip()
+    if not rid:
+        return False
+    with _Lock(chapter_path):
+        try:
+            data = _read(chapter_path)
+        except BaseException:  # noqa: BLE001
+            return False
+        if not isinstance(data, dict):
+            return False
+        return any(
+            isinstance(r, dict) and str(r.get("id") or "") == rid
+            and r.get("state") == "reserved"
+            for r in (data.get("reservations") or [])
+        )
+
+
+def consume_one(chapter_path, *, provider="", endpoint="", call_id="") -> int:
+    """逐 POST 原子扣减 1 次章节额度（直接调用未走批次预占时使用）."""
+    with _Lock(chapter_path):
+        try:
+            data = _read(chapter_path)
+        except BaseException as exc:  # noqa: BLE001
+            raise QuotaError("chapter ledger unreadable: %s" % exc) from exc
+        if not isinstance(data, dict) or not _int_ok(data.get("used")) \
+                or not _int_ok(data.get("max"), minimum=1):
+            raise QuotaError("chapter ledger structure invalid: %r" % (data,))
+        if data["used"] >= data["max"]:
+            raise QuotaError("chapter quota exhausted: used=%d max=%d"
+                             % (data["used"], data["max"]))
+        data["used"] += 1
+        data.setdefault("attempts", []).append({
+            "n": data["used"],
+            "at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "provider": str(provider or ""),
+            "endpoint": str(endpoint or ""),
+            "call_id": str(call_id or ""),
+            "direct": True,
+        })
+        _write(chapter_path, data)
+        return data["used"]
 
 
 def pending(chapter_path):

@@ -454,12 +454,25 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
         "声音数组为空时输出 `[]`，不得凭事实 supported 或旁白类型补造声音结论。",
     ]
     from step01_script_gen.plan_coherence import prompt as coherence_prompt
-    from step01_script_gen.source_revision import prompt as preservation_prompt
+    from step01_script_gen.source_revision import (
+        FIELD as _SR_FIELD,
+        PRESERVATION_SCHEMA as _PRESERVATION_SCHEMA,
+        prompt as preservation_prompt,
+    )
     result=chr(10).join(_lines) + coherence_prompt(view) + preservation_prompt(view)
     _splits = (view.get("plan_basis") or {}).get("source_splits")
     if isinstance(_splits, list) and _splits:
         result += ("\n\n【来源修正父主张（只用于判断子事实是否删掉核心，不得新增事实）】\n"
                    + json.dumps(_splits, ensure_ascii=False))
+        if _SR_FIELD not in (view.get("plan_basis") or {}):
+            _split_parents = [str(s.get("parent") or "") for s in _splits]
+            result += (
+                "\n请在额外顶层 `source_preservation` 字段独立给出父主张核心保留核验结论，"
+                "严格使用以下 schema，且 `target_uids` 必须按顺序填 "
+                + json.dumps(_split_parents, ensure_ascii=False)
+                + "，不得沿用原候选自带的结论：\n"
+                + json.dumps(_PRESERVATION_SCHEMA, ensure_ascii=False)
+            )
     if source_catalog is not None:
         from step01_script_gen.source_references import instruction
         result+=instruction(source_catalog)

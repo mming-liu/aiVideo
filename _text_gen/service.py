@@ -105,12 +105,20 @@ class _LedgeredService(TextGenerationService):
             "1", "true", "yes", "on")
         if _env_ro or (_rctx is not None and _rctx.read_only):
             raise _ReadOnlyViolation("STEP01_READ_ONLY 启用时禁止发起文本生成请求")
-        # 章节额度守卫（发送边界兜底）：若配置了 STEP01_CHAPTER_QUOTA_FILE，
-        # 任何绕过外层 wrapper 的调用在触网前都必须确认章内剩余额度 > 0。
+        # 章节额度守卫（发送边界兜底）：若配置了 STEP01_CHAPTER_QUOTA_FILE：
+        # - 已走批次预占（TEXT_SEND_QUOTA_FILE 在位）时不在服务层重复扣减（由 send_quota
+        #   在每次 POST 前校验 reservation_id 并只扣批次）；
+        # - 未走批次预占时：agent_plan 在每次实际 POST 前由 send_quota.reserve 原子扣减
+        #   （服务层先预检余量），其余无 send_quota 钩子的 provider 在此处原子扣减 1 次。
         from . import chapter_quota as _chapter_quota
+        from . import send_quota as _send_quota
         _cq_path = (_os.getenv(_chapter_quota.ENV_FILE) or "").strip()
-        if _cq_path:
-            _chapter_quota.check_available(_cq_path)
+        _batch_path = (_os.getenv(_send_quota.ENV_FILE) or "").strip()
+        if _cq_path and not _batch_path:
+            if self._provider == "agent_plan":
+                _chapter_quota.check_available(_cq_path)
+            else:
+                _chapter_quota.consume_one(_cq_path, provider=self._provider, call_id=_cid)
         # `call_id` 在**调用前**生成（复核之七）：这一次调用的唯一标识——完整正文按它
         # 归档、修订轮按它关联"这一轮用的是哪份响应"，同一轮多次/并发调用各自定位。
         from shared.call_ledger import new_call_id

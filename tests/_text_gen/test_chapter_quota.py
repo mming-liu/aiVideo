@@ -118,3 +118,41 @@ def test_service_blocks_send_when_chapter_quota_exhausted(tmp_path, monkeypatch)
     monkeypatch.setenv(q.ENV_FILE, str(p2))
     res = svc.generate(TextGenerationRequest(system_prompt="s", user_prompt="u"))
     assert res.success is True and len(called) == 1
+
+
+def test_send_quota_per_post_debits_chapter_without_double_charge(tmp_path, monkeypatch):
+    from _text_gen import send_quota as sq
+
+    ch = _ledger(tmp_path, used=18, cap=20)
+    monkeypatch.setenv(q.ENV_FILE, str(ch))
+    monkeypatch.delenv(sq.ENV_FILE, raising=False)
+
+    # 1. 直接发送（无批次包装器）：每次 POST 原子扣减 1 次（含重试），第 3 次阻断
+    assert sq.reserve(provider="agent_plan", endpoint="https://example.test") == 19
+    assert sq.reserve(provider="agent_plan", endpoint="https://example.test") == 20
+    assert json.loads(ch.read_text(encoding="utf-8"))["used"] == 20
+    with pytest.raises(q.QuotaError):
+        sq.reserve(provider="agent_plan", endpoint="https://example.test")
+
+    # 2. 批次包装器走 reserve_batch：只预占一次，POST 扣批次不重复扣章节
+    ch2 = _ledger(tmp_path, used=15, cap=20)
+    ch2_path = tmp_path / "ch2.json"
+    ch2.replace(ch2_path)
+    batch = tmp_path / "batch.json"
+    rid = q.reserve_batch(ch2_path, batch, 3, tag="b1")
+    assert json.loads(ch2_path.read_text(encoding="utf-8"))["used"] == 18
+    monkeypatch.setenv(q.ENV_FILE, str(ch2_path))
+    monkeypatch.setenv(sq.ENV_FILE, str(batch))
+    assert sq.reserve(provider="agent_plan", endpoint="https://example.test") == 1
+    assert json.loads(ch2_path.read_text(encoding="utf-8"))["used"] == 18
+    assert json.loads(batch.read_text(encoding="utf-8"))["used"] == 1
+    st = q.settle_batch(ch2_path, rid, batch)
+    assert st["status"] == "settled" and st["spent"] == 1
+    assert json.loads(ch2_path.read_text(encoding="utf-8"))["used"] == 16
+
+    # 3. 无效/伪造批次文件（缺章节预占 reservation_id）在同时设 STEP01_CHAPTER_QUOTA_FILE 时拒发
+    fake_batch = tmp_path / "fake_batch.json"
+    fake_batch.write_text(json.dumps({"max": 5, "used": 0, "attempts": []}), encoding="utf-8")
+    monkeypatch.setenv(sq.ENV_FILE, str(fake_batch))
+    with pytest.raises(sq.SendQuotaUnavailable):
+        sq.reserve(provider="agent_plan", endpoint="https://example.test")

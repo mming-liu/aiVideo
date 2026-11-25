@@ -942,7 +942,8 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
             return _fail(res, "deadline_exhausted",
                          "规划截止时刻已到 ⇒ 不发轻量大纲请求（已尝试 %d 次）" % (_n - 1),
                          attempts=_attempts)
-        _va_ctx = (va.build_voice_choices(original, novel_text, limits=_va_limits())
+        _va_ctx = (va.build_voice_choices(original, novel_text, limits=_va_limits(),
+                                          allow_drop_facts=False)
                    if (scope and _use_va_v2) else None)
         _req = TextGenerationRequest(
             system_prompt=_OUTLINE_SYSTEM_PROMPT,
@@ -953,7 +954,7 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                                + json.dumps(_last_problems, ensure_ascii=False)
                                if scope else prompt)),
             max_tokens=_outline_max_tokens(), temperature=0.3,
-            json_schema=(va.SCHEMA if _va_ctx is not None
+            json_schema=(va.SCHEMA_NO_DROP if _va_ctx is not None
                          else (vr.SCHEMA if scope else LIGHTWEIGHT_SCHEMA)),
             model=model, deadline_monotonic=_dl)
         _r = _svc.generate(_req)
@@ -976,9 +977,16 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
                     for x in (_data.get("unfixable") or []) if isinstance(x, dict)]
             else:
                 _cand, _va_probs = va.apply_voice_allocation(
-                    original, _data, _va_ctx, novel_text=novel_text, limits=_va_limits())
+                    original, _data, _va_ctx, novel_text=novel_text,
+                    limits=_va_limits(), allow_drop_facts=False)
                 if _va_probs or _cand is None:
                     _last_problems = list(_va_probs or [])
+                elif ([(f.get("claim"), f.get("evidence"))
+                       for f in (_cand.get("facts") or [])]
+                      != [(f.get("claim"), f.get("evidence"))
+                          for f in (original.get("facts") or [])]):
+                    _last_problems = [_rec("allocation_facts_modified", "facts",
+                                           "自动修订入口禁止删改必保留事实")]
                 else:
                     _data = _cand
         elif scope:

@@ -97,6 +97,54 @@ def test_lightweight_outline_wires_voice_allocation_v2(monkeypatch):
     assert res["plan"] is not None
 
 
+def test_lightweight_outline_v2_forbids_dropping_facts(monkeypatch):
+    monkeypatch.setenv(va.ENV, "v2")
+    monkeypatch.setenv("STEP01_VOICE_ALLOCATION_MAX_LINES", "10")
+    monkeypatch.setattr("step01_script_gen.timecode.active_shot_cap", lambda: 5.0)
+    monkeypatch.setattr("step01_script_gen.lightweight_voice_repair.active_shot_cap",
+                        lambda: 5.0)
+
+    first = {
+        "characters": ["甲", "乙"], "emotional_arc": "焦急", "climax": "夜渡",
+        "end_hook": "乙登船", "omittable": [],
+        "events": [
+            {"summary": "甲劝阻", "beats": [
+                _beat("甲站在渡口", "黄昏时分，甲站在渡口。"),
+                _beat("甲开口劝阻", "甲说道", "dialogue", L1, "甲")]},
+            {"summary": "乙答话", "beats": [
+                _beat("乙回答", "乙说道", "dialogue", L2, "乙")]},
+            {"summary": "乙登船", "beats": [
+                _beat("乙登上小船", "乙登上小船，甲望着水面叹了口气。")]},
+        ],
+        "facts": [{"claim": "甲劝乙小心暗礁", "evidence": L1,
+                   "event": 1, "beat": 2, "carrier": "voice"}],
+    }
+
+    class _DroppingSvc:
+        def __init__(self):
+            self.n = 0
+
+        def generate(self, req):
+            self.n += 1
+            if self.n == 1:
+                assert "dropped_facts" not in (req.json_schema or {}).get("schema", {}).get("properties", {})
+                return TextGenerationResult(success=True, text=json.dumps(first, ensure_ascii=False))
+            # 第二轮模型越权企图通过 dropped_facts 删掉必保留事实
+            assert "dropped_facts" not in (req.json_schema or {}).get("schema", {}).get("properties", {})
+            prompt_json, _ = json.JSONDecoder().raw_decode(req.user_prompt.split("\n目录：", 1)[1])
+            d1_units = [u for u in prompt_json["voices"]["D1"]["units"] if u["sec"] <= 4.0]
+            bad_resp = {
+                "voices": [{"id": "D1", "units": [d1_units[0]["unit"]]}],
+                "facts": [{"id": "f01", "units": ["D1:1"]}],
+                "dropped_facts": [{"id": "f01", "reason": "为了塞进时长"}],
+            }
+            return TextGenerationResult(success=True, text=json.dumps(bad_resp, ensure_ascii=False))
+
+    res = lw.generate_lightweight_outline_result(NOVEL, service=_DroppingSvc())
+    assert res["executable"] is False
+    assert "allocation_dropped_facts_forbidden" in (res.get("acceptance") or {}).get("codes", [])
+
+
 def test_correct_plan_sources_and_rebind_plan_carriers():
     ans = {
         "characters": ["甲", "乙"], "emotional_arc": "焦急", "climax": "夜渡",

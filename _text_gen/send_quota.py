@@ -83,14 +83,31 @@ def _replace(tmp: Path, path: Path) -> None:
 
 
 def reserve(*, provider: str, endpoint: str, call_id: str = "") -> "int | None":
-    """实际发送前占用一次额度；返回本次序号（1 起）。未启用额度时返回 ``None``."""
+    """实际发送前占用一次额度；返回本次序号（1 起）。未启用额度时返回 ``None``.
+
+    与 `chapter_quota` 联动：
+    - 仅设 `TEXT_SEND_QUOTA_FILE`：沿用批次文件逐 POST 扣减；
+    - 仅设 `STEP01_CHAPTER_QUOTA_FILE`：直接对章节账本原子扣减 1 次（含内部重试）；
+    - 两者同设：校验批次文件携带在章节账本内有效的 `reservation_id` 后只扣批次文件
+      （避免外层已预占时重复扣减）；缺少有效预占 ID 时 fail-closed 拒发。
+    """
+    from _text_gen import chapter_quota as _cq
+
     raw = os.environ.get(ENV_FILE, "").strip()
-    if not raw:
+    ch_raw = os.environ.get(_cq.ENV_FILE, "").strip()
+    if not raw and not ch_raw:
         return None
+    if not raw and ch_raw:
+        return _cq.consume_one(ch_raw, provider=provider, endpoint=endpoint, call_id=call_id)
     path = Path(raw)
     lock = _lock(path)
     try:
         data = _read(path)
+        if ch_raw:
+            rid = str(data.get("reservation_id") or "").strip()
+            if not _cq.has_reservation(ch_raw, rid):
+                raise SendQuotaUnavailable(
+                    "批次额度文件 %s 缺少有效的章节预占 reservation_id（防绕过拒绝发送）" % path)
         if data["used"] >= data["max"]:
             raise SendQuotaExhausted("发送额度已用完（%d/%d）：本次 POST 不发出"
                                      % (data["used"], data["max"]))

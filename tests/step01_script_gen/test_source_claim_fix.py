@@ -61,6 +61,7 @@ def test_split_into_two_verbatim_children_keeps_position_and_lineage():
     assert view["plan_basis"]["source_preservation"]["verdict"] == "supported"
     prompt = cv.build_verification_prompt(view, novel_text=NOVEL)
     assert "来源修正父主张" in prompt and "parent_claim" in prompt
+    assert "source_preservation" in prompt and '["f01"]' in prompt
     assert view["plan_basis"]["source_splits"][0]["child_uids"] == ["f01", "f02"]
     assert cv._request_admission(view) == []
     # 待核候选即使没有保留结论也可以进入核验（结论由独立核验给）

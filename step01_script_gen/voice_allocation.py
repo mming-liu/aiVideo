@@ -37,6 +37,12 @@ SCHEMA = {"name": "lightweight_voice_allocation", "strict": True, "schema": {
             "type": "object", "additionalProperties": False, "required": ["id", "reason"],
             "properties": {"id": {"type": "string"}, "reason": {"type": "string"}}}}}}}
 
+#: 自动修订主链用 schema：不允许模型通过 dropped_facts 擅自删事实。
+SCHEMA_NO_DROP = {"name": "lightweight_voice_allocation", "strict": True, "schema": {
+    "type": "object", "additionalProperties": False, "required": ["voices", "facts"],
+    "properties": {k: v for k, v in SCHEMA["schema"]["properties"].items()
+                   if k != "dropped_facts"}}}
+
 
 def _problem(code, ref, reason):
     return {"code": code, "ref": str(ref or ""), "reason": str(reason or "")}
@@ -49,7 +55,8 @@ def _evidence_list(fact) -> list:
     return [str(x) for x in (ev or []) if str(x)]
 
 
-def build_voice_choices(answer, novel_text, *, limits=None) -> dict:
+def build_voice_choices(answer, novel_text, *, limits=None,
+                        allow_drop_facts: bool = True) -> dict:
     """冻结回答 → 候选目录（声音、事实、受限动作）；不调用模型、不写文件."""
     limits = dict(limits or {})
     rows = vr.voices(answer)
@@ -81,10 +88,13 @@ def build_voice_choices(answer, novel_text, *, limits=None) -> dict:
                       "evidence": _evidence_list(f), "carrier": str(f.get("carrier") or ""),
                       "voices": list(dict.fromkeys(voices))})
     return {"protocol": PROTOCOL, "voices": catalog, "facts": facts, "limits": limits,
-            "prompt": prompt_text(catalog, facts, limits)}
+            "allow_drop_facts": bool(allow_drop_facts),
+            "prompt": prompt_text(catalog, facts, limits, allow_drop_facts=allow_drop_facts)}
 
 
-def prompt_text(catalog, facts, limits) -> str:
+def prompt_text(catalog, facts, limits, *, allow_drop_facts: bool = True) -> str:
+    drop_rule = ("" if allow_drop_facts else
+                 "本入口冻结全部必保留事实：不得删除任何事实（禁止返回 dropped_facts）。")
     return ("只提交一次受限声音分配，不要重抄整稿。可用动作：1) 把一条声音换成候选目录里的"
             "一条（units 只填一项）；2) 拆成多条有序单位（units 填多项，同一说话人、每条都在"
             "该声音的候选目录里，顺序即播出顺序）；3) 用 facts 指定某条事实由哪些单位共同承载"
@@ -92,10 +102,10 @@ def prompt_text(catalog, facts, limits) -> str:
             "约束：不得新增声音种类/说话人；不得把不同角色的发言拼接；每条承载正文必须逐字"
             "来自该声音自己的正文（unit.source=own）或它绑定事实的证据（unit.source=evidence）。"
             "**own 的 in_evidence=false 不是越界**——它本来就是这条声音的原文，可直接替换/拆分；"
-            "完整主张由后续内容核验判定，不要因此判不可修。条数上限 %s、汉字上限 %s、单条 %s 秒。"
+            "完整主张由后续内容核验判定，不要因此判不可修。%s条数上限 %s、汉字上限 %s、单条 %s 秒。"
             "当前稿已有 %s 条声音，本协议最多允许 %s 条；拆分前先算剩余条数。"
             "超出预算或确实无法保住内容时，写进 unfixable 并说明缺哪一层。\n目录："
-            % (limits.get("max_lines", 10), limits.get("max_han", 280),
+            % (drop_rule, limits.get("max_lines", 10), limits.get("max_han", 280),
                limits.get("single_shot_sec", 12), limits.get("current_lines", "?"),
                limits.get("max_lines", 10))
             + json.dumps({"voices": catalog, "facts": facts}, ensure_ascii=False))
@@ -144,7 +154,8 @@ def _unit_text(catalog, voice_id, unit_ref):
     return units[idx]["text"] if 0 <= idx < len(units) else None
 
 
-def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
+def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None,
+                           allow_drop_facts: bool = True):
     """应用一次 v2 分配；返回 `(candidate_answer, problems)`，永不修改基线.
 
     位置由**基线稳定坐标**（event, beat）一次性计算，不依赖模型数组的排列顺序；
@@ -270,6 +281,9 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
     drop_rows = response.get("dropped_facts") or []
     if not isinstance(drop_rows, list):
         return None, [_problem("allocation_dropped_facts_invalid", "", "dropped_facts 必须是数组")]
+    if drop_rows and not allow_drop_facts:
+        return None, [_problem("allocation_dropped_facts_forbidden", "",
+                               "自动修订入口禁止未经授权删除必保留事实")]
     drop_ids = []
     for row in drop_rows:
         if (not isinstance(row, dict) or set(row) != {"id", "reason"}
@@ -316,5 +330,5 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
     return result, []
 
 
-__all__ = ["ENV", "PROTOCOL", "SCHEMA", "build_voice_choices", "prompt_text",
-           "apply_voice_allocation"]
+__all__ = ["ENV", "PROTOCOL", "SCHEMA", "SCHEMA_NO_DROP", "build_voice_choices",
+           "prompt_text", "apply_voice_allocation"]
