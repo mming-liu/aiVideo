@@ -1,11 +1,11 @@
 # S19–S25 第二章完整重分配与分镜收口：执行记录（2026-11-25）
 
 **状态：S19–S24 全部完成（隔离运行，正式产物未覆盖）；S25 交付收口。**
-本轮完成了「S23 独立内容核验（12/12 + 10/10 全部 supported）→ S24 真实分镜生成与时长/关键帧/契约收口（11 镜 / 88.5s）」，未覆盖正式产物，未自动正式采纳、合并或推送。
+本轮完成了「S23 经 `VerificationController` 独立内容核验（12/12 + 10/10 + 父保留 `supported`，`verification_problems == []`）→ S24 真实分镜生成与时长/关键帧/契约收口（12 镜 / 88.625s）」，未覆盖正式产物，未自动正式采纳。
 
 | 层级 | 交付 | 状态 |
 |---|---|---|
-| 代码落盘 | `compile_reallocated_plan`、`speaker_attribution_problem`、`test_compile_reallocated_plan`（8 passed） | **完成** |
+| 代码落盘 | `compile_reallocated_plan`、`speaker_attribution_problem`、v2 禁删事实守卫、逐 POST 章节额度闭环 | **完成** |
 | 离线贯通 | 输入清单、义务表、候选、变更清单、实际入口请求与四类拒收证据 | **完成** |
 | 真实收益 | S23 经 `VerificationController` 独立核验（12/12 + 10/10 + 父保留 `supported`，`verification_problems == []`）；S24 真实分镜（17 镜 116s → 收口 **12 镜 / 88.625s**） | **完成** |
 | 剩余边界 | 未正式采纳、`char_layout.surface`/景别与运镜提示项、来源修正/重绑为显式入口 | 见 §八 |
@@ -15,8 +15,8 @@
 1. **工程可行**：第二章 12 条事实在**10 条声音／66.70 秒／20 节拍**下通过统一计划验收（`plan_acceptance_problems == []`）、预算评估（`feasible`，下界 66.70s ∈ 60–90s）与生成前检查（`check_plan_before_generation` 返回 `feasible`）。
 2. **入口可达**：候选经投影回读（固定点）后，由**真实 `gen_spy_script` 入口**构造出 44558 字符的分镜请求；请求含全部 10 条声音正文、12 条事实、承载声明，末尾声音时长块使用本候选的最新文本与估时（全章 66.70s）。
 3. **拒收有效**：错说话人、缺义务、错引用、旧身份四类非法候选全部在分镜请求之前被拦下；拒收路径 0 请求、0 正式写盘、0 基线覆盖。
-4. **内容完整尚未被独立核验**：本轮只证明“义务表设计上对 12 条事实逐条有明确载体”，未做模型核验；这不算“内容通过”。
-5. **“全章不可行”不成立**：基线 20 条／355.85s 不是最短表达；本候选以 66.70s 通过工程验收，说明原计划的预算失败是**选材与承载分配**问题，不是章节长度问题。
+4. **内容完整已通过独立核验**：S23 经 `VerificationController` 对全部 12 条事实、12 条来源支持、10 条声音及拆分父主张 `f06` 核心保留给出 **`supported`**，`verification_problems == []`。
+5. **“全章不可行”不成立**：基线 20 条／355.85s 不是最短表达；本候选以 66.70s 通过工程验收并收口为 12 镜 / 88.625s 分镜，说明原计划的预算失败是**选材与承载分配**问题，不是章节长度问题。
 
 ## 二、S19 冻结
 
@@ -24,14 +24,14 @@
 
 | 项 | 读数 |
 |---|---|
-| 代码基线 | `9ffecbe`（`git rev-parse HEAD`）；工作树另有并行改动，见 §九 |
+| 代码基线 | 起点 `9ffecbe`，本轮收口提交 `019ccbc`（及本次最终修订） |
 | 第二章计划 | `.tmp/s14b/runs/s12_ch2/rebound_plan.json`，SHA-256 `fb8ac9f7302c48240cb5b740bdbf58f6309ebced6157d156166cc1fec030adec`（与用户给定一致） |
 | 第二章原文 | `extract_section(novel, 2)`，4516 字，SHA-256 `750dbcca39a0cac5114c78d1e5ca681dc454f1274fadc1563764c763bd8d403e`（与计划 `novel_digest` 一致） |
 | 第一章回归 | `.tmp/s14b/runs/s18_final/storyboard.json`（14 镜／84.5s 冻结候选，只读对照） |
 | 有效配置 | `agent_plan` / `deepseek-v4.1-flash` / `https://opencode.ai/inference/go/openai/v1`，`is_subscription_endpoint=True`；`AUDIT_TEXT_PROVIDER`／`REPAIR_TEXT_PROVIDER` 同为 `agent_plan`、模型同为 `deepseek-v4.1-flash`；`AUDIT_TIMEOUT_SEC=600` |
 | 生效预算 | 正片 60–90s；单镜上限 **12.0s**（模型能力与项目 15s 取严）；声音默认 10 条／280 汉字／单条 42 汉字；引导目标 80s |
-| 保护快照 | **48 项**（原 45 项 + 事故日志 `chapter_001/step01.log` + 两章账本），本轮前后 SHA-256 **0 缺失、0 变化** |
-| 账本 | ch1 `24/20`（`over_cap=4`，既有越额）、ch2 `6/20`；本轮 **0 POST** |
+| 保护快照 | 45 项有基线文件 SHA-256 **0 缺失、0 变化**；`chapter_001/step01.log`（无 S19 前独立基线，与 `20:51` 快照 `3ba2b384…` 一致）及 `quota_ch1.json` 未变动，`quota_ch2.json` 按授权更新至 `16/50` |
+| 账本 | ch1 `24/20`（`over_cap=4`，未触碰）；ch2 由 `6/20` 更新至 `16/50`（见 §十） |
 | 运行边界 | 导入业务模块前设置隔离 `OUTPUT_BASE=.tmp/s19_ch2/output`、`STEP01_LOG_PATH=os.devnull`，并把 `socket.connect/connect_ex/create_connection` 替换为抛错 |
 
 冻结口令是“身份不符即失败”：计划摘要、原文摘要、配置端点任何一项不匹配都不会继续（`common.assert_frozen()`）。
@@ -140,8 +140,9 @@
      - 严格落入 **60–90s**；单镜 ≤ 12.0s 且均 ≥ `shot_content_floor`（≥ 3.5s）；
      - 消除合镜空间/机位矛盾：镜头 8（`B12–B14`，4.5s）显式标为 `南阳河畔酒家门口（分屏并置后院马车）` + `推拉切镜`；镜头 9（`B15–B17`，4.0s）以 `摇镜` 连续从门口转入室内并同步 `刘旭` 离场关键帧；**镜头 10（`B18`，3.5s）拆回独立户外镜头**（`南阳河畔小径` + `跟拍`），杜绝室内/户外瞬移；
      - 同步更新全部 `motion_desc` 时段、`keyframes`、`frame_layouts`（`ff`/`lf`/`kfs` 等长对齐）、`narration_segment`、`subtitle` 与 `plan_refs`，补齐原 shot8/shot17 缺失关键帧并修正 shot11（原 shot10）双省略号；
+     - 同步更新镜头 9 的道具与状态（`kf 2` 与 `lf` 中 `刘旭` 的 `props=[]`、`states=["空手", ...]`、`support` 改为门槛地面），消除与“放下刀”描述的冲突；
      - 终验：**`check_event_contract == (True, [], False)`**、**`kf_time_window_warns == []`**、**`beats_complete == True`（1–20）**、**`lines_complete == True`（1–10）**、**`missing_voices == []`**、**`cap_bad == []`**、**`floor_bad == []`**、`kf时序一致性 == 0` 告警、`[OK] 内容问题汇总: 未发现幻觉/语义风险/连续空镜缺陷`。
-3. **48 项保护核对**：`s19_freeze.py` 复核 `missing=[]`、`changed=[]`。
+3. **保护核对**：`s19_freeze.py` 复核 45 项有基线文件 `missing=[]`、`changed=[]`；`chapter_001/step01.log`、`quota_ch1.json`、`quota_ch2.json` 在基线清单内为 `expected=None`（`no_pre_task_baseline`），其中 `step01.log` 当前摘要与 S19 启动时（`20:51`）读数 `3ba2b384…` 一致，未做任务起始前独立基线对比。
 
 ## 七、S25 承诺 → 证据映射
 
@@ -172,9 +173,9 @@
 - `step01_script_gen/content_verify.py`：修复 `build_verification_prompt` 对仅含 `source_splits` 计划遗漏 `source_preservation` 独立核验指令的缺口；
 - `_text_gen/chapter_quota.py`、`_text_gen/send_quota.py`、`_text_gen/service.py`：实现 `STEP01_READ_ONLY` 硬阻断、直接调用逐 POST 原子 `consume_one`（含内部重试），以及 `reserve_batch` + `reservation_id` 防绕过与防重复扣减；
 - 测试：`tests/step01_script_gen/test_compile_reallocated_plan.py`、`tests/step01_script_gen/test_lightweight_wiring.py`、`tests/step01_script_gen/test_source_claim_fix.py`、`tests/_text_gen/test_chapter_quota.py`；
-- 干净检出基线对账（独立 worktree 同环境运行 `tests/step01_script_gen tests/shared`）：`ead99a7` 56 failed / 2886 passed vs `9ffecbe` 55 failed / 2915 passed，**新增失败 = 0**。
+- 干净检出基线对账（独立 worktree 同环境运行 `tests/step01_script_gen tests/shared`，逐用例差异清单见 `.tmp/s19_ch2/clean_checkout_diff.json`，原始输出见 `.tmp/s19_ch2/ead99a7_pytest.txt` 与 `.tmp/s19_ch2/019ccbc_pytest.txt`）：`ead99a7`（56 failed, 2886 passed, 18 skipped, 1 xfailed）vs `019ccbc`（55 failed, 2926 passed, 18 skipped, 1 xfailed），**`new_failures == []`**、**`new_errors == []`**、修复 1 条（`tests/shared/test_execution_contract.py::test_fixture_manifest_digests_match_file_bytes`）并净增 40 条通过。
 
-既有 Step02a 脏文件（`step02a_frame_gen/verify_acceptance.py`、`tests/step02a_frame_gen/test_verify_only.py`）与其余 46 项保护文件经 `s19_freeze.py` 校验 `missing=[]`、`changed=[]`。
+既有 Step02a 脏文件（`step02a_frame_gen/verify_acceptance.py`、`tests/step02a_frame_gen/test_verify_only.py`）与其余 43 项有基线保护文件经 `s19_freeze.py` 校验 `missing=[]`、`changed=[]`；`chapter_001/step01.log` 等 3 项无基线文件单列于 `unverified_no_baseline`（见 §二）。
 
 ## 十、账本
 
@@ -183,4 +184,4 @@
 | ch1 | 24／20（`over_cap=4`，既有越额，未再调用） | 0 | 0 | 0 |
 | ch2 | 16／50（包月订阅，用户确认放宽） | 0 | 9（代理故障 7 + 初次缺章 1 + 控制器核验 1） | 1 |
 
-S23 经控制器核验与 S24 真实分镜各消耗 1 POST（均走 `agent_plan` OpenCode 订阅端点），48 项保护文件零改动。
+S23 经控制器核验与 S24 真实分镜各消耗 1 POST（均走 `agent_plan` OpenCode 订阅端点），45 项有基线保护文件零改动。
