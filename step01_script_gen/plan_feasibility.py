@@ -3902,52 +3902,59 @@ def plan_contract_records(plan, *, novel_text: str = "",
     # S13（2026-11-24）：轻量计划的多承载事实走**结构**校验；单承载事实仍走下面的完整
     # 旧路径（语义交集判据不变）。多承载只在隔离实验里出现，v1 缓存不会被它命中。
     if _lightweight and any("、" in fact_carrier(f) for f in facts):
-        # 多承载不能绕过已有身份/反向引用：先用**首承载**跑完整旧路径，再补多出来的承载；
-        # 旁白承载的 `fact_refs` 逐条核对（旧路径只查第一条）。
+        # 多承载不能绕过已有身份/反向引用；在**完整载体集合**上核对双向引用，
+        # 不能把多承载事实逐个伪装成单承载计划（会人为拆散 narration refs）。
         _multi = _lightweight_multi_carrier_records(
             facts, beats, lines, len(plan_narration_entries(plan)))
-        _reduced = []
-        for _f in facts:
-            _d = fact_carrier(_f)
-            if "、" in _d:
-                _f = _f.replace("｜承载：" + _d, "｜承载：" + _d.split("、")[0])
-            _reduced.append(_f)
-        _legacy = plan_contract_records(dict(plan, required_facts=_reduced),
-                                        novel_text=novel_text,
-                                        require_verification=require_verification)
         _narrs = plan_narration_entries(plan)
+        _first_narr = {}
+        _all_narr = {}
+        _reduced = []
         for _i, _f in enumerate(facts, 1):
             _parts = [x for x in fact_carrier(_f).split("、") if x.strip()]
-            for _p in _parts[1:]:
+            for _p in _parts:
                 _parsed = parse_carrier_decl(_p)
                 if _parsed and _parsed[1] == "旁白" and 1 <= _parsed[2] <= len(_narrs):
-                    _refs = _narrs[_parsed[2] - 1].get("fact_refs") or []
-                    if _i not in _refs:
-                        _multi.append(_problem_record(
-                            "carrier_narration_fact_ref_missing", "fact", _i,
-                            "required_facts[%d].承载" % (_i - 1),
-                            "多承载事实 F%d 的旁白承载 N%d 未在 fact_refs 反向登记"
-                            % (_i, _parsed[2]),
-                            "计划契约：旁白承载必须反向登记事实编号"))
-                # 其余承载也要过**同一套**旧语义/关系检查：把目标承载替换成该条，
-                # 其他多承载退回首项，再跑一次完整旧路径。
-                if len(_parts) > 1:
-                    _patched = []
-                    for _j, _g in enumerate(facts, 1):
-                        _gd = fact_carrier(_g)
-                        if "、" in _gd:
-                            _use = _p if _j == _i else _gd.split("、")[0]
-                            _g = _g.replace("｜承载：" + _gd, "｜承载：" + _use)
-                        _patched.append(_g)
-                    _multi.extend(plan_contract_records(
-                        dict(plan, required_facts=_patched), novel_text=novel_text,
-                        require_verification=require_verification))
+                    _all_narr.setdefault(_i, set()).add(_parsed[2])
+            _first = _parts[0] if _parts else ""
+            _parsed = parse_carrier_decl(_first)
+            if _parsed and _parsed[1] == "旁白":
+                _first_narr[_i] = _parsed[2]
+            if "、" in fact_carrier(_f):
+                _f = _f.replace("｜承载：" + fact_carrier(_f), "｜承载：" + _first)
+            _reduced.append(_f)
+        # 缩成首承载时，narration refs 也要同步缩成首承载，否则合法多承载会被误报。
+        _patched_narr = []
+        for _k, _line in enumerate([dict(x) for x in _narrs], 1):
+            _line["fact_refs"] = [_i for _i, _k2 in _first_narr.items() if _k2 == _k]
+            _patched_narr.append(_line)
+        _legacy = plan_contract_records(
+            dict(plan, required_facts=_reduced, narration_lines=_patched_narr),
+            novel_text=novel_text, require_verification=require_verification)
+        # 完整集合上的双向引用：每个旁白承载都要登记该事实；每条 refs 都要有承载。
+        for _i, _ks in _all_narr.items():
+            for _k in sorted(_ks):
+                _refs = _narrs[_k - 1].get("fact_refs") or []
+                if _i not in _refs:
+                    _multi.append(_problem_record(
+                        "carrier_narration_fact_ref_missing", "fact", _i,
+                        "required_facts[%d].承载" % (_i - 1),
+                        "多承载事实 F%d 的旁白承载 N%d 未在 fact_refs 反向登记"
+                        % (_i, _k), "计划契约：旁白承载必须反向登记事实编号"))
+        for _k, _line in enumerate(_narrs, 1):
+            for _ref in (_line.get("fact_refs") or []):
+                if _k not in _all_narr.get(int(_ref), set()):
+                    _multi.append(_problem_record(
+                        "carrier_narration_fact_mismatch", "fact", int(_ref),
+                        "required_facts[%d].承载" % (int(_ref) - 1),
+                        "旁白 N%d 的 fact_refs 登记了没有该旁白承载的事实 F%s"
+                        % (_k, _ref), "计划契约：旁白前后向引用必须互指"))
         _seen, _out = set(), []
         for _r in _multi + _legacy:
-            _k = (_r.get("code"), _r.get("kind"), _r.get("index"), _r.get("path"))
-            if _k in _seen:
+            _key = (_r.get("code"), _r.get("kind"), _r.get("index"), _r.get("path"))
+            if _key in _seen:
                 continue
-            _seen.add(_k)
+            _seen.add(_key)
             _out.append(_r)
         return _out
     problems: list = list(_voice_order)

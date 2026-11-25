@@ -351,6 +351,8 @@ def build_view(answer) -> dict:
     }
     if answer.get("source_splits"):
         _basis["source_splits"] = copy.deepcopy(answer["source_splits"])
+        if answer.get("source_preservation"):
+            _basis["source_preservation"] = copy.deepcopy(answer["source_preservation"])
     _view = {"schema": pc.PRESENTATION_SCHEMA, "mode": pc.MODE_LEGACY,
              "event_binding": "declared", "frozen_facts": _frozen, "frozen_events": _events,
              "beats": _beats, "dialogue_units": _dlg, "narration_units": _nar,

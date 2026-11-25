@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""S12 复合来源修正：逐字证据、拆分谱系、拒收对照."""
+"""S12 复合来源修正：逐字证据、拆分谱系、父保留结论与拒收对照."""
 from __future__ import annotations
 
 from step01_script_gen import content_verify as cv
@@ -9,6 +9,12 @@ from step01_script_gen.source_claim_fix import apply_source_correction
 NOVEL = ("门外来了一个人。\n"
          "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。\n"
          "这人虽然寒酸，可是五官相貌却和少爷一般无二。\n")
+GOOD_CHILDREN = [
+    {"claim": "门外来了一个叫化子装扮的人，手提一串鱼。",
+     "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。"},
+    {"claim": "这人的五官相貌与少爷一般无二。",
+     "evidence": "这人虽然寒酸，可是五官相貌却和少爷一般无二。"},
+]
 
 
 def _answer():
@@ -21,22 +27,24 @@ def _answer():
                  "voice_kind": "dialogue", "voice_text": "他一身叫化子装扮。",
                  "speaker": "某人"}]}],
             "facts": [
-        {"claim": "门外来了一个叫化子装扮的人，手提一串鱼，五官与少爷一般无二。",
-         "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。",
-         "event": 1, "beat": 2, "carrier": "voice"},
-        {"claim": "另有一条事实。", "evidence": "门外来了一个人。",
-         "event": 1, "beat": 1, "carrier": "visual"},
-    ]}
+                {"claim": "门外来了一个叫化子装扮的人，手提一串鱼，五官与少爷一般无二。",
+                 "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。",
+                 "event": 1, "beat": 2, "carrier": "voice"},
+                {"claim": "另有一条事实。", "evidence": "门外来了一个人。",
+                 "event": 1, "beat": 1, "carrier": "visual"},
+            ]}
+
+
+def _resp(children, *, verdict="supported", targets=("f01",), spans=None):
+    return {"splits": [{"id": targets[0], "children": children}],
+            "source_preservation": {
+                "target_uids": list(targets), "verdict": verdict,
+                "evidence_spans": spans or ["他一身叫化子装扮"],
+                "reason": "父主张核心仍由子项共同表达"}}
 
 
 def test_split_into_two_verbatim_children_keeps_position_and_lineage():
-    response = {"splits": [{"id": "f01", "children": [
-        {"claim": "门外来了一个叫化子装扮的人，手提一串鱼。",
-         "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。"},
-        {"claim": "这人的五官相貌与少爷一般无二。",
-         "evidence": "这人虽然寒酸，可是五官相貌却和少爷一般无二。"},
-    ]}]}
-    out, problems = apply_source_correction(_answer(), response, NOVEL)
+    out, problems = apply_source_correction(_answer(), _resp(GOOD_CHILDREN), NOVEL)
     assert problems == [] and out is not None
     assert [f["claim"] for f in out["facts"]][:2] == [
         "门外来了一个叫化子装扮的人，手提一串鱼。",
@@ -46,48 +54,65 @@ def test_split_into_two_verbatim_children_keeps_position_and_lineage():
     assert out["facts"][2]["claim"] == "另有一条事实。"
     assert out["source_splits"][0]["parent_claim"].startswith("门外来了一个")
     assert len(out["source_splits"][0]["children"]) == 2
+    assert out["source_preservation"]["verdict"] == "supported"
     view = lw.build_view(out)
     assert view["plan_basis"]["source_splits"][0]["parent_claim"].startswith("门外来了一个")
+    assert view["plan_basis"]["source_preservation"]["verdict"] == "supported"
     prompt = cv.build_verification_prompt(view, novel_text=NOVEL)
     assert "来源修正父主张" in prompt and "parent_claim" in prompt
+    assert cv._request_admission(view) == []
+
+
+def test_missing_preservation_is_rejected():
+    response = {"splits": [{"id": "f01", "children": GOOD_CHILDREN}]}
+    out, problems = apply_source_correction(_answer(), response, NOVEL)
+    assert out is None and [p["code"] for p in problems] == ["source_preservation_missing"]
+
+
+def test_negative_preservation_is_rejected():
+    out, problems = apply_source_correction(
+        _answer(), _resp(GOOD_CHILDREN, verdict="partial"), NOVEL)
+    assert out is None and [p["code"] for p in problems] == ["source_preservation_negative"]
+
+
+def test_preservation_identity_and_evidence_are_enforced():
+    bad_id = _resp(GOOD_CHILDREN)
+    bad_id["source_preservation"]["target_uids"] = ["f02"]
+    _out, problems = apply_source_correction(_answer(), bad_id, NOVEL)
+    assert [p["code"] for p in problems] == ["source_preservation_identity"]
+    bad_ev = _resp(GOOD_CHILDREN, spans=["原文里没有的一句"])
+    _out2, problems2 = apply_source_correction(_answer(), bad_ev, NOVEL)
+    assert [p["code"] for p in problems2] == ["source_preservation_evidence"]
 
 
 def test_evidence_must_be_verbatim():
-    response = {"splits": [{"id": "f01", "children": [
-        {"claim": "甲", "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。"},
-        {"claim": "乙", "evidence": "这人五官和少爷一模一样。"},
-    ]}]}
-    out, problems = apply_source_correction(_answer(), response, NOVEL)
+    children = [GOOD_CHILDREN[0], {"claim": "乙", "evidence": "这人五官和少爷一模一样。"}]
+    out, problems = apply_source_correction(_answer(), _resp(children), NOVEL)
     assert out is None and [p["code"] for p in problems] == ["source_evidence_not_verbatim"]
 
 
-def test_unknown_fact_and_bad_shape_are_rejected():
-    out, problems = apply_source_correction(_answer(), {"splits": [
-        {"id": "f09", "children": [
-            {"claim": "甲", "evidence": "门外来了一个人。"},
-            {"claim": "乙", "evidence": "门外来了一个人。"}]}]}, NOVEL)
-    assert out is None and [p["code"] for p in problems] == ["source_fact_unknown"]
-    out2, problems2 = apply_source_correction(_answer(), {"splits": []}, NOVEL)
-    assert out2 is not None and problems2 == []
-
-
-def test_children_must_cover_the_parent_core():
-    response = {"splits": [{"id": "f01", "children": [
-        {"claim": "有人来。", "evidence": "门外来了一个人。"},
-        {"claim": "鱼尾摆动。", "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。"},
-    ]}]}
+def test_unknown_fact_is_rejected():
+    response = {"splits": [{"id": "f09", "children": GOOD_CHILDREN}],
+                "source_preservation": {"target_uids": ["f09"], "verdict": "supported",
+                                        "evidence_spans": ["他一身叫化子装扮"],
+                                        "reason": "核心保留"}}
     out, problems = apply_source_correction(_answer(), response, NOVEL)
-    assert out is None
-    assert [p["code"] for p in problems] == ["source_parent_coverage_gap"]
+    assert out is None and [p["code"] for p in problems] == ["source_fact_unknown"]
+
+
+def test_character_coverage_is_diagnostic_not_a_hard_gate():
+    # 子主张删掉“装扮/提鱼/五官”，但长证据仍在：字符覆盖高，不得作为硬门；
+    # 保留结论若声称 supported，由内容核验（父上下文）判，而不是字符阈值。
+    children = [{"claim": "有人来。", "evidence": "门外来了一个人。"},
+                {"claim": "鱼尾摆动。",
+                 "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。"}]
+    out, problems = apply_source_correction(_answer(), _resp(children), NOVEL)
+    assert problems == [] and out is not None
+    assert all(f.get("_diagnostic_parent_claim_coverage", 1) < 0.8
+               for f in out["facts"][:2])
 
 
 def test_only_authorized_parents_can_be_changed():
-    response = {"splits": [{"id": "f01", "children": [
-        {"claim": "门外来了一个叫化子装扮的人，手提一串鱼。",
-         "evidence": "他一身叫化子装扮，手里提着一串鱼，鱼尾偶尔摆动几下。"},
-        {"claim": "这人的五官相貌与少爷一般无二。",
-         "evidence": "这人虽然寒酸，可是五官相貌却和少爷一般无二。"},
-    ]}]}
-    out, problems = apply_source_correction(_answer(), response, NOVEL,
-                                            allowed_parents={"f02"})
+    out, problems = apply_source_correction(
+        _answer(), _resp(GOOD_CHILDREN), NOVEL, allowed_parents={"f02"})
     assert out is None and [p["code"] for p in problems] == ["source_fact_not_authorized"]

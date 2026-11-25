@@ -236,6 +236,35 @@ def _request_admission(view) -> list:
     """
     from shared.presentation_contract import view_admission_problems
     _p = list(view_admission_problems(view))
+    # S12：带来源拆分的计划必须携带**独立、同身份、非负面**的核心保留结论；
+    # 缺失/负面不得进入核验（否则新子事实 supported 会被误读成父主张完整）。
+    _basis = view.get("plan_basis") or {}
+    _splits = _basis.get("source_splits")
+    if isinstance(_splits, list) and _splits:
+        _sp = _basis.get("source_preservation")
+        _targets = [str(x.get("parent")) for x in _splits]
+        if not isinstance(_sp, dict) or set(_sp) != {
+                "target_uids", "verdict", "evidence_spans", "reason"}:
+            _p.append({"code": "verify_source_preservation_record", "kind": "verification",
+                       "ref": "", "uid": "", "path": "plan_basis.source_preservation",
+                       "reason": "来源修正缺少完整、独立的父主张保留结论",
+                       "fix": "补 source_preservation"})
+        elif list(_sp.get("target_uids") or []) != _targets:
+            _p.append({"code": "verify_source_preservation_identity", "kind": "verification",
+                       "ref": "", "uid": "", "path": "plan_basis.source_preservation",
+                       "reason": "保留结论身份与拆分父事实不同序",
+                       "fix": "按拆分父事实同序返回 target_uids"})
+        elif _sp.get("verdict") != "supported":
+            _p.append({"code": "source_preservation_failed", "kind": "verification",
+                       "ref": "", "uid": "", "path": "plan_basis.source_preservation",
+                       "reason": "父主张保留结论为 %r" % _sp.get("verdict"),
+                       "fix": "先修正到 supported 再核验"})
+        elif not [x for x in (_sp.get("evidence_spans") or []) if str(x).strip()] \
+                or not str(_sp.get("reason") or "").strip():
+            _p.append({"code": "verify_source_preservation_evidence", "kind": "verification",
+                       "ref": "", "uid": "", "path": "plan_basis.source_preservation",
+                       "reason": "保留结论缺证据或原因",
+                       "fix": "补逐字证据与原因"})
     # **冻结主张为空 ⇒ 派生不出待核义务**（复核 2026-10-09 P1：待核集合来自冻结主张）。
     # 这份输入没有可核的支座：事后既判不出"哪一部分没被展示"，也没法核对集合。
     # 在这里挡住 ⇒ 零模型调用，控制器记 `FAIL_INPUT`（与"内容不支持"分账）。

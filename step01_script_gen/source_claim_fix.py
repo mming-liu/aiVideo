@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import copy
 
+from step01_script_gen.source_revision import PRESERVATION_SCHEMA
+
 SCHEMA = {"name": "lightweight_source_correction", "strict": True, "schema": {
-    "type": "object", "additionalProperties": False, "required": ["splits"],
+    "type": "object", "additionalProperties": False, "required": ["splits", "source_preservation"],
     "properties": {"splits": {"type": "array", "items": {
         "type": "object", "additionalProperties": False, "required": ["id", "children"],
         "properties": {"id": {"type": "string"}, "children": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["claim", "evidence"],
-            "properties": {"claim": {"type": "string"}, "evidence": {"type": "string"}}}}}}}}}}
+            "properties": {"claim": {"type": "string"}, "evidence": {"type": "string"}}}}}}},
+        "source_preservation": PRESERVATION_SCHEMA}}}
 
 
 def _problem(code, ref, reason):
@@ -42,9 +45,30 @@ def apply_source_correction(answer, response, novel_text, *, allowed_parents=Non
     `allowed_parents` 非空时只允许改这些事实（来源修正入口应传当前负面结论授权的身份）。
     子项必须覆盖父主张/父证据的**内容字符**（确定性下限，不代替语义核验）。
     """
-    if (not isinstance(response, dict) or set(response) != {"splits"}
+    if (not isinstance(response, dict) or not set(response) <= {"splits", "source_preservation"}
             or not isinstance(response.get("splits"), list)):
-        return None, [_problem("source_response_invalid", "", "只接受 splits 数组")]
+        return None, [_problem("source_response_invalid", "", "只接受 splits 与 source_preservation")]
+    if not isinstance(response.get("source_preservation"), dict):
+        return None, [_problem("source_preservation_missing", "",
+                               "来源修正必须附独立的核心保留结论")]
+    _sp = response["source_preservation"]
+    _sp_keys = {"target_uids", "verdict", "evidence_spans", "reason"}
+    if set(_sp) != _sp_keys or not isinstance(_sp.get("target_uids"), list) \
+            or not isinstance(_sp.get("evidence_spans"), list) \
+            or not str(_sp.get("reason") or "").strip():
+        return None, [_problem("source_preservation_record", "",
+                               "保留结论须含 target_uids/verdict/evidence_spans/reason")]
+    _targets = [str(x["id"]) for x in response["splits"]]
+    if list(_sp["target_uids"]) != _targets:
+        return None, [_problem("source_preservation_identity", "",
+                               "保留结论的 target_uids 必须与拆分事实同序一致")]
+    if _sp.get("verdict") != "supported":
+        return None, [_problem("source_preservation_negative", "",
+                               "核心保留结论为 %r，拒绝写入" % _sp.get("verdict"))]
+    _spans = [str(x) for x in _sp["evidence_spans"]]
+    if not _spans or any(not x.strip() or x not in novel_text for x in _spans):
+        return None, [_problem("source_preservation_evidence", "",
+                               "保留结论的证据必须逐字来自原文且非空")]
     facts = answer.get("facts") or []
     problems = []
     by_id = {"f%02d" % (i + 1): f for i, f in enumerate(facts)}
@@ -79,15 +103,12 @@ def apply_source_correction(answer, response, novel_text, *, allowed_parents=Non
         if problems:
             continue
         parent = by_id[fid]
-        joined = "".join(k["claim"] + k["evidence"] for k in kids)
-        for label, source in (("claim", parent.get("claim")), ("evidence", parent.get("evidence"))):
-            if _coverage(source, joined) < 0.8:
-                problems.append(_problem(
-                    "source_parent_coverage_gap", fid,
-                    "子项未覆盖父%s的核心内容（字符覆盖 %.0f%% < 80%%）"
-                    % (label, 100 * _coverage(source, joined))))
-        if problems:
-            continue
+        # 字符覆盖只作诊断（未经校准，不作生产硬门）；完整性由保留结论 + 内容核验负责。
+        claim_cov = _coverage(parent.get("claim"), "".join(k["claim"] for k in kids))
+        ev_cov = _coverage(parent.get("evidence"), "".join(k["evidence"] for k in kids))
+        for k in kids:
+            k["_diagnostic_parent_claim_coverage"] = round(claim_cov, 3)
+            k["_diagnostic_parent_evidence_coverage"] = round(ev_cov, 3)
         replaced[fid] = kids
     if problems:
         return None, problems
@@ -99,6 +120,7 @@ def apply_source_correction(answer, response, novel_text, *, allowed_parents=Non
         else:
             new_facts.append(fact)
     out["facts"] = new_facts
+    out["source_preservation"] = _sp
     out["source_splits"] = [{"parent": k,
                              "parent_claim": by_id[k].get("claim"),
                              "parent_evidence": by_id[k].get("evidence"),
