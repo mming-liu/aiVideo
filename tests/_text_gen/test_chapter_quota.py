@@ -75,3 +75,46 @@ def test_valid_batch_settles_and_refunds(tmp_path):
     out = q.settle_batch(p, rid, batch)
     data = json.loads(p.read_text(encoding="utf-8"))
     assert out["status"] == "settled" and data["used"] == 17
+
+
+def test_service_blocks_send_under_read_only(monkeypatch):
+    from _text_gen.models import TextGenerationRequest, TextGenerationResult
+    from _text_gen.service import TextGenerationService, _LedgeredService
+    from shared.run_context import ReadOnlyViolation
+
+    called = []
+
+    class _Dummy(TextGenerationService):
+        def generate(self, req):
+            called.append(req)
+            return TextGenerationResult(success=True, text="ok")
+
+    svc = _LedgeredService(_Dummy(), "agent_plan")
+    monkeypatch.setenv("STEP01_READ_ONLY", "1")
+    with pytest.raises(ReadOnlyViolation):
+        svc.generate(TextGenerationRequest(system_prompt="s", user_prompt="u"))
+    assert called == []
+
+
+def test_service_blocks_send_when_chapter_quota_exhausted(tmp_path, monkeypatch):
+    from _text_gen.models import TextGenerationRequest, TextGenerationResult
+    from _text_gen.service import TextGenerationService, _LedgeredService
+
+    called = []
+
+    class _Dummy(TextGenerationService):
+        def generate(self, req):
+            called.append(req)
+            return TextGenerationResult(success=True, text="ok")
+
+    svc = _LedgeredService(_Dummy(), "agent_plan")
+    p = _ledger(tmp_path, used=20, cap=20)
+    monkeypatch.setenv(q.ENV_FILE, str(p))
+    with pytest.raises(q.QuotaError):
+        svc.generate(TextGenerationRequest(system_prompt="s", user_prompt="u"))
+    assert called == []
+
+    p2 = _ledger(tmp_path, used=19, cap=20)
+    monkeypatch.setenv(q.ENV_FILE, str(p2))
+    res = svc.generate(TextGenerationRequest(system_prompt="s", user_prompt="u"))
+    assert res.success is True and len(called) == 1

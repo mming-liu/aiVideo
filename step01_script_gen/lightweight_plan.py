@@ -426,6 +426,236 @@ def build_plan(answer, novel_text: str) -> tuple:
     return _ok, []
 
 
+# ---------------------------------------------------------------------------
+# S21：完整关系视图上的**声音/承载重分配**统一编译入口
+# ---------------------------------------------------------------------------
+#: 编译时**不得改变**的视图块（主张/证据/事件/父子谱系/钩子/卡片/出处修正）。
+#: 只冻结"内容身份"，不冻结编号：编号由投影按候选顺序派生（本入口的职责之一）。
+FROZEN_VIEW_BLOCKS = ("frozen_facts", "frozen_events", "hook_bindings",
+                      "screen_cards", "evidence_updates")
+
+
+def _rel_view(view) -> dict:
+    """视图里**允许重分配**的关系块（用于变更清单，不参与判据）."""
+    out = {}
+    for _k in ("beats", "dialogue_units", "narration_units", "fact_bindings"):
+        _v = (view or {}).get(_k)
+        out[_k] = copy.deepcopy(_v) if isinstance(_v, list) else []
+    return out
+
+
+def _frozen_payload(view) -> dict:
+    return {_k: copy.deepcopy((view or {}).get(_k)) for _k in FROZEN_VIEW_BLOCKS}
+
+
+def _fact_texts(plan) -> list:
+    from step01_script_gen.plan_feasibility import fact_carrier, strip_fact_carrier
+    return [{"claim": strip_fact_carrier(_f), "carrier": fact_carrier(_f)}
+            for _f in ((plan or {}).get("required_facts") or [])]
+
+
+def _voice_rows(plan) -> list:
+    from step01_script_gen.plan_feasibility import voice_entry_costs
+    return [{"id": str(_r.get("id") or ""), "kind": str(_r.get("kind") or ""),
+             "text": str(_r.get("text") or ""), "est_sec": float(_r.get("est_sec") or 0.0),
+             "body_sec": float(_r.get("body_sec") or 0.0),
+             "representable": bool(_r.get("representable"))}
+            for _r in voice_entry_costs(plan or {})]
+
+
+def _voice_changes(before_rows, after_rows) -> dict:
+    """按编号对齐的前后对照：新增 / 删除 / 替换（编号由投影重新派生，故按位置对照）."""
+    before = {r["id"]: r for r in before_rows}
+    after = {r["id"]: r for r in after_rows}
+    added = [after[k] for k in after if k not in before]
+    removed = [before[k] for k in before if k not in after]
+    replaced = [{"id": k, "before": before[k]["text"], "after": after[k]["text"]}
+                for k in after if k in before and before[k]["text"] != after[k]["text"]]
+    return {"before_lines": len(before_rows), "after_lines": len(after_rows),
+            "before_sec": round(sum(r["body_sec"] for r in before_rows), 2),
+            "after_sec": round(sum(r["body_sec"] for r in after_rows), 2),
+            "before_han": _han_total(before_rows), "after_han": _han_total(after_rows),
+            "replaced": replaced, "added": added, "removed": removed,
+            "unrepresentable_after": [r["id"] for r in after_rows if not r["representable"]]}
+
+
+def _han_total(rows) -> int:
+    return sum(len(_VOICE_HAN.findall(str(r.get("text") or ""))) for r in rows)
+
+
+_VOICE_HAN = __import__("re").compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af]")
+
+
+def _speaker_map(candidate_view, base_view) -> tuple:
+    """候选视图的说话人声明 `{dialogue uid: speaker}`；缺失/空/非字符串即拒.
+
+    重分配的说话人是**计划声明**（黑名单式：原文归属仍由核验判），不能由代码从
+    人物表猜。调用方必须在视图的 `voice_speakers` 里逐条给出。
+    """
+    _decl = candidate_view.get("voice_speakers")
+    if _decl is None:
+        return {}, [("voice_speakers", "候选视图必须给出 `voice_speakers`（台词 uid → 说话人）")]
+    if not isinstance(_decl, dict):
+        return {}, [("voice_speakers", "`voice_speakers` 必须是对象")]
+    _out, _bad = {}, []
+    _uids = [str(u.get("uid") or "") for u in (candidate_view.get("dialogue_units") or [])]
+    for _uid in _uids:
+        _spk = _decl.get(_uid)
+        if not isinstance(_spk, str) or not _spk.strip():
+            _bad.append((_uid, "台词 %s 缺说话人声明（不能留空/由代码猜）" % _uid))
+            continue
+        _out[_uid] = _spk.strip()
+    _extra = [k for k in _decl if k not in _uids]
+    if _extra:
+        _bad.append(("voice_speakers", "声明了候选里不存在的台词：%s" % "、".join(sorted(_extra)[:4])))
+    return _out, _bad
+
+
+def compile_reallocated_plan(base_plan, candidate_view, *, novel_text):
+    """把**完整关系视图**上的声音替换/承载调整编译成可消费候选（S21 统一入口）.
+
+    契约：
+    - **冻结**：事实主张/证据、事件、父子谱系（`source_splits`）、钩子、卡片与出处修正
+      必须与基线逐字节相同；编号、`载体：`、`fact_refs`、`voice_units`、预算读数与计划
+      身份**全部由本入口重新派生**（调用方不手工维护任何派生引用）；
+    - **准入**：候选视图先过 `presentation_contract.view_admission_problems`，再投影；
+    - **重验**：投影后跑 `outline.plan_acceptance_problems`（结构/原文/承载/预算）与
+      `plan_feasibility.evaluate_plan`，只有零问题才返回候选；失败返回 `None` 并保留
+      基线（不产生"半份计划"）；
+    - **旧核验失效**：候选一律写 `content_verification=not_run` 并丢弃旧
+      `plan_verification`/`content_verification` 记录，防止沿用旧摘要的 supported。
+
+    Args:
+        base_plan: 冻结的基线计划（必须是轻量计划；身份块存续）。
+        candidate_view: 完整关系视图（可在基线视图上替换声音/调整承载/局部补画面）。
+            额外需要 `voice_speakers`：台词 uid → 说话人（计划声明，不由代码猜）。
+        novel_text: 本章原文（逐字与预算核验的同一事实源）。
+
+    Returns:
+        `(candidate | None, problems, changes)`；`changes` 含前后对照、逐条声音读数与
+        拒收候选（失败时 `changes["rejected_candidate"]`，供交付"最接近目标的候选"）。
+    """
+    from shared import presentation_contract as pc
+    from shared.fact_metadata import LEGACY_ACCEPTANCE_FIELD, LIGHTWEIGHT_ACCEPTANCE_VERSION
+    from step01_script_gen.plan_coherence import mark_plan
+    from step01_script_gen.plan_feasibility import evaluate_plan, plan_identity
+    from step01_script_gen.outline import plan_acceptance_problems
+
+    def _fail(code, path, reason, extra=None):
+        _p = _rec(code, path, reason)
+        return None, [_p], dict(extra or {}, accepted=False, problems=[_p])
+
+    if not isinstance(base_plan, dict) or not base_plan:
+        return _fail("realloc_base_missing", "", "基线计划缺失")
+    if not str(novel_text or "").strip():
+        return _fail("realloc_novel_missing", "", "缺原文，无法重验")
+    _idp = identity_problems(base_plan, novel_text)
+    if _idp:
+        return _fail("realloc_base_identity_invalid", "lightweight_plan", _idp)
+    _base_view, _vp = pc.view_from_plan(copy.deepcopy(base_plan))
+    if _vp:
+        return _fail("realloc_base_view_invalid", "", "基线投影不可读：%s" % _vp[:2])
+    if not isinstance(candidate_view, dict) or not candidate_view:
+        return _fail("realloc_view_missing", "", "候选视图缺失")
+    _adm = pc.view_admission_problems(candidate_view)
+    if _adm:
+        return None, _adm, {"accepted": False, "problems": _adm}
+    # ---- 1. 冻结块逐字节比对（内容身份不得在重分配里漂移）----
+    _bf, _cf = _frozen_payload(_base_view), _frozen_payload(candidate_view)
+    _drift = [_k for _k in FROZEN_VIEW_BLOCKS if _bf.get(_k) != _cf.get(_k)]
+    _basis_drift = 1 if (_base_view.get("plan_basis") or {}) != (candidate_view.get("plan_basis") or {}) else 0
+    if _drift or _basis_drift:
+        return _fail("realloc_frozen_changed", ",".join(_drift) or "plan_basis",
+                     "重分配改动了冻结内容（事实/证据/事件/谱系/钩子/卡片/计划基座）")
+    if str((candidate_view or {}).get("mode") or "") != str(_base_view.get("mode") or ""):
+        return _fail("realloc_mode_changed", "mode", "重分配不得改变呈现模式")
+    # ---- 2. 说话人声明（计划声明，必须逐条给出）----
+    _speakers, _sbad = _speaker_map(candidate_view, _base_view)
+    if _sbad:
+        return None, [_rec("realloc_speaker_invalid", _k, _r) for _k, _r in _sbad], {
+            "accepted": False, "problems": [_rec("realloc_speaker_invalid", _k, _r)
+                                            for _k, _r in _sbad]}
+    # 逐条核**原文引语归属**：可核对到另一个具体角色的声明直接拒收（同姓称谓/代词
+    # 核对不了的按既有口径放行，交内容核验）。
+    from step01_script_gen import lightweight_voice_repair as _vr
+    _chars = [str(x) for x in (base_plan.get("characters") or []) if str(x).strip()]
+    _attr = []
+    for _u in (candidate_view.get("dialogue_units") or []):
+        _uid = str(_u.get("uid") or "")
+        _why = _vr.speaker_attribution_problem("dialogue", _u.get("text"),
+                                               _speakers.get(_uid), novel_text, _chars)
+        if _why:
+            _attr.append(_rec("realloc_speaker_attribution", _uid,
+                              "台词 %s 声明的说话人 %r 与原文引语归属冲突：%s"
+                              % (_uid, _speakers.get(_uid), _why)))
+    if _attr:
+        return None, _attr, {"accepted": False, "problems": _attr}
+    # ---- 3. 投影 + 派生字段重建 ----
+    try:
+        _plan = pc.plan_from_view(candidate_view)
+    except pc.PresentationContractError as _exc:
+        _probs = [dict(_rec(str((x or {}).get("code") or "realloc_projection_invalid"),
+                           str((x or {}).get("path") or ""),
+                           str((x or {}).get("reason") or "视图投影失败")))
+                  for x in (_exc.problems or [])]
+        return None, _probs, {"accepted": False, "problems": _probs}
+    _plan = dict(_plan)
+    _plan[LEGACY_ACCEPTANCE_FIELD] = LIGHTWEIGHT_ACCEPTANCE_VERSION
+    _plan["voice_units"] = (
+        [{"unit_uid": str(u.get("uid") or ""), "source_kind": "novel_speech",
+          "speaker": _speakers[str(u.get("uid") or "")],
+          "echo_text": str(u.get("text") or ""), "declared_by": "reallocated_view"}
+         for u in (candidate_view.get("dialogue_units") or [])]
+        + [{"unit_uid": str(u.get("uid") or ""), "source_kind": "novel_narration",
+            "speaker": "", "echo_text": str(u.get("text") or ""),
+            "declared_by": "reallocated_view"}
+           for u in (candidate_view.get("narration_units") or [])])
+    _plan["lightweight_plan"] = {"contract_version": CONTRACT_VERSION,
+                                 "novel_digest": _novel_digest(novel_text),
+                                 "content_verification": "not_run"}
+    for _stale in ("plan_verification", "content_verification", "source_splits_verdict"):
+        _plan.pop(_stale, None)
+    # 事件→节拍的分组是**派生**关系：事件表冻结，但 B 编号随候选节拍重排，必须重建
+    # （否则 `causal_chain` 仍写着旧分组——"无手工维护派生引用"）。
+    _events = [str(x) for x in (candidate_view.get("frozen_events") or [])]
+    _beat_events = [list(_b.get("event_uids") or []) for _b in (candidate_view.get("beats") or [])]
+    if _events and _beat_events and all(_beat_events):
+        _chain = "→".join(
+            "%s（%s）" % (_ev, "、".join("B%d" % (_i + 1) for _i, _es in enumerate(_beat_events)
+                                        if _ev in _es))
+            for _ev in _events)
+        if "（）" not in _chain:
+            _plan["causal_chain"] = [_chain]
+    _plan = mark_plan(_plan)
+    try:
+        _rep = evaluate_plan(_plan, novel_text=novel_text)
+        _plan["time_budget"] = "台词约%.0f秒，旁白约%.0f秒（代码按语速估算）" % (
+            float(_rep.get("dialogue_sec") or 0), float(_rep.get("narration_sec") or 0))
+    except Exception:                                                # noqa: BLE001
+        _plan["time_budget"] = ""
+    # ---- 4. 完整重验（统一验收链；不沿用旧核验结论）----
+    _accept = list(plan_acceptance_problems(_plan, novel_text=novel_text) or [])
+    _changes = {
+        "voices": _voice_changes(_voice_rows(base_plan), _voice_rows(_plan)),
+        "facts": [{"uid": "f%02d" % (_i + 1), "before": _b["carrier"], "after": _a["carrier"]}
+                  for _i, (_b, _a) in enumerate(zip(_fact_texts(base_plan), _fact_texts(_plan)))],
+        "beats": {"before": len(base_plan.get("shot_beats") or []),
+                  "after": len(_plan.get("shot_beats") or []),
+                  "sentences_changed": sum(
+                      1 for _x, _y in zip(base_plan.get("shot_beats") or [],
+                                          _plan.get("shot_beats") or []) if _x != _y)},
+        "plan_identity": {"before": plan_identity(base_plan), "after": plan_identity(_plan)},
+        "content_verification": "not_run",
+        "accepted": not _accept,
+        "problems": _accept,
+    }
+    if _accept:
+        _changes["rejected_candidate"] = _plan
+        return None, _accept, _changes
+    return _plan, [], _changes
+
+
 def dialogue_speakers(plan) -> dict:
     """轻量计划声明的说话人：`{台词正文: 说话人}`（非轻量计划返回空表）."""
     if not isinstance(plan, dict) or not isinstance(plan.get("lightweight_plan"), dict):
@@ -434,6 +664,45 @@ def dialogue_speakers(plan) -> dict:
             for u in (plan.get("voice_units") or [])
             if isinstance(u, dict) and u.get("source_kind") == "novel_speech"
             and str(u.get("speaker") or "")}
+
+
+def correct_plan_sources(answer, response, novel_text: str, *, allowed_parents=None) -> tuple:
+    """S12 生产接线入口：来源修正回答 → 编译并重验完整计划.
+
+    Returns:
+        `(plan | None, problems, corrected_answer | None)`。
+    """
+    from step01_script_gen.outline import plan_acceptance_problems
+    from step01_script_gen.source_claim_fix import apply_source_correction
+    _cand, _probs = apply_source_correction(
+        answer, response, novel_text, allowed_parents=allowed_parents)
+    if _probs or _cand is None:
+        return None, list(_probs or []), None
+    _plan, _build_probs = build_plan(_cand, novel_text)
+    if _build_probs or _plan is None:
+        return None, list(_build_probs or []), _cand
+    _accept = list(plan_acceptance_problems(_plan, novel_text) or [])
+    if _accept:
+        return None, _accept, _cand
+    return _plan, [], _cand
+
+
+def rebind_plan_carriers(plan, bindings, *, novel_text: str = "") -> tuple:
+    """S16 生产接线入口：在既有节拍上追加事实承载并重验.
+
+    Returns:
+        `(new_plan | None, problems, meta)`。
+    """
+    from step01_script_gen.fact_binding_repair import rebind_fact_carriers
+    from step01_script_gen.outline import plan_acceptance_problems
+    _new_plan, _probs, _meta = rebind_fact_carriers(plan, bindings, novel_text=novel_text)
+    if _probs or _new_plan is None:
+        return None, list(_probs or []), dict(_meta or {})
+    if novel_text:
+        _accept = list(plan_acceptance_problems(_new_plan, novel_text) or [])
+        if _accept:
+            return None, _accept, dict(_meta or {})
+    return _new_plan, [], dict(_meta or {})
 
 
 # ---------------------------------------------------------------------------
@@ -649,26 +918,44 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
     _first_answer = None
     _first_ids = None
 
+    from step01_script_gen import voice_allocation as va
+    _use_va_v2 = os.getenv(va.ENV, "v1").strip().lower() == "v2"
+
+    def _va_limits():
+        from step01_script_gen.plan_feasibility import budget_band
+        from step01_script_gen.timecode import active_shot_cap
+        _, _ceil = budget_band()
+        return {"max_lines": vr.line_limit(), "max_han": vr.MAX_HAN,
+                "max_sec": float(_ceil), "single_shot_sec": float(active_shot_cap()),
+                "current_lines": len(vr.voices(original)) if original else 0}
+
     def _blocked_stop(ctx):
         """修订前就能判定无合法动作：不发请求，给出逐条原因."""
         return [_rec("lightweight_voice_unfixable", str(b["id"]), b["reason"])
                 for b in ctx.get("blocked") or []]
 
     for _n in range(1, MAX_ATTEMPTS + 1):
-        if scope and scope.get("blocked"):
+        if scope and scope.get("blocked") and not _use_va_v2:
             _last_problems = _last_problems + _blocked_stop(scope)
             break
         if _dl is not None and time.monotonic() >= _dl:
             return _fail(res, "deadline_exhausted",
                          "规划截止时刻已到 ⇒ 不发轻量大纲请求（已尝试 %d 次）" % (_n - 1),
                          attempts=_attempts)
+        _va_ctx = (va.build_voice_choices(original, novel_text, limits=_va_limits())
+                   if (scope and _use_va_v2) else None)
         _req = TextGenerationRequest(
             system_prompt=_OUTLINE_SYSTEM_PROMPT,
-            user_prompt=(vr.prompt(scope) + _budget_block(scope) + "\n"
+            user_prompt=(_va_ctx["prompt"] + _budget_block(scope) + "\n"
                          + json.dumps(_last_problems, ensure_ascii=False)
-                         if scope else prompt),
+                         if _va_ctx is not None
+                         else (vr.prompt(scope) + _budget_block(scope) + "\n"
+                               + json.dumps(_last_problems, ensure_ascii=False)
+                               if scope else prompt)),
             max_tokens=_outline_max_tokens(), temperature=0.3,
-            json_schema=vr.SCHEMA if scope else LIGHTWEIGHT_SCHEMA, model=model, deadline_monotonic=_dl)
+            json_schema=(va.SCHEMA if _va_ctx is not None
+                         else (vr.SCHEMA if scope else LIGHTWEIGHT_SCHEMA)),
+            model=model, deadline_monotonic=_dl)
         _r = _svc.generate(_req)
         res["revision"]["calls"] = _n
         _cid = str(getattr(_r, "call_id", "") or "")
@@ -680,7 +967,21 @@ def generate_lightweight_outline_result(novel_text: str, model=None, cache_path=
         _plan = None
         _last_problems = []
         _declared = _voice_done = False
-        if scope:
+        if scope and _va_ctx is not None:
+            if isinstance(_data, dict) and _data.get("unfixable") and not _data.get("voices"):
+                _declared = True
+                _last_problems = [
+                    _rec("lightweight_voice_declared_unfixable", str(x.get("id") or ""),
+                         str(x.get("reason") or "")[:240])
+                    for x in (_data.get("unfixable") or []) if isinstance(x, dict)]
+            else:
+                _cand, _va_probs = va.apply_voice_allocation(
+                    original, _data, _va_ctx, novel_text=novel_text, limits=_va_limits())
+                if _va_probs or _cand is None:
+                    _last_problems = list(_va_probs or [])
+                else:
+                    _data = _cand
+        elif scope:
             try:
                 _data = vr.apply(original, scope, _data)
             except vr.DeclaredUnfixable as exc:
@@ -779,5 +1080,6 @@ def _write_round(writer, round_no, kind, call_id, problems, plan_out) -> None:
 __all__ = ["PLAN_MODE_ENV", "PLAN_MODES", "PLAN_MODE_LEGACY", "PLAN_MODE_LIGHTWEIGHT",
            "CONTRACT_VERSION", "MAX_ATTEMPTS", "LIGHTWEIGHT_SCHEMA", "plan_mode_setting",
            "preflight_problems", "identity_problems", "answer_problems", "build_view",
-           "build_plan", "dialogue_speakers", "cache_path_for",
+           "build_plan", "compile_reallocated_plan", "correct_plan_sources",
+           "rebind_plan_carriers", "dialogue_speakers", "cache_path_for",
            "generate_lightweight_outline_result"]

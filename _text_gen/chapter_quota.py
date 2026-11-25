@@ -17,6 +17,9 @@ from datetime import datetime
 from pathlib import Path
 
 
+ENV_FILE = "STEP01_CHAPTER_QUOTA_FILE"
+
+
 class QuotaError(Exception):
     pass
 
@@ -156,3 +159,20 @@ def settle_batch(chapter_path, reservation_id, batch_path):
 
 def pending(chapter_path):
     return _read(chapter_path).get("reservations") or []
+
+
+def check_available(chapter_path) -> dict:
+    """发送边界预检：账本必须可读、结构合法且 `used < max`（只读不扣额）."""
+    with _Lock(chapter_path):
+        try:
+            data = _read(chapter_path)
+        except BaseException as exc:  # noqa: BLE001
+            raise QuotaError("chapter ledger unreadable: %s" % exc) from exc
+        if not isinstance(data, dict) or not _int_ok(data.get("used")) \
+                or not _int_ok(data.get("max"), minimum=1):
+            raise QuotaError("chapter ledger structure invalid: %r" % (data,))
+        if data["used"] >= data["max"]:
+            raise QuotaError("chapter quota exhausted: used=%d max=%d"
+                             % (data["used"], data["max"]))
+        return {"used": data["used"], "max": data["max"],
+                "remaining": data["max"] - data["used"]}

@@ -635,3 +635,22 @@ def apply(answer, ctx, response):
     if after >= ctx["seconds"]:
         raise ValueError(f"总时长没有下降：{ctx['seconds']} → {after}s")
     return result
+
+
+def speaker_attribution_problem(kind, text, speaker, novel, characters) -> str:
+    """**计划声明的说话人**与原文引语归属是否冲突（S21 重分配入口复用）.
+
+    Returns: 空串 = 可接受（同一个人，或原文只给称谓/代词、无法核对到具体角色）；
+    非空 = 可核对的**异名归属**，必须拒收。
+
+    只复用 `_sources` 已有的归属判据（`_resolve_speaker`）：不新造规则，也不把
+    "核对不了" 当成 "冲突"。台词正文本身不在原文时这里不报（逐字门负责）。
+    """
+    _row = {"kind": str(kind or ""), "text": str(text or ""),
+            "speaker": str(speaker or ""), "beat_source": "", "evidence": [],
+            "claims": [], "han": 0, "sec": 0.0, "single_sec": 0.0, "playable": True}
+    _occ, _notes = _sources(_row, str(novel or ""), list(characters or []))
+    for _n in _notes:
+        if _n.get("code") == "attribution_conflict":
+            return str(_n.get("detail") or "")
+    return ""
