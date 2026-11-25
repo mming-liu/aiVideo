@@ -52,3 +52,26 @@ def test_duplicate_settlement_is_rejected(tmp_path):
     q.settle(p, rid, 1)
     with pytest.raises(q.QuotaError):
         q.settle(p, rid, 1)
+
+
+def test_malformed_batch_is_unknown_not_zero(tmp_path):
+    for bad in ({}, {"used": -1}, {"used": "1"}, {"used": 1, "attempts": 1}):
+        p = _ledger(tmp_path, used=16)
+        rid = q.reserve(p, 4)
+        batch = tmp_path / "batch.json"
+        batch.write_text(json.dumps(bad), encoding="utf-8")
+        out = q.settle_batch(p, rid, batch)
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert out["status"] == "unknown", (bad, out)
+        assert data["used"] == 20, (bad, data)
+        assert data["reservations"][0]["state"] == "unknown"
+
+
+def test_valid_batch_settles_and_refunds(tmp_path):
+    p = _ledger(tmp_path, used=16)
+    rid = q.reserve(p, 4)
+    batch = tmp_path / "batch.json"
+    batch.write_text(json.dumps({"used": 1, "attempts": [{"n": 1}]}), encoding="utf-8")
+    out = q.settle_batch(p, rid, batch)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert out["status"] == "settled" and data["used"] == 17

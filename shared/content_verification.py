@@ -1730,6 +1730,47 @@ def _apply_stability_advisory(problems, record) -> list:
     return _out
 
 
+def source_split_preservation_problems(record, view, *, novel_text=None):
+    """独立核验必须对来源拆分给出**新的**父内容保留结论.
+
+    修正者的 `source_preservation` 只是写入侧自报；本函数只读核验记录里的
+    `source_preservation`，缺失/身份不同序/非 supported/证据非逐字/子身份缺失都报问题。
+    """
+    splits = (view.get("plan_basis") or {}).get("source_splits")
+    if not isinstance(splits, list) or not splits:
+        return []
+    if not isinstance(record, dict) or str(record.get("status") or "") != "ok":
+        return []
+    from step01_script_gen.source_revision import shape_problems
+    value = record.get("source_preservation")
+    bad = shape_problems(value)
+    if bad:
+        return bad
+    parents = [str(s.get("parent")) for s in splits]
+    if list(value["target_uids"]) != parents:
+        return [_rec("verify_source_preservation_identity", "verification", "",
+                     "独立保留结论的 target_uids 必须与拆分父事实同序一致",
+                     "source_preservation")]
+    if novel_text is not None and any(s not in novel_text for s in value["evidence_spans"]):
+        return [_rec("verify_source_preservation_evidence", "verification", "",
+                     "独立保留结论的证据必须逐字来自本次原文", "source_preservation")]
+    if value["verdict"] != "supported":
+        return [_rec("source_preservation_failed", "verification", "",
+                     "独立核验的父内容保留结论为 %r" % value["verdict"],
+                     "source_preservation")]
+    if not value["evidence_spans"]:
+        return [_rec("verify_source_preservation_evidence", "verification", "",
+                     "核心保留通过须给出原文证据", "source_preservation")]
+    frozen = {str(f.get("uid")) for f in (view.get("frozen_facts") or [])}
+    for split in splits:
+        for uid in (split.get("child_uids") or []):
+            if str(uid) not in frozen:
+                return [_rec("verify_source_preservation_identity", "verification", "",
+                             "保留结论的子事实身份 %r 不在本次候选中" % uid,
+                             "source_preservation")]
+    return []
+
+
 def verification_problems(record, view, *, decomposition=None,
                           plan_digest=None, plan=None,
                           rule_version=DEFAULT_RULE_VERSION,
@@ -1760,6 +1801,7 @@ def verification_problems(record, view, *, decomposition=None,
     _shape = record_shape_problems(record, where="内容核验记录")
     if _shape:
         return _shape
+    _p.extend(source_split_preservation_problems(record, view, novel_text=novel_text))
     _dig = str(record.get("plan_digest") or "")
     # ⚠️ **生产与消费共用 `plan_digest_of`**（复核 2026-10-05 P1）。旧实现消费者拿
     # **视图**算摘要、生产者拿**计划**算——于是每一份正常记录都被判

@@ -351,6 +351,12 @@ def build_view(answer) -> dict:
     }
     if answer.get("source_splits"):
         _basis["source_splits"] = copy.deepcopy(answer["source_splits"])
+        _by_claim = {}
+        for _f in _frozen:
+            _by_claim.setdefault(_f["claim"], _f["uid"])
+        for _sp in _basis["source_splits"]:
+            _sp["child_uids"] = [_by_claim[c["claim"]] for c in _sp["children"]
+                                 if c["claim"] in _by_claim]
         if answer.get("source_preservation"):
             _basis["source_preservation"] = copy.deepcopy(answer["source_preservation"])
     _view = {"schema": pc.PRESENTATION_SCHEMA, "mode": pc.MODE_LEGACY,

@@ -2,6 +2,7 @@
 """S12 复合来源修正：逐字证据、拆分谱系、父保留结论与拒收对照."""
 from __future__ import annotations
 
+import shared.content_verification as scv
 from step01_script_gen import content_verify as cv
 from step01_script_gen import lightweight_plan as lw
 from step01_script_gen.source_claim_fix import apply_source_correction
@@ -60,7 +61,33 @@ def test_split_into_two_verbatim_children_keeps_position_and_lineage():
     assert view["plan_basis"]["source_preservation"]["verdict"] == "supported"
     prompt = cv.build_verification_prompt(view, novel_text=NOVEL)
     assert "来源修正父主张" in prompt and "parent_claim" in prompt
+    assert view["plan_basis"]["source_splits"][0]["child_uids"] == ["f01", "f02"]
     assert cv._request_admission(view) == []
+    # 待核候选即使没有保留结论也可以进入核验（结论由独立核验给）
+    pending = __import__("copy").deepcopy(view)
+    pending["plan_basis"].pop("source_preservation")
+    assert cv._request_admission(pending) == []
+
+
+def test_independent_preservation_is_required_and_negative_is_reported():
+    out, problems = apply_source_correction(_answer(), _resp(GOOD_CHILDREN), NOVEL)
+    assert problems == []
+    view = lw.build_view(out)
+    splits = view["plan_basis"]["source_splits"]
+    assert splits[0]["child_uids"] == ["f01", "f02"]
+    good = {"status": "ok",
+            "source_preservation": {"target_uids": ["f01"], "verdict": "supported",
+                                    "evidence_spans": ["他一身叫化子装扮"],
+                                    "reason": "独立核验：两层都在"}}
+    assert scv.source_split_preservation_problems(good, view, novel_text=NOVEL) == []
+    missing = {"status": "ok"}
+    assert [p["code"] for p in scv.source_split_preservation_problems(
+        missing, view, novel_text=NOVEL)] == ["verify_source_preservation_record"]
+    partial = {"status": "ok", "source_preservation": {
+        "target_uids": ["f01"], "verdict": "partial",
+        "evidence_spans": ["他一身叫化子装扮"], "reason": "缺五官"}}
+    assert [p["code"] for p in scv.source_split_preservation_problems(
+        partial, view, novel_text=NOVEL)] == ["source_preservation_failed"]
 
 
 def test_missing_preservation_is_rejected():
@@ -116,3 +143,19 @@ def test_only_authorized_parents_can_be_changed():
     out, problems = apply_source_correction(
         _answer(), _resp(GOOD_CHILDREN), NOVEL, allowed_parents={"f02"})
     assert out is None and [p["code"] for p in problems] == ["source_fact_not_authorized"]
+
+
+def test_verification_problems_reports_negative_source_split_preservation(monkeypatch):
+    out, problems = apply_source_correction(_answer(), _resp(GOOD_CHILDREN), NOVEL)
+    assert problems == []
+    view = lw.build_view(out)
+    monkeypatch.setattr(scv, "record_shape_problems", lambda *a, **k: [])
+    monkeypatch.setattr(scv, "fact_identity_problems", lambda *a, **k: [])
+    monkeypatch.setattr(scv, "source_results", lambda r: [])
+    record = {"status": "ok", "plan_digest": "", "novel_digest": "",
+              "rule_version": scv.DEFAULT_RULE_VERSION,
+              "source_preservation": {
+                  "target_uids": ["f01"], "verdict": "partial",
+                  "evidence_spans": ["他一身叫化子装扮"], "reason": "缺五官"}}
+    codes = [p["code"] for p in scv.verification_problems(record, view, plan_digest="")]
+    assert "source_preservation_failed" in codes, codes

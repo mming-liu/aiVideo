@@ -67,6 +67,10 @@ class _Lock:
             self.fh.close()
 
 
+def _int_ok(value, *, minimum=0):
+    return type(value) is int and value >= minimum
+
+
 def reserve(chapter_path, n, *, tag=""):
     """Reserve `n` sends against the chapter cap; returns reservation id."""
     n = int(n)
@@ -74,7 +78,10 @@ def reserve(chapter_path, n, *, tag=""):
         raise QuotaError("reservation must be positive")
     with _Lock(chapter_path):
         data = _read(chapter_path)
-        used, cap = int(data.get("used") or 0), int(data.get("max") or 20)
+        if not isinstance(data, dict) or not _int_ok(data.get("used")) \
+                or not _int_ok(data.get("max"), minimum=1):
+            raise QuotaError("chapter ledger structure invalid: %r" % (data,))
+        used, cap = data["used"], data["max"]
         if used + n > cap:
             raise QuotaError("chapter quota would exceed cap: used=%d reserve=%d max=%d"
                              % (used, n, cap))
@@ -96,13 +103,16 @@ def _find(data, rid):
 
 def settle(chapter_path, reservation_id, spent, attempts=()):
     """Settle a readable batch: refund unspent quota, keep actual attempts."""
-    spent = int(spent)
+    if not _int_ok(spent):
+        raise QuotaError("spent must be a non-negative int: %r" % (spent,))
     with _Lock(chapter_path):
         data = _read(chapter_path)
+        if not isinstance(data, dict) or not _int_ok(data.get("used")):
+            raise QuotaError("chapter ledger structure invalid")
         row = _find(data, reservation_id)
-        n = int(row.get("n") or 0)
-        if spent > n:
-            raise QuotaError("spent %d exceeds reservation %d" % (spent, n))
+        n = row.get("n")
+        if not _int_ok(n, minimum=1) or spent > n:
+            raise QuotaError("spent %r outside reservation %r" % (spent, n))
         data["used"] = int(data.get("used") or 0) - (n - spent)
         data["reservations"] = [x for x in data["reservations"]
                                 if x.get("id") != reservation_id]
@@ -114,11 +124,34 @@ def settle_unknown(chapter_path, reservation_id, *, reason=""):
     """Batch missing/unreadable: keep the whole reservation, mark it unknown."""
     with _Lock(chapter_path):
         data = _read(chapter_path)
+        if not isinstance(data, dict) or not _int_ok(data.get("used")):
+            raise QuotaError("chapter ledger structure invalid")
         row = _find(data, reservation_id)
         row["state"] = "unknown"
         row["unknown_reason"] = str(reason or "batch ledger missing/unreadable")[:200]
         row["unknown_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         _write(chapter_path, data)
+
+
+def settle_batch(chapter_path, reservation_id, batch_path):
+    """Settle from a batch file; any structural doubt is unknown (never refund)."""
+    try:
+        b = _read(batch_path)
+    except BaseException as exc:  # noqa: BLE001
+        settle_unknown(chapter_path, reservation_id, reason="batch missing/unreadable: %s" % exc)
+        return {"status": "unknown", "chapter_after": _read(chapter_path).get("used")}
+    if (not isinstance(b, dict) or not _int_ok(b.get("used"))
+            or not isinstance(b.get("attempts", []), list)):
+        settle_unknown(chapter_path, reservation_id,
+                       reason="batch structure invalid: %r" % (b,))
+        return {"status": "unknown", "chapter_after": _read(chapter_path).get("used")}
+    try:
+        settle(chapter_path, reservation_id, b["used"], b.get("attempts") or [])
+    except QuotaError as exc:
+        settle_unknown(chapter_path, reservation_id, reason="batch settle invalid: %s" % exc)
+        return {"status": "unknown", "chapter_after": _read(chapter_path).get("used")}
+    return {"status": "settled", "spent": b["used"],
+            "chapter_after": _read(chapter_path).get("used")}
 
 
 def pending(chapter_path):
