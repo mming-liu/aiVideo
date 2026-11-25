@@ -3902,8 +3902,41 @@ def plan_contract_records(plan, *, novel_text: str = "",
     # S13（2026-11-24）：轻量计划的多承载事实走**结构**校验；单承载事实仍走下面的完整
     # 旧路径（语义交集判据不变）。多承载只在隔离实验里出现，v1 缓存不会被它命中。
     if _lightweight and any("、" in fact_carrier(f) for f in facts):
-        return _voice_order + _lightweight_multi_carrier_records(
+        # 多承载不能绕过已有身份/反向引用：先用**首承载**跑完整旧路径，再补多出来的承载；
+        # 旁白承载的 `fact_refs` 逐条核对（旧路径只查第一条）。
+        _multi = _lightweight_multi_carrier_records(
             facts, beats, lines, len(plan_narration_entries(plan)))
+        _reduced = []
+        for _f in facts:
+            _d = fact_carrier(_f)
+            if "、" in _d:
+                _f = _f.replace("｜承载：" + _d, "｜承载：" + _d.split("、")[0])
+            _reduced.append(_f)
+        _legacy = plan_contract_records(dict(plan, required_facts=_reduced),
+                                        novel_text=novel_text,
+                                        require_verification=require_verification)
+        _narrs = plan_narration_entries(plan)
+        for _i, _f in enumerate(facts, 1):
+            _parts = [x for x in fact_carrier(_f).split("、") if x.strip()]
+            for _p in _parts[1:]:
+                _parsed = parse_carrier_decl(_p)
+                if _parsed and _parsed[1] == "旁白" and 1 <= _parsed[2] <= len(_narrs):
+                    _refs = _narrs[_parsed[2] - 1].get("fact_refs") or []
+                    if _i not in _refs:
+                        _multi.append(_problem_record(
+                            "carrier_narration_fact_ref_missing", "fact", _i,
+                            "required_facts[%d].承载" % (_i - 1),
+                            "多承载事实 F%d 的旁白承载 N%d 未在 fact_refs 反向登记"
+                            % (_i, _parsed[2]),
+                            "计划契约：旁白承载必须反向登记事实编号"))
+        _seen, _out = set(), []
+        for _r in _multi + _legacy:
+            _k = (_r.get("code"), _r.get("kind"), _r.get("index"), _r.get("path"))
+            if _k in _seen:
+                continue
+            _seen.add(_k)
+            _out.append(_r)
+        return _out
     problems: list = list(_voice_order)
     # **格式先于承载语义**：分隔符写错（`；载体：` / `|载体：` / `｜载体:`）时
     # `BeatRecord.carrier()` 读不到载体段，后面每条事实都会误报「该节拍没有标载体」。

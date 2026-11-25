@@ -22,8 +22,26 @@ def _problem(code, ref, reason):
     return {"code": code, "ref": str(ref or ""), "reason": str(reason or "")}
 
 
-def apply_source_correction(answer, response, novel_text):
-    """返回 `(candidate_answer, problems)`；永不修改基线."""
+_CONTENT_PUNCT = "，。！？；：、“”‘’（）《》〈〉【】…—·,.!?;:\"'()[]{}<>\n\r\t "
+
+
+def _content_chars(text) -> set:
+    return {ch for ch in str(text or "") if ch not in _CONTENT_PUNCT}
+
+
+def _coverage(parent, children_text) -> float:
+    want = _content_chars(parent)
+    if not want:
+        return 1.0
+    return len(want & _content_chars(children_text)) / len(want)
+
+
+def apply_source_correction(answer, response, novel_text, *, allowed_parents=None):
+    """返回 `(candidate_answer, problems)`；永不修改基线.
+
+    `allowed_parents` 非空时只允许改这些事实（来源修正入口应传当前负面结论授权的身份）。
+    子项必须覆盖父主张/父证据的**内容字符**（确定性下限，不代替语义核验）。
+    """
     if (not isinstance(response, dict) or set(response) != {"splits"}
             or not isinstance(response.get("splits"), list)):
         return None, [_problem("source_response_invalid", "", "只接受 splits 数组")]
@@ -40,6 +58,9 @@ def apply_source_correction(answer, response, novel_text):
         fid = str(item["id"])
         if fid not in by_id or fid in replaced:
             return None, [_problem("source_fact_unknown", fid, "事实不存在或重复拆分")]
+        if allowed_parents is not None and fid not in set(allowed_parents):
+            return None, [_problem("source_fact_not_authorized", fid,
+                                   "该事实没有当前来源负面结论授权")]
         kids = []
         for child in item["children"]:
             if (not isinstance(child, dict) or set(child) != {"claim", "evidence"}
@@ -57,6 +78,16 @@ def apply_source_correction(answer, response, novel_text):
                          "_source_parent": fid})
         if problems:
             continue
+        parent = by_id[fid]
+        joined = "".join(k["claim"] + k["evidence"] for k in kids)
+        for label, source in (("claim", parent.get("claim")), ("evidence", parent.get("evidence"))):
+            if _coverage(source, joined) < 0.8:
+                problems.append(_problem(
+                    "source_parent_coverage_gap", fid,
+                    "子项未覆盖父%s的核心内容（字符覆盖 %.0f%% < 80%%）"
+                    % (label, 100 * _coverage(source, joined))))
+        if problems:
+            continue
         replaced[fid] = kids
     if problems:
         return None, problems
@@ -68,7 +99,11 @@ def apply_source_correction(answer, response, novel_text):
         else:
             new_facts.append(fact)
     out["facts"] = new_facts
-    out["source_splits"] = [{"parent": k, "children": [c["claim"] for c in v]}
+    out["source_splits"] = [{"parent": k,
+                             "parent_claim": by_id[k].get("claim"),
+                             "parent_evidence": by_id[k].get("evidence"),
+                             "children": [{"claim": c["claim"], "evidence": c["evidence"]}
+                                          for c in v]}
                             for k, v in replaced.items()]
     return out, []
 

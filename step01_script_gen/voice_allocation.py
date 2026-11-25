@@ -68,6 +68,7 @@ def build_voice_choices(answer, novel_text, *, limits=None) -> dict:
         catalog[r["id"]] = {"id": r["id"], "kind": r["kind"], "speaker": r["speaker"],
                             "text": r["text"], "claims": r["claims"],
                             "evidence": r["evidence"], "units": units,
+                            "event": r["event"], "beat": r["beat"],
                             "notes": notes, "deletable": not r["claims"]}
     by_pos = {(r["event"] + 1, r["beat"] + 1): r["id"] for r in rows}
     facts = []
@@ -111,22 +112,22 @@ def _fact_positions(answer) -> set:
 
 
 def _drop_one_fact_free(answer):
-    """删除一条没有任何事实绑定的声音；返回删除记录或 None（确定性预算修复）."""
+    """清理一条无事实绑定的**声音**，保留节拍（画面/来源/目的不动）.
+
+    没有事实绑定不等于这个节拍可以删除；删除画面需要独立的允许范围。
+    """
     used = _fact_positions(answer)
     for r in vr.voices(answer):
         if r["claims"] or (r["event"], r["beat"]) in used:
             continue
-        ev, b = r["event"], r["beat"]
-        if len(answer["events"][ev]["beats"]) <= 1:
-            continue                      # 事件不能清空：该声音是此事件唯一节拍，跳过
-        del answer["events"][ev]["beats"][b]
-        for f in answer.get("facts") or []:
-            if int(f["event"]) - 1 == ev and int(f["beat"]) - 1 > b:
-                f["beat"] = int(f["beat"]) - 1
-            for c in f.get("carriers") or []:
-                if int(c["event"]) - 1 == ev and int(c["beat"]) - 1 > b:
-                    c["beat"] = int(c["beat"]) - 1
-        return {"id": r["id"], "event": ev, "beat": b, "text": r["text"]}
+        beat = answer["events"][r["event"]]["beats"][r["beat"]]
+        if str(beat.get("voice_kind") or "none") == "none":
+            continue
+        text = str(beat.get("voice_text") or "")
+        beat["voice_kind"] = "none"
+        beat["voice_text"] = ""
+        beat["speaker"] = ""
+        return {"id": r["id"], "event": r["event"], "beat": r["beat"], "text": text}
     return None
 
 
@@ -144,7 +145,11 @@ def _unit_text(catalog, voice_id, unit_ref):
 
 
 def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
-    """应用一次 v2 分配；返回 `(candidate_answer, problems)`，永不修改基线."""
+    """应用一次 v2 分配；返回 `(candidate_answer, problems)`，永不修改基线.
+
+    位置由**基线稳定坐标**（event, beat）一次性计算，不依赖模型数组的排列顺序；
+    拆分只改变节拍布局，不改说话人/声音种类，也不删除画面节拍。
+    """
     limits = dict(limits or ctx.get("limits") or {})
     if (not isinstance(response, dict)
             or not set(response) <= {"voices", "facts", "unfixable", "dropped_facts"}
@@ -152,21 +157,18 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
             or not isinstance(response.get("facts", []), list)):
         return None, [_problem("allocation_response_invalid", "", "只接受 voices/facts/unfixable")]
     catalog = ctx["voices"]
-    result = copy.deepcopy(answer)
     problems = []
-    pos_map = {(e + 1, b + 1): (e, b)
-               for e, ev in enumerate(answer["events"])
-               for b, _ in enumerate(ev["beats"])}
-    positions = {}
-    shifts = {}
+    planned = {}
     for item in response.get("voices") or []:
         if not isinstance(item, dict) or set(item) != {"id", "units"}:
             return None, [_problem("allocation_response_invalid", "", "voices 项只能有 id/units")]
         vid = str(item["id"])
         units = item.get("units")
-        if vid not in catalog or not isinstance(units, list) \
-                or not 1 <= len(units) <= MAX_UNITS_PER_VOICE:
+        if vid not in catalog or not isinstance(units, list)                 or not 1 <= len(units) <= MAX_UNITS_PER_VOICE:
             problems.append(_problem("allocation_voice_invalid", vid, "声音不存在或单位数非法"))
+            continue
+        if vid in planned:
+            problems.append(_problem("allocation_voice_duplicate", vid, "同一声音只能出现一次"))
             continue
         texts = []
         for ref in units:
@@ -178,45 +180,52 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
         if len(texts) != len(units):
             continue
         entry = catalog[vid]
-        # 来源下限：单位必须逐字来自**该声音自己的正文**或它绑定事实的证据（二者都是
-        # 原文来源；自己的正文优先，避免把「事实证据在另一段旁白」误判成越界）。
         if entry["claims"] and any(
                 not (t in entry["text"] or any(t in ev for ev in entry["evidence"]))
                 for t in texts):
             problems.append(_problem("allocation_unit_outside_evidence", vid,
                                      "拆分单位必须逐字来自该声音正文或其事实证据"))
             continue
-        row = next((r for r in vr.voices(answer)
-                    if r["id"] == vid and r["text"] == entry["text"]), None)
-        if row is None:
-            problems.append(_problem("allocation_voice_missing", vid, "当前稿里找不到该声音"))
+        event, beat = entry["event"], entry["beat"]
+        base = answer["events"][event]["beats"][beat]
+        if (str(base.get("voice_kind") or "") != str(entry.get("kind") or "")
+                or str(base.get("speaker") or "") != str(entry.get("speaker") or "")):
+            problems.append(_problem("allocation_voice_identity_mismatch", vid,
+                                     "候选来源与基线声音的说话人/种类不一致"))
             continue
-        event = row["event"]
-        # 当前稿里的位置 = 基线位置 + 本事件此前插入的条数
-        cur = row["beat"] + shifts.get(event, 0)
-        base_beat = result["events"][event]["beats"][cur]
-        base_beat["voice_text"] = texts[0]
-        made = [(event, cur)]
-        insert_at = cur + 1
-        for text in texts[1:]:
-            result["events"][event]["beats"].insert(insert_at, {
-                "text": base_beat.get("text") or "",
-                "purpose": base_beat.get("purpose") or "",
-                "source": text,
-                "voice_kind": base_beat.get("voice_kind") or "",
-                "voice_text": text,
-                "speaker": base_beat.get("speaker") or "",
-            })
-            made.append((event, insert_at))
-            insert_at += 1
-        # 基线位置映射：本事件里位于该声音之后的节拍整体后移
-        extra = len(texts) - 1
-        if extra:
-            for key in list(pos_map):
-                if key[0] == row["event"] + 1 and key[1] > row["beat"] + 1:
-                    pos_map[key] = (pos_map[key][0], pos_map[key][1] + extra)
-            shifts[event] = shifts.get(event, 0) + extra
-        positions[vid] = made
+        planned[vid] = {"texts": texts, "event": event, "beat": beat}
+    if problems:
+        return None, problems
+
+    # 1) 一次性重排每个事件的节拍，同时记录基线坐标 → 新坐标。
+    result = copy.deepcopy(answer)
+    newpos = {}
+    positions = {}
+    by_base = {(p["event"], p["beat"]): vid for vid, p in planned.items()}
+    for e, ev in enumerate(answer["events"]):
+        out_beats = []
+        for b, base in enumerate(ev["beats"]):
+            vid = by_base.get((e, b))
+            if vid is None:
+                newpos[(e, b)] = (e, len(out_beats))
+                out_beats.append(copy.deepcopy(base))
+                continue
+            texts = planned[vid]["texts"]
+            first = copy.deepcopy(base)
+            first["voice_text"] = texts[0]
+            newpos[(e, b)] = (e, len(out_beats))
+            out_beats.append(first)
+            made = [(e, len(out_beats) - 1)]
+            for text in texts[1:]:
+                nxt = copy.deepcopy(base)
+                nxt["voice_text"] = text
+                nxt["source"] = text
+                out_beats.append(nxt)
+                made.append((e, len(out_beats) - 1))
+            positions[vid] = made
+        result["events"][e]["beats"] = out_beats
+
+    # 2) 事实绑定按稳定坐标映射；显式 facts[].units 优先。
     fact_updates = {str(x.get("id")): x for x in (response.get("facts") or [])
                     if isinstance(x, dict) and set(x) == {"id", "units"}}
     for i, fact in enumerate(result["facts"]):
@@ -240,10 +249,15 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
                                          "事实单位引用不存在"))
                 continue
         else:
-            base_pos = (int(fact["event"]), int(fact["beat"]))
-            vid = next((v for v, ps in positions.items()
-                        if ps and ps[0] == pos_map.get(base_pos)), None)
-            targets = positions[vid] if vid else [pos_map.get(base_pos, base_pos)]
+            base_pos = (int(fact["event"]) - 1, int(fact["beat"]) - 1)
+            vid = by_base.get(base_pos)
+            if vid is not None:
+                targets = positions[vid]
+            elif fact.get("carriers"):
+                targets = [newpos.get((int(c["event"]) - 1, int(c["beat"]) - 1), base_pos)
+                           for c in fact["carriers"]]
+            else:
+                targets = [newpos.get(base_pos, base_pos)]
         fact["event"], fact["beat"] = targets[0][0] + 1, targets[0][1] + 1
         if len(targets) > 1:
             fact["carriers"] = [{"event": e + 1, "beat": b + 1} for e, b in targets]
@@ -251,7 +265,8 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
             fact.pop("carriers", None)
     if problems:
         return None, problems
-    # 明确的事实取舍：模型必须逐条给出 id 与非空原因；删除后计入内容缺口，不静默。
+
+    # 3) 明确的事实取舍。
     drop_rows = response.get("dropped_facts") or []
     if not isinstance(drop_rows, list):
         return None, [_problem("allocation_dropped_facts_invalid", "", "dropped_facts 必须是数组")]
@@ -273,7 +288,8 @@ def apply_voice_allocation(answer, response, ctx, *, novel_text, limits=None):
         result["facts"] = [f for i, f in enumerate(result["facts"], 1)
                            if "f%02d" % i not in set(drop_ids)]
         result["allocation_dropped_facts"] = dropped_info
-    # 预算修复：只在**条数**超限时删除无事实绑定的声音（不碰任何事实的承载）。
+
+    # 4) 预算清理：只清声音字段，保留节拍；不移动任何事实坐标。
     dropped = []
     while True:
         rows_now = vr.voices(result)

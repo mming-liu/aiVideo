@@ -47,7 +47,9 @@ def _answer(evidence=L1, all_voice_facts=False):
             {"claim": "乙摇头", "evidence": "乙摇头。", "event": 3, "beat": 2,
              "carrier": "visual"},
         ] + ([{"claim": "甲叮嘱乙小心", "evidence": "那你要小心些，风浪大时靠岸停一停。",
-               "event": 3, "beat": 1, "carrier": "voice"}] if all_voice_facts else []),
+               "event": 3, "beat": 1, "carrier": "voice"},
+              {"claim": "乙说明来意", "evidence": "我要连夜过河送药，不能再等了。",
+               "event": 2, "beat": 1, "carrier": "voice"}] if all_voice_facts else []),
     }
 
 
@@ -109,9 +111,74 @@ def test_line_budget_drops_only_a_fact_free_voice():
     assert problems == [] and cand is not None
     dropped = cand.get("allocation_dropped") or []
     assert len(dropped) == 1 and dropped[0]["text"]
+    # 只清声音，保留“甲叮嘱”的画面/来源/目的节拍
+    beat = cand["events"][dropped[0]["event"]]["beats"][dropped[0]["beat"]]
+    assert beat["text"] and beat["source"]
+    assert beat["voice_kind"] == "none" and beat["voice_text"] == ""
     plan, bprobs = lw.build_plan(cand, NOVEL)
     assert plan is not None and bprobs == []
     assert plan_acceptance_problems(plan, NOVEL) == []
+
+
+def test_multi_carrier_does_not_skip_narration_reverse_refs():
+    ans = {
+        "characters": ["甲"], "emotional_arc": "平", "climax": "无", "end_hook": "无",
+        "omittable": [],
+        "events": [
+            {"summary": "一", "beats": [
+                _b("旁白甲", "第一段。", "narration", "第一段旁白。", ""),
+                _b("旁白乙", "第二段。", "narration", "第二段旁白。", "")]},
+            {"summary": "二", "beats": [_b("画面", "第三段。")]},
+            {"summary": "三", "beats": [_b("画面", "第四段。")]},
+        ],
+        "facts": [{"claim": "两段旁白共同说明一件事。", "evidence": "第一段。第二段。",
+                   "event": 1, "beat": 1, "carrier": "voice",
+                   "carriers": [{"event": 1, "beat": 1}, {"event": 1, "beat": 2}]}],
+    }
+    plan, probs = lw.build_plan(ans, "第一段。第二段。第三段。第四段。")
+    assert plan is not None and probs == []
+    assert any("、" in f for f in plan["required_facts"])
+    assert plan["narration_lines"][0]["fact_refs"] == [1]
+    assert plan["narration_lines"][1]["fact_refs"] == [1]
+    plan["narration_lines"][1]["fact_refs"] = []
+    codes = [p.get("code") for p in plan_acceptance_problems(plan, "第一段。第二段。第三段。第四段。")]
+    assert any(c in codes for c in ("carrier_narration_fact_ref_missing",
+                                    "carrier_narration_fact_unregistered")), codes
+
+
+def test_response_order_does_not_move_text_or_speaker():
+    ans = {
+        "characters": ["甲", "乙"], "emotional_arc": "对峙", "climax": "争执",
+        "end_hook": "乙摇头", "omittable": [],
+        "events": [
+            {"summary": "渡口争执", "beats": [
+                _b("甲站在渡口", "黄昏时分，甲站在渡口。"),
+                _b("甲劝阻", "甲说道", "dialogue", L1, "甲"),
+                _b("乙回答", "乙说道", "dialogue", "我要连夜过河送药，不能再等了。", "乙")]},
+            {"summary": "甲再劝", "beats": [
+                _b("甲再劝", "甲说道", "dialogue", "那你要小心些，风浪大时靠岸停一停。", "甲")]},
+            {"summary": "乙摇头", "beats": [_b("乙摇头", "乙摇头。")]},
+        ],
+        "facts": [
+            {"claim": "甲劝乙", "evidence": L1, "event": 1, "beat": 2, "carrier": "voice"},
+            {"claim": "乙回答", "evidence": "我要连夜过河送药，不能再等了。", "event": 1, "beat": 3,
+             "carrier": "voice"},
+        ],
+    }
+    ctx = va.build_voice_choices(ans, NOVEL, limits={"single_shot_sec": 11, "max_sec": 90,
+                                                     "max_han": 280, "max_lines": 10})
+    d1 = next(u["unit"] for u in ctx["voices"]["D1"]["units"] if u["in_evidence"])
+    d2 = next(u["unit"] for u in ctx["voices"]["D2"]["units"] if u["in_evidence"])
+    # 模型先返回靠后的 D2，再返回靠前的 D1
+    cand, problems = va.apply_voice_allocation(
+        ans, {"voices": [{"id": "D2", "units": [d2]}, {"id": "D1", "units": [d1]}], "facts": []},
+        ctx, novel_text=NOVEL)
+    assert problems == [] and cand is not None
+    e1 = cand["events"][0]["beats"]
+    assert e1[1]["speaker"] == "甲" and e1[2]["speaker"] == "乙"
+    assert e1[1]["voice_text"] == ctx["voices"]["D1"]["units"][int(d1.split("c")[1]) - 1]["text"]
+    assert e1[2]["voice_text"] == ctx["voices"]["D2"]["units"][int(d2.split("c")[1]) - 1]["text"]
+    assert e1[1]["voice_text"] != e1[2]["voice_text"]
 
 
 def test_dropped_facts_are_explicit_and_removed():
