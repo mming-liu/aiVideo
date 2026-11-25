@@ -115,7 +115,7 @@
 | 旧身份（基线 `novel_digest` 篡改） | `realloc_base_identity_invalid` |
 | 旧核验结果（基线带 `plan_verification=supported`） | 候选丢弃该记录，`content_verification=not_run` |
 
-7. **副作用**：48 项保护文件哈希前后一致；`candidate_plan.json` 未被覆盖；隔离输出目录无正式缓存写入。
+7. **副作用**：45 项有基线保护文件哈希前后一致（另 3 项无任务前基线单列于 `unverified_no_baseline`）；`candidate_plan.json` 未被覆盖；隔离输出目录无正式缓存写入。
 
 测试（纳入版本管理、匿名自足）：
 
