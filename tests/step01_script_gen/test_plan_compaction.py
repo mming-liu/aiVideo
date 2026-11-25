@@ -2,7 +2,7 @@
 """S27/S30: deterministic visual-beat compaction (no model, no chapter data)."""
 from __future__ import annotations
 
-from tools.compact_plan_visual_beats import merge_visual_beats
+from tools.compact_plan_visual_beats import merge_visual_beats, speaker_map_for_view
 
 
 def _beat(uid, kind, text):
@@ -45,3 +45,14 @@ def test_single_visual_beats_are_not_merged():
     candidate, mapping, meta = merge_visual_beats(_view(), group_size=3)
     assert mapping == {}
     assert meta["beats_after"] == meta["beats_before"] == 4
+
+
+def test_speaker_map_drops_orphan_plan_units():
+    """合并后视图只剩 d1；计划里孤立的 d2 不得继续声明，否则编译拒收."""
+    view = _view()
+    view["dialogue_units"] = [{"uid": "d1", "text": "钥匙给我"}]
+    plan = {"voice_units": [
+        {"unit_uid": "d1", "speaker": "甲", "source_kind": "novel_speech"},
+        {"unit_uid": "d2", "speaker": "乙", "source_kind": "novel_speech"},
+    ]}
+    assert speaker_map_for_view(view, plan) == {"d1": "甲"}

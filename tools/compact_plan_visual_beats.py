@@ -103,6 +103,24 @@ def merge_visual_beats(view: dict, *, group_size: int = 2) -> tuple:
     }
 
 
+def speaker_map_for_view(view: dict, plan: dict) -> dict[str, str]:
+    """只保留候选视图仍有声音单元的说话人；旧计划的孤立 uid 不得带入."""
+    present: set[str] = set()
+    for key in ("dialogue_units", "narration_units"):
+        for unit in view.get(key) or []:
+            if isinstance(unit, dict):
+                uid = str(unit.get("unit_uid") or unit.get("uid") or "")
+                if uid:
+                    present.add(uid)
+    return {
+        str(u.get("unit_uid")): str(u.get("speaker") or "")
+        for u in (plan.get("voice_units") or [])
+        if str(u.get("unit_uid") or "") in present
+        and str(u.get("source_kind") or "") == "novel_speech"
+        and str(u.get("speaker") or "")
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--plan", type=Path, required=True)
@@ -118,12 +136,9 @@ def main() -> int:
     if bad:
         raise SystemExit("基线计划视图不合法：%s" % bad[:3])
     candidate_view, mapping, meta = merge_visual_beats(view, group_size=args.group_size)
-    # 计划声明的说话人按 uid 原样带入；不从正文猜。
-    candidate_view["voice_speakers"] = {
-        str(u.get("unit_uid")): str(u.get("speaker") or "")
-        for u in (plan.get("voice_units") or [])
-        if str(u.get("source_kind") or "") == "novel_speech" and str(u.get("speaker") or "")
-    }
+    # 只声明候选视图**实际还有**的声音单元的说话人；合并/去重可能删掉旧 uid，
+    # 从原计划整表带入会触发 `realloc_speaker_invalid`（ch1 实测 d07）。
+    candidate_view["voice_speakers"] = speaker_map_for_view(candidate_view, plan)
     candidate, problems, changes = compile_reallocated_plan(
         plan, candidate_view, novel_text=novel)
     payload = {"accepted": candidate is not None, "meta": meta,
