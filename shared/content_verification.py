@@ -152,11 +152,7 @@ def plan_digest_of(plan) -> str:
 #: 与诊断元数据（它们的变化是"过程变了"，不是"内容变了"）。
 _NON_CONTENT_KEYS = frozenset({"plan_verification", "verification_rejected",
                                "plan_revision", "plan_replan",
-                               "plan_contract_version",
-                               # S27/S29：轻量/统一身份块是**过程状态**（合同版本、原文摘要、
-                               # 是否已核验），不是候选内容。把 `not_run → verified` 写进
-                               # 内容摘要会让刚核验过的候选与它自己的记录摘要不符。
-                               "lightweight_plan"})
+                               "plan_contract_version"})
 
 
 def view_candidate(view, plan) -> dict:

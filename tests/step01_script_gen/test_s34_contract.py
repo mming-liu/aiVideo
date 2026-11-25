@@ -111,7 +111,6 @@ def test_unified_entry_cache_identity_and_contract(tmp_path, monkeypatch):
         import copy
         out = copy.deepcopy(candidate)
         out["plan_verification"] = {"status": "ok"}
-        out["lightweight_plan"]["content_verification"] = "verified"
         return out, [], {"used": 1}
 
     monkeypatch.setattr(up, "plan_source_setting", lambda source=None: "lightweight")
@@ -129,13 +128,13 @@ def test_unified_entry_cache_identity_and_contract(tmp_path, monkeypatch):
     assert second["source"] == "cache" and second["cache"]["unified_hit"] is True
 
 
-def test_verified_block_does_not_change_content_digest():
+def test_verification_record_does_not_change_content_digest():
     from shared.content_verification import plan_digest_of
     plan = {"required_facts": [], "dialogue_lines": [], "shot_beats": [],
             "lightweight_plan": {"contract_version": "lightweight_outline.v1",
                                  "content_verification": "not_run"}}
     before = plan_digest_of(plan)
-    plan["lightweight_plan"]["content_verification"] = "verified"
+    plan["plan_verification"] = {"status": "ok"}
     assert plan_digest_of(plan) == before
 
 

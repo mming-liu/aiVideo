@@ -11,8 +11,8 @@
 | 代码落盘 | 完成：时长/声音统一配置、统一规划入口、验证接线、共同事务、镜头设计结果、缓存身份 | `shared/config.py`、`step01_script_gen/unified_plan.py`、`plan_transaction.py`、`orchestrator/regen.py` |
 | 离线验收 | 新增 6 条契约测试通过；`tests/step01_script_gen` 4756 passed／`tests/shared` 1564 passed | `tests/step01_script_gen/test_s34_contract.py` |
 | 离线回放 | 完成：两章原始稿在旧/新时长带各回放一次，0 模型调用 | `.tmp/s26/s28_replay_summary.json`、`.tmp/s26/s28_report.md` |
-| 真实计划 | 受控样本通过统一入口 + `VerificationController`（`plan_verification.status=ok`），计划 9 事实／2 声音／9 节拍；第二章轻量源与 legacy 源均未通过 | `.tmp/s26/real_sample/`、`.tmp/s26/real/` |
-| 真实分镜 | 实际候选入口（含台词/事件/结构门与重试）产出 1 个候选：9 镜／39.0s、`plan_refs` 9/9、`check_event_contract=true`；但质量分 73、BLOCK、时长低于 60s，**不可消费** | `.tmp/s26/real_sample/candidate_storyboard.json`、`step01_candidates.log` |
+| 真实计划 | 受控样本通过统一入口 + `VerificationController`（9 事实／2 声音／9 节拍）；第二章 S23 verified plan 回挂新带后 `plan_acceptance_problems=[]`、生成前 `feasible` | `.tmp/s26/real_sample/`、`.tmp/s26/ch2_verified_plan.json` |
+| 真实分镜 | 受控样本 9 镜／39.0s（BLOCK）；第二章实际候选 20 镜／130.5s、契约通过但 6 类 blocking；完整 main 链 20 镜／140s＋钩子、`commit=BLOCK`；**无可直接消费候选** | `.tmp/s26/real_sample/candidate_storyboard.json`、`.tmp/s26/ch2_story/`、`.dsh/step01_budget_frozen/20261126T002932-27928/` |
 | 正式产物 | **未触碰**：10 个冻结输入 + 391 个正式/图片保护文件 SHA-256 无变化 | `.tmp/s26/protection_check.json` |
 | 图片／视频 | 未发起；下游资产仅给准备清单，不冒充可消费 | 见 §八 |
 
@@ -118,7 +118,40 @@
 
 最终全量（工作树）：`tests/step01_script_gen` **4756 passed / 294 skipped / 4 xfailed**（188s），`tests/shared` **1564 passed / 1 skipped**（17s）；新增契约测试 6 passed。skip 主要来自缺少归档回放 harness/外部数据集，属既有边界。
 
-干净检出：`git worktree add --detach .tmp/s26/clean 5f85b3a`（代码提交；之后仅文档 amend 为 `cd3a52a`，代码树未变），运行**已跟踪**的受影响测试（`test_s34_contract` / `test_duration_band` / `test_lightweight_plan` / `test_voice_allocation` / `test_compile_reallocated_plan` / `tests/shared/test_content_verification.py`）→ **184 passed**（9.5s），JUnit 证据 `.tmp/s26/clean_junit.xml`。注意：`test_redguo_duration_guard.py` 在 `.gitignore` 的测试白名单里未入库，干净检出无法收集，故未计入；这属于既有测试入库边界，不是本包新增失败。
+干净检出：`git worktree add --detach .tmp/s26/clean2 9227c6f`（第二轮代码提交；早期 `5f85b3a` 的 184 passed 见 `.tmp/s26/clean_junit.xml`），运行**已跟踪**的受影响测试（`test_s34_contract` / `test_duration_band` / `test_lightweight_plan` / `test_voice_allocation` / `test_compile_reallocated_plan` / `tests/shared/test_content_verification.py`）→ **184 passed**（10.9s），JUnit 证据 `.tmp/s26/clean2_junit.xml`。注意：`test_redguo_duration_guard.py` 在 `.gitignore` 的测试白名单里未入库，干净检出无法收集，故未计入；这属于既有测试入库边界，不是本包新增失败。
+
+## 七bis、第二轮真实推进：第二章 verified plan 与超时修订（2026-11-26）
+
+### 7bis.1 第二章计划在新时长带重新通过
+
+S23 的 `VerificationController` 记录原绑定 `ad5ce471…`。第一轮曾把 `lightweight_plan` 整块加入非内容摘要，导致旧记录被判 `verify_digest_mismatch`；本轮撤回该改动，改为**不改身份块**，只在计划上挂 `plan_verification`。同时修正两处：
+
+- 多承载事实的结构校验不再以“轻量/无核验”为条件；verified 计划也走完整多承载集合核对。
+- 多承载递归只做单载体结构校验（`require_verification=False`），避免在收缩副本上误报摘要不符；完整记录的检查留在完整计划末尾。
+
+结果：`plan_acceptance_problems(ch2_verified_plan)` 返回 `[]`，`check_plan_before_generation` 在新带 `feasible`；产物 `.tmp/s26/ch2_verified_plan.json`。
+
+### 7bis.2 真实分镜候选仍然超时
+
+从同一计划经实际 `_generate_script_candidates` 入口生成：
+
+| 次数 | 结果 |
+|---|---|
+| 第 1 次完整候选 | 20 镜／130.5s，`plan_refs` 20/20、事件契约通过；质量 82、BLOCK；6 类 blocking（duration、kf、weapon_holder 等） |
+| 超时修订第 1 次 | 128.0s；未通过不退化验收（武器锚点退化、关键词丢失），**保留 130.5s 基线** |
+| 超时修订第 2 次 | 140.5s，反而更差；**保留基线** |
+| 从 verified plan 走完整 `main()`（20 次发送上限、2 轮审计） | 20 镜／140.0s＋钩子 10.6s；6 镜未解决，运行预算不足，`commit=BLOCK`；冻结候选 `.dsh/step01_budget_frozen/20261126T002932-27928/`，正式产物未替换 |
+
+结论：S30 的“无改善保留基线”有效；“>120s 重新安排”在真实模型上没有收敛到合法稿。继续同一提示/同一计划重试属于无效加码，需先改计划节拍/镜头安排，而不是继续加提示或加预算。
+
+### 7bis.3 既有收口稿在新带下的复核
+
+| 稿件 | 镜数／时长 | 结果 |
+|---|---:|---|
+| ch1 `.tmp/s14b/runs/s18_final/storyboard.json` | 14／84.5s | 时长合法；blocking 5 类（kf_event_window、kf_segment、kf_temporal、multi_person、shot_duration_below_min），不可直接消费 |
+| ch2 `.tmp/s19_ch2/s24_final_storyboard.json` | 12／88.625s | 时长合法；blocking 3 类（kf_event_window、layout_presence_gap、weapon_holder），不可直接消费 |
+
+因此“时长放宽”只解除了时长门，**没有自动解除关键帧/布局/武器持有等阻塞**；这正是不能用“总时长通过”替代全稿验收的证据。
 
 ## 八、S32 有限真实验证（只列已发生的事实）
 
@@ -126,6 +159,10 @@
 |---|---|---|---:|
 | 轻量统一计划（第二章冻结原文，新带/12/360） | 第二章 4516 字 | 2 次回答均不合格：18 声音/8 事实，`budget_unrepresentable` 多条；修订又把 `unfixable` 写成非法形状 | 2 |
 | legacy 统一计划（第二章，新带） | 同上 | 9 事实/9 节拍，但核验 4 次后额度耗尽，`verification_failed` | 4+ |
+| 第二章 S23 记录回挂（新带） | `.tmp/s19_ch2/candidate_plan.json` | 12 事实／10 声音／20 节拍，`plan_acceptance_problems=[]`，生成前 `feasible` | 0 |
+| 第二章实际候选（新带） | 上述 verified plan | 20 镜／130.5s，`plan_refs` 20/20、事件契约通过；质量 82、BLOCK、6 类 blocking | 1 |
+| 第二章超时修订 | 130.5s 候选 | 第 1 次 128.0s，因武器/关键词退化拒收；第 2 次 140.5s，无改善；均保留 130.5s 基线 | 2 |
+| 第二章完整 main 链 | 上述 verified plan | 20 镜／140.0s＋钩子 10.6s；`commit=BLOCK`，冻结候选，正式产物未替换 | 5 |
 | 受控样本统一计划 | 4 句匿名账册情节 | **成功**：9 事实／2 声音／9 节拍，`plan_verification.status=ok`，验收空 | 1 计划 + 核验 |
 | 受控样本单候选直调 | 同一已验证计划 | 9 镜／40.0s，`plan_refs` 整稿缺失，`check_event_contract=false` | 1 完整生成 |
 | 受控样本**实际候选入口** | 同一已验证计划 | 第 1 次响应 710 个 shots 元素中 702 个非对象，判解析失败；第 2 次通过结构门与事件契约（9/9 `plan_refs`），但 9 镜／39.0s、评分 73、BLOCK | 2 完整生成 |
@@ -137,11 +174,11 @@
 - 9 节拍被压成 9 镜、总时长 39s，是“按节拍逐条拍一镜”的典型塌缩；本包未用静默加秒/合镜掩盖，保留为真实质量风险。
 - 第二章轻量/legacy 两次失败分别暴露选材/预算与核验额度问题，不能据此推算成功率，也不能宣称章节不可行。
 - 真实 A/B（同一第二章计划只换 60–90 与 60–120 各生成一次）**未执行**；当前只有离线 A/B 回放，不能冒充真实收益对照。
-- 用户已授权的订阅通道为 `agent_plan` / `deepseek-v4.1-flash` / `https://opencode.ai/inference/go/openai/v1`；本包未使用 DeepSeek 官方按次计费 API。已并入统一账本的真实调用 17 条（`real` 14 + `real_sample` 3，含核验重试）；另有受控样本的直调/实际候选各 1 次完整生成由各自脚本发起、未并入该账本。**0 图片、0 视频付费调用**。
+- 用户已授权的订阅通道为 `agent_plan` / `deepseek-v4.1-flash` / `https://opencode.ai/inference/go/openai/v1`；本包未使用 DeepSeek 官方按次计费 API。已并入账本的真实调用 **23 条**（`real` 14 + `real_sample` 3 + ch2 直调 1 + ch2 完整链 5，含核验重试）；另有受控样本实际候选 1 次、ch2 超时修订 2 次由各自脚本发起、未并入这些账本。**0 图片、0 视频付费调用**。
 
 ## 九、S33 下游准备与正式采纳边界
 
-- **可消费候选：** 受控样本计划（9 事实/2 声音/9 节拍）已具备统一身份与核验记录；实际候选入口产出的 9 镜分镜虽声明了 9/9 `plan_refs` 且事件契约通过，但只有 39.0s（<60s）且质量分 73/BLOCK，**不能进入 Step02a 批量生图**；需真实重生成/结构修订把内容补足后再评。
+- **可消费候选：** 第二章 verified plan（12 事实／10 声音／20 节拍、66.7s 下界）已在新带通过计划验收与生成前门；但由它生成的实际分镜为 20 镜／130.5s（完整 main 链 140s＋钩子），超上限且质量 BLOCK，**不能进入 Step02a 批量生图**。受控样本计划同样只到计划层；其 9 镜／39s 分镜也不足 60s。当前可交付的是**计划 + 真实失败/拒绝证据**，不是媒体候选。
 - **正式产物：** 未覆盖、未切换全局配置、未更新采纳收据；旧正式章继续用自己的 60–90／70–80／10／280 身份。
 - **资产/帧清单：** 受控样本需要 2 个角色（管理员、助手）、档案室/铁柜/工位台灯/备用钥匙等场景与道具；首尾帧数量按最终分镜镜数计算，**当前分镜不合法，不生成帧清单**。第一、二章沿用既有候选/收口稿，不因本次代码变更自动重做。
 - **费用：** 图片按实际帧数×模型档位、视频按每镜秒数×模型单价另算；本包没有可验证的统一涨幅，不写“增加 25%–35%”。
@@ -155,6 +192,8 @@
 4. 干净检出对账未做；当前全量测试仍需在交付提交上复跑并逐用例报告新增失败。
 5. `char_layout.surface`、运镜/景别、关键帧锚点等顾问项仍在；未做 Step02a 消费、图片复用和费用清单。
 6. S27 的“合并”目前是**合同/核验/入口层归一**（legacy 与 lightweight 两种来源），还不是单一提示同时产出“因果/动机/资产 + 紧凑声音归属”的一次请求；该提示级合并未做，不能记为已完成。
+7. 第二章当前计划的内容下限 66.7s，真实分镜却按“20 节拍≈20 镜×6.5-7s”落到 130-140s；两次超时修订（128/140.5s）一次退化、一次变差。继续同提示重试已无收益，下一步应先改**计划节拍/镜头安排**（合并同场连续节拍、明确每镜承载多节拍），不是继续加提示或加发送预算。
+8. 受控样本只有 4 句原文，模型自然落到 39s；它不能证明真实章节的时长能力，也不能用“补空镜/加秒”凑到 60s。
 
 ## 十一、代码与证据索引
 

@@ -75,10 +75,9 @@ def _read_cache(path, key: str, novel_text: str):
     plan = data.get("outline")
     if not isinstance(plan, dict):
         return None
-    block = plan.get("lightweight_plan")
-    if not isinstance(block, dict) or block.get("content_verification") != "verified":
-        return None
     if not isinstance(plan.get("plan_verification"), dict):
+        return None
+    if str((plan.get("plan_verification") or {}).get("status") or "") != "ok":
         return None
     if plan_acceptance_problems(plan, novel_text):
         return None
@@ -150,8 +149,8 @@ def _attach_verification(plan, novel_text, *, model=None, deadline_monotonic=Non
     if not isinstance(block, dict):
         return None, [{"code": "unified_identity_missing", "path": "lightweight_plan",
                        "reason": "统一入口要求轻量计划身份块"}], controller.as_dict()
-    block["content_verification"] = "verified"
-    block["verification_rule_version"] = VERIFY_RULE_VERSION
+    # 不在身份块里写 `verified`：该块参与内容摘要，把核验状态写进去会让记录绑定
+    # 摘要与候选摘要不一致。核验是否成立由 `plan_verification` 记录本身证明。
     problems = list(plan_acceptance_problems(candidate, novel_text) or [])
     return (candidate if not problems else None), problems, controller.as_dict()
 
@@ -238,11 +237,10 @@ def generate_unified_outline_result(
                      "统一验收未通过：%s"
                      % "；".join(str(p.get("code") or "") for p in problems[:4]),
                      problems=problems)
-    _block = plan.get("lightweight_plan") if isinstance(plan, dict) else None
-    if (path is not None and isinstance(_block, dict)
-            and _block.get("content_verification") == "verified"
+    if (path is not None
             and isinstance(plan.get("plan_verification"), dict)
-            and plan.get("plan_verification")):
+            and plan.get("plan_verification")
+            and str((plan.get("plan_verification") or {}).get("status") or "") == "ok"):
         error = _write_cache(path, key, plan)
         result["cache"]["unified_written"] = not error
         result["cache"]["unified_write_error"] = error or None

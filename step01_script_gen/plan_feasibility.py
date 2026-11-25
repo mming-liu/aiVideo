@@ -3894,11 +3894,11 @@ def plan_contract_records(plan, *, novel_text: str = "",
             return _voice_order + [_problem_record(
                 "lightweight_plan_identity_invalid", "plan", None, "lightweight_plan",
                 "轻量计划身份不成立（%s）——不能凭验收版本号免除内容核验记录" % _lw_bad)]
-        # S27/S29：统一入口完成独立内容核验后把该块置为 verified；从这一刻起
-        # 计划不再享受"轻量计划按设计免核验"的豁免，必须走完整记录验收。
-        _blk = plan.get("lightweight_plan") or {}
-        _lightweight = (str(_blk.get("content_verification") or "not_run")
-                        != "verified")
+        # S27/S29：计划带 `plan_verification` 记录后，不再享受"轻量计划按设计
+        # 免核验"的豁免；没有记录（或空记录）时仍按原轻量合同走确定性验收。
+        # 不靠修改身份块来标记状态——身份块参与内容摘要，改它会破坏记录绑定。
+        _rec = plan.get("plan_verification")
+        _lightweight = not (isinstance(_rec, dict) and _rec)
     facts = [str(f) for f in (plan.get("required_facts") or [])]
     if not facts:
         return _voice_order   # 必保留事实清单本身为空 = 计划不合格，归 `_validate_outline`
@@ -3906,7 +3906,7 @@ def plan_contract_records(plan, *, novel_text: str = "",
     lines = plan_dialogue_lines(plan)
     # S13（2026-11-24）：轻量计划的多承载事实走**结构**校验；单承载事实仍走下面的完整
     # 旧路径（语义交集判据不变）。多承载只在隔离实验里出现，v1 缓存不会被它命中。
-    if _lightweight and any("、" in fact_carrier(f) for f in facts):
+    if any("、" in fact_carrier(f) for f in facts):
         # 多承载不能绕过已有身份/反向引用；在**完整载体集合**上核对双向引用，
         # 不能把多承载事实逐个伪装成单承载计划（会人为拆散 narration refs）。
         _multi = _lightweight_multi_carrier_records(
@@ -3933,9 +3933,12 @@ def plan_contract_records(plan, *, novel_text: str = "",
         for _k, _line in enumerate([dict(x) for x in _narrs], 1):
             _line["fact_refs"] = [_i for _i, _k2 in _first_narr.items() if _k2 == _k]
             _patched_narr.append(_line)
+        # 递归只做**单载体结构**校验：这里传的是收缩后的计划副本，核验记录绑的
+        # 是完整计划摘要，若在副本上查记录必然报 digest mismatch。完整计划的核验
+        # 记录在函数末尾 `_semantic_verification_records` 统一检查。
         _legacy = plan_contract_records(
             dict(plan, required_facts=_reduced, narration_lines=_patched_narr),
-            novel_text=novel_text, require_verification=require_verification)
+            novel_text=novel_text, require_verification=False)
         # 完整集合上的双向引用：每个旁白承载都要登记该事实；每条 refs 都要有承载。
         for _i, _ks in _all_narr.items():
             for _k in sorted(_ks):
