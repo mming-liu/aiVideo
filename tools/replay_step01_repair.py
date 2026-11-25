@@ -163,6 +163,24 @@ def _validate_manifest(manifest: dict) -> dict:
         raise SystemExit("[ABORT] 原文摘要不符：%s != %s" % (out["novel"]["sha256"], want))
     text = raw.decode("utf-8-sig")
     out["novel"]["digest"] = _normalized_novel_digest(text)
+    # 可选：显式章文本（已从原文抽出的**当前章正文**）。给了它就不再从整本小说
+    # 重新抽取——冻结计划绑的是这份正文，重新抽取的空白/章节头规范化会改摘要。
+    text_path = str(manifest["novel"].get("text_path") or "").strip()
+    if text_path:
+        tp = Path(text_path).resolve()
+        if not tp.is_file():
+            raise SystemExit("[ABORT] 章文本不存在：%s" % tp)
+        raw_text = tp.read_bytes()
+        out["novel"]["text_path"] = str(tp)
+        out["novel"]["text_sha256"] = hashlib.sha256(raw_text).hexdigest()
+        want_text = str(manifest["novel"].get("text_sha256") or "")
+        if want_text and out["novel"]["text_sha256"] != want_text:
+            raise SystemExit("[ABORT] 章文本摘要不符")
+        out["novel"]["text_digest"] = _normalized_novel_digest(
+            raw_text.decode("utf-8-sig"))
+        want_text_digest = str(manifest["novel"].get("text_digest") or "")
+        if want_text_digest and out["novel"]["text_digest"] != want_text_digest:
+            raise SystemExit("[ABORT] 章文本归一摘要不符")
     want_digest = str(manifest["novel"].get("digest") or "")
     if want_digest and out["novel"]["digest"] != want_digest:
         raise SystemExit("[ABORT] 原文归一摘要不符")
@@ -294,8 +312,12 @@ def _run_manifest(manifest: dict, *, dry_run: bool, max_sends_override: int | No
         payload = {"issues": payload}
     novel = Path(checked["novel"]["path"]).read_bytes().decode("utf-8-sig")
     from shared.chapter_reader import extract_section
-    novel_text = extract_section(str(Path(checked["novel"]["path"]).resolve()),
-                                 int(checked["scope"]["chapter"]))
+    if checked["novel"].get("text_path"):
+        novel_text = (Path(checked["novel"]["text_path"]).read_bytes()
+                      .decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n"))
+    else:
+        novel_text = extract_section(str(Path(checked["novel"]["path"]).resolve()),
+                                     int(checked["scope"]["chapter"]))
     if not novel_text:
         raise SystemExit("[ABORT] 原文里找不到第 %s 章" % checked["scope"]["chapter"])
 
