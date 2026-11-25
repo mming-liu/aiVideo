@@ -2,6 +2,7 @@
 """S12 复合来源修正：逐字证据、拆分谱系、拒收对照."""
 from __future__ import annotations
 
+from step01_script_gen import content_verify as cv
 from step01_script_gen import lightweight_plan as lw
 from step01_script_gen.source_claim_fix import apply_source_correction
 
@@ -47,6 +48,8 @@ def test_split_into_two_verbatim_children_keeps_position_and_lineage():
     assert len(out["source_splits"][0]["children"]) == 2
     view = lw.build_view(out)
     assert view["plan_basis"]["source_splits"][0]["parent_claim"].startswith("门外来了一个")
+    prompt = cv.build_verification_prompt(view, novel_text=NOVEL)
+    assert "来源修正父主张" in prompt and "parent_claim" in prompt
 
 
 def test_evidence_must_be_verbatim():

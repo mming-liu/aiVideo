@@ -3929,6 +3929,19 @@ def plan_contract_records(plan, *, novel_text: str = "",
                             "多承载事实 F%d 的旁白承载 N%d 未在 fact_refs 反向登记"
                             % (_i, _parsed[2]),
                             "计划契约：旁白承载必须反向登记事实编号"))
+                # 其余承载也要过**同一套**旧语义/关系检查：把目标承载替换成该条，
+                # 其他多承载退回首项，再跑一次完整旧路径。
+                if len(_parts) > 1:
+                    _patched = []
+                    for _j, _g in enumerate(facts, 1):
+                        _gd = fact_carrier(_g)
+                        if "、" in _gd:
+                            _use = _p if _j == _i else _gd.split("、")[0]
+                            _g = _g.replace("｜承载：" + _gd, "｜承载：" + _use)
+                        _patched.append(_g)
+                    _multi.extend(plan_contract_records(
+                        dict(plan, required_facts=_patched), novel_text=novel_text,
+                        require_verification=require_verification))
         _seen, _out = set(), []
         for _r in _multi + _legacy:
             _k = (_r.get("code"), _r.get("kind"), _r.get("index"), _r.get("path"))

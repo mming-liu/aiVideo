@@ -456,6 +456,10 @@ def build_verification_prompt(view, *, novel_text="", novel_digest="",
     from step01_script_gen.plan_coherence import prompt as coherence_prompt
     from step01_script_gen.source_revision import prompt as preservation_prompt
     result=chr(10).join(_lines) + coherence_prompt(view) + preservation_prompt(view)
+    _splits = (view.get("plan_basis") or {}).get("source_splits")
+    if isinstance(_splits, list) and _splits:
+        result += ("\n\n【来源修正父主张（只用于判断子事实是否删掉核心，不得新增事实）】\n"
+                   + json.dumps(_splits, ensure_ascii=False))
     if source_catalog is not None:
         from step01_script_gen.source_references import instruction
         result+=instruction(source_catalog)
