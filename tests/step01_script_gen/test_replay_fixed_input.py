@@ -142,6 +142,34 @@ def test_output_base_inside_production_output_is_rejected(tmp_path):
     assert "output" in (proc.stderr + proc.stdout)
 
 
+def test_manifest_duration_band_is_applied_before_import(tmp_path):
+    """修复回放必须用 manifest 的时长带，不能沿用安装目录的旧默认."""
+    import os
+    from tools import replay_step01_repair as tool
+
+    keys = ("DURATION_MIN_SEC", "DURATION_MAX_SEC",
+            "DURATION_TARGET_MIN_SEC", "DURATION_TARGET_MAX_SEC")
+    old = {k: os.environ.get(k) for k in keys}
+    try:
+        checked = {
+            "scope": {"novel_name": "测试书", "book_index": 1,
+                      "book_name": "测试卷", "chapter": 1},
+            "budget": {"min": 60, "max": 120, "target_min": 85, "target_max": 110},
+            "channel": {},
+        }
+        tool._apply_manifest_env({}, checked, tmp_path / "iso")
+        assert os.environ["DURATION_MIN_SEC"] == "60"
+        assert os.environ["DURATION_MAX_SEC"] == "120"
+        assert os.environ["DURATION_TARGET_MIN_SEC"] == "85"
+        assert os.environ["DURATION_TARGET_MAX_SEC"] == "110"
+    finally:
+        for key, value in old.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def test_send_counter_enforces_the_boundary_cap(monkeypatch):
     import requests
     from tools import replay_step01_repair as tool

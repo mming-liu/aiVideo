@@ -199,6 +199,11 @@ def _validate_manifest(manifest: dict) -> dict:
         "repair_rounds": int(budget.get("repair_rounds") or 2),
         "audit_rounds": int(budget.get("audit_rounds") or 2),
     }
+    # 时长带是**身份**，不是安装目录的全局默认。审核/质量门与修复必须和后端一致；
+    # 显式给出时在导入业务模块前应用，未给则保持项目默认。
+    for key in ("min", "max", "target_min", "target_max"):
+        if budget.get(key) is not None:
+            out["budget"][key] = float(budget[key])
     if out["budget"]["max_sends"] < 1:
         raise SystemExit("[ABORT] budget.max_sends 必须 ≥ 1")
     out["scope"] = dict(manifest["scope"])
@@ -222,6 +227,13 @@ def _apply_manifest_env(manifest: dict, checked: dict, output_base: Path) -> Non
         "BOOK_NAME": str(scope["book_name"]),
         "NOVEL_CHAPTER": str(scope["chapter"]),
     }
+    budget = checked.get("budget") or {}
+    band_env = {"min": "DURATION_MIN_SEC", "max": "DURATION_MAX_SEC",
+                "target_min": "DURATION_TARGET_MIN_SEC",
+                "target_max": "DURATION_TARGET_MAX_SEC"}
+    for key, env_name in band_env.items():
+        if budget.get(key) is not None:
+            env[env_name] = str(budget[key])
     channel = checked.get("channel") or {}
     if channel.get("provider"):
         env["TEXT_PROVIDER"] = str(channel["provider"])

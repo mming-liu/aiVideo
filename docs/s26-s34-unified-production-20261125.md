@@ -12,7 +12,7 @@
 | 离线验收 | 新增 6 条契约测试通过；`tests/step01_script_gen` 4756 passed／`tests/shared` 1564 passed | `tests/step01_script_gen/test_s34_contract.py` |
 | 离线回放 | 完成：两章原始稿在旧/新时长带各回放一次，0 模型调用 | `.tmp/s26/s28_replay_summary.json`、`.tmp/s26/s28_report.md` |
 | 真实计划 | 受控样本通过统一入口 + `VerificationController`（9 事实／2 声音／9 节拍）；第二章 S23 verified plan 回挂新带后 `plan_acceptance_problems=[]`、生成前 `feasible` | `.tmp/s26/real_sample/`、`.tmp/s26/ch2_verified_plan.json` |
-| 真实分镜 | 受控样本 9 镜／39.0s（BLOCK）；第二章原计划 20 镜／130.5s（BLOCK）；**合并节拍后 14 节拍计划生成 14 镜／116.5s，时长首次合法**，仍 15 条质量 blocking，`commit=BLOCK` | `.tmp/s26/ch2_story/`、`.tmp/s26/compact3_story/`、`.tmp/s26/compact3_full/` |
+| 真实分镜 | 受控样本 9 镜／39.0s（BLOCK）；第二章原计划 20 镜／130.5s（BLOCK）；**14 节拍计划生成 14 镜／116.5s，时长合法，定点修复后确定性质量门 0 blocking**；最终语义审计仍 3 条，`commit=BLOCK` | `.tmp/s26/ch2_compact3_legal_116_5.json`、`.tmp/s26/compact3_final3/` |
 | 正式产物 | **未触碰**：10 个冻结输入 + 391 个正式/图片保护文件 SHA-256 无变化 | `.tmp/s26/protection_check.json` |
 | 图片／视频 | 未发起；下游资产仅给准备清单，不冒充可消费 | 见 §八 |
 
@@ -118,6 +118,7 @@
 
 最终全量（工作树）：`tests/step01_script_gen` **4756 passed / 294 skipped / 4 xfailed**（188s），`tests/shared` **1564 passed / 1 skipped**（17s）；新增契约测试 6 passed。skip 主要来自缺少归档回放 harness/外部数据集，属既有边界。
 
+干净检出（最终工具修复 `cb6729b`）：`test_replay_fixed_input` / `test_plan_compaction` / `test_s34_contract` → **14 passed**。较早的完整受影响组在 `8d6e88a` 上为 **191 passed**。
 干净检出：`git worktree add --detach .tmp/s26/clean3 8d6e88a`（第三轮代码提交），运行**已跟踪**的受影响测试（`test_plan_compaction` / `test_replay_fixed_input` / `test_s34_contract` / `test_duration_band` / `test_lightweight_plan` / `test_voice_allocation` / `test_compile_reallocated_plan` / `tests/shared/test_content_verification.py`）→ **191 passed**（11.8s），JUnit 证据 `.tmp/s26/clean3_junit.xml`。注意：`test_redguo_duration_guard.py` 在 `.gitignore` 的测试白名单里未入库，干净检出无法收集，故未计入；这属于既有测试入库边界，不是本包新增失败。
 
 ## 七bis、第二轮真实推进：第二章 verified plan 与超时修订（2026-11-26）
@@ -162,11 +163,12 @@ S23 的 `VerificationController` 记录原绑定 `ad5ce471…`。第一轮曾把
 | 16 节拍 | 16 | 125.0s | 通过 | 仍超 120s，BLOCK |
 | **14 节拍** | **16** | **115.0s** | 通过 | **时长首次合法**；质量 90，但仍 7 类 blocking |
 | 14 节拍 + 完整 main 链（2 轮修复） | 14 | **116.5s** | 通过 | 时长合法；仍 15 条 blocking（审计 7 + 确定性质量门 8），`commit=BLOCK` |
-| 对 116.5s 候选做固定稿修复回放（5 次发送、4 轮） | 14 | 约 116s | 通过 | blocking 从 15 降到 **11**，仍未通过；`commit=BLOCK`，无正式替换 |
+| 对 116.5s 候选做固定稿修复回放（5 次发送） | 14 | 116.5s | 通过 | blocking 从 15 降到 **9**，仍未通过；`commit=BLOCK`，无正式替换 |
+| 对 116.5s 候选做定点字段修复（画面/关键帧/武器/出口） | 14 | 116.5s | 通过 | 确定性质量门 **0 blocking**；最终语义审计仍 3 条：shot10 `FF_RESULT_LEAK`、shot14 `ACTION_ORDER`、shot12 `LOCATION_CONTINUITY`；`commit=BLOCK`，无正式替换 |
 
 这说明问题不在“时长机制”，而在“一节约一镜”的生成习惯；节拍合并是有效的杠杆。剩余阻塞已从“时长”转为**首帧结果泄漏、关键帧缺段、武器持有、动作时段、视觉桥接**等质量项。
 
-固定稿修复回放使用 `tools/replay_step01_repair.py`；为让它能读冻结章文本而不是重新抽取，新增可选 `novel.text_path`（显式章正文，校验摘要后直读）。回放 5 次发送、4 轮定向修复，blocking 15→11，但最后仍因 `weapon_holder`、`kf_temporal_consistency`、`model_audit_DURATION_OVER_LIMIT`、`MISSING_VISUAL_BRIDGE` 等未通过，未提交。该结果说明修复机制有效但不足，而不是“再跑一次即可”。
+固定稿修复回放使用 `tools/replay_step01_repair.py`；为让它能读冻结章文本而不是重新抽取，新增可选 `novel.text_path`（显式章正文，校验摘要后直读）。同时修复了一个真实身份缺陷：该工具原先没有把 manifest 的时长带应用到进程，审核/质量门仍按默认 60–90 判定，116.5s 被误报超 90；现在 `budget.min/max/target_*` 在导入业务模块前写入 `DURATION_*`。修正后回放 5 次发送，blocking 15→**9**，剩余为 `weapon_holder`（2）、`kf_temporal_consistency`、`kf_event_window_mismatch`（4）、`MISSING_VISUAL_BASIS`、`result_action_support`。仍 `commit=BLOCK`，未提交；这是“修复机制有效但不足”，不是再跑一次即可。
 
 ### 7bis.4 既有收口稿在新带下的复核
 
@@ -216,7 +218,7 @@ S23 的 `VerificationController` 记录原绑定 `ad5ce471…`。第一轮曾把
 4. 干净检出对账未做；当前全量测试仍需在交付提交上复跑并逐用例报告新增失败。
 5. `char_layout.surface`、运镜/景别、关键帧锚点等顾问项仍在；未做 Step02a 消费、图片复用和费用清单。
 6. S27 的“合并”目前是**合同/核验/入口层归一**（legacy 与 lightweight 两种来源），还不是单一提示同时产出“因果/动机/资产 + 紧凑声音归属”的一次请求；该提示级合并未做，不能记为已完成。
-7. 第二章已用**确定性节拍合并**把 20 节拍降到 14（事实/声音/证据不变，真实核验通过），分镜首次落到 **14 镜／116.5s 合法时长**。固定稿修复回放把 blocking 从 15 降到 11，但仍未通过（武器持有、关键帧时序、视觉桥接、审计时长）；当前 `commit=BLOCK`，不能进 Step02a。继续在**同一修复策略**上加轮次收益递减，应改为针对这些确定性 code 的专用修复，或接受其为人工预筛候选。
+7. 第二章已用**确定性节拍合并**把 20 节拍降到 14（事实/声音/证据不变，真实核验通过），分镜落到 **14 镜／116.5s 合法时长**。固定稿修复回放从 15 条降到 9 条；随后按 issue 精确字段做定点修复，**确定性质量门已降到 0 blocking**，但最终语义审计仍有 3 条（FF 结果泄漏、动作顺序、地点连续性）。当前 `commit=BLOCK`，不能进 Step02a。继续用同一“修一条再审一条”的方法会陷入审计摆动；下一步应对这 3 条做一次联合修复并一次性重审，或接受为人工预筛候选。
 8. 受控样本只有 4 句原文，模型自然落到 39s；它不能证明真实章节的时长能力，也不能用“补空镜/加秒”凑到 60s。
 
 ## 十一、代码与证据索引
