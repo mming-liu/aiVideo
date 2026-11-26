@@ -199,7 +199,7 @@ def _resolve_narration_path(index, resolve=None):
     return narration_audio_file(index)
 
 
-def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None):
+def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None, plan=None):
   """tts_mix：逐镜对白轨的收集 + **消费侧身份核对**（返回与 `valid_shots` 等长的路径表）.
 
   三处显式失败（都不静默降级）：音轨超出实际视频时长、缺音轨、音轨与当前文本不符。
@@ -212,7 +212,8 @@ def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None):
     shot_needs_dialogue_track as _needs_dialogue_track)
   from shared.audio_identity import verify_text_signature as _vts
   from step01_script_gen.plan_feasibility import shot_voice_parts as _svp
-  _plan = script.get("chapter_outline") if isinstance(script, dict) else None
+  _plan = plan if isinstance(plan, dict) and plan else (
+    script.get("chapter_outline") if isinstance(script, dict) else None)
   _plan = _plan if isinstance(_plan, dict) else None
   tts_paths: list = []
   n_found = 0
@@ -289,7 +290,7 @@ def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None):
 
 
 def _collect_narration_tracks(script, valid_shots, clip_windows, resolve=None,
-                              identities=None, only_indices=None):
+                              identities=None, only_indices=None, plan=None):
     """图外旁白 → 合并落点表 `[{path, index, start, end, dur, n_shots}]`.
 
     **落点单源**：`voice_units`（与候选层/终稿层/提交层的生成验收同一判据——
@@ -301,7 +302,7 @@ def _collect_narration_tracks(script, valid_shots, clip_windows, resolve=None,
                                                     layout_voice_entries,
                                                     voice_units)
     from tts.voice_registry import NARRATOR_VOICE
-    plan = script.get("chapter_outline")
+    plan = plan if isinstance(plan, dict) and plan else script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
     # S22-5：与 step03 同源——开启声音改编时，step04 的旁白文本/签名必须读改编层，
     # 否则 step03 签的是改编文本、step04 拿原文核对，必然判"与当前计划不符"。
@@ -1170,6 +1171,14 @@ def _run_merge(options, attempt):
 
   # 同源身份 + 候选清单（按稳定身份取片/取音轨，不按镜号猜路径）
   scope, script_revision = _run_identity(script)
+  # S44/P1：Step04 与 Step03 共用同一 v2 计划缓存；稿内计划优先。
+  from shared.plan_cache import FILENAME as PLAN_CACHE_NAME, load_plan_cache
+  plan = script.get("chapter_outline")
+  if not isinstance(plan, dict) or not plan:
+    plan = load_plan_cache(
+      CHAPTER_DIR / PLAN_CACHE_NAME,
+      scope={"book_name": script.get("book_name"), "chapter": script.get("chapter_index")},
+      script_revision=script_revision)
   # 逐镜身份摘要走**已有单源**（shared.quality_gate.per_shot_revisions / shot_semantic_digest）
   from shared.quality_gate import per_shot_revisions as _per_shot_revisions
   shot_digests = _per_shot_revisions(script)
@@ -1265,9 +1274,7 @@ def _run_merge(options, attempt):
   # 音轨上叠加独立 TTS 轨——角色原声保留（不许用「切 tts_mix」绕过）。
   from step01_script_gen.plan_feasibility import plan_narration_entries as _pne
   from shared.audio_policy import require_narration_contract as _require_narr
-  _plan_for_policy = script.get("chapter_outline")
-  if not isinstance(_plan_for_policy, dict):
-    _plan_for_policy = {}
+  _plan_for_policy = plan
   # **按计划自称的模式**核声音合同（§5）：新模式出现图外旁白 ⇒ **合同冲突、返回规划者**，
   # 不静默清空、不伪造一条旁白音轨冒充合法无旁白。缺记录不能通过软门放行。
   _narr_contract = _require_narr(_plan_for_policy)
@@ -1364,7 +1371,8 @@ def _run_merge(options, attempt):
   tts_paths = None
   tts_identities = {}
   if _AUDIO_MODE == "tts_mix":
-    tts_paths = _collect_shot_tts_paths(valid_shots, clips, script, resolve=audio_resolve)
+    tts_paths = _collect_shot_tts_paths(valid_shots, clips, script,
+                                        resolve=audio_resolve, plan=plan)
     if candidates is not None:
       tts_identities = {str(_s.get("index", 0)):
                         dict(candidates.dialogue_identity.get(int(_s.get("index", 0))) or {})
@@ -1374,7 +1382,7 @@ def _run_merge(options, attempt):
   narration_tracks = _collect_narration_tracks(
       script, valid_shots, clip_windows, resolve=audio_resolve,
       identities=(candidates.narration_identity if candidates is not None else None),
-      only_indices=only_indices)
+      only_indices=only_indices, plan=plan)
   narration_identities = {}
   if narration_tracks and candidates is not None:
     narration_identities = {str(t["index"]): dict(

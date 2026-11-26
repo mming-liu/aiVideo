@@ -534,14 +534,18 @@ def require_semantic_gate(quality_path: Path, audit_path: Path, script: dict,
         raise QualityGateError(
             f"{stage} semantic audit is stale: audit={audit.get('input_revision') or 'missing'} current={revision}"
         )
-    if str(audit.get("rule_source_fingerprint") or "").strip() != str(
-        quality.get("rule_source_fingerprint") or ""
-    ).strip():
-        raise QualityGateError(
-            f"{stage} semantic audit fingerprint mismatch: "
-            f"audit={audit.get('rule_source_fingerprint') or 'missing'} "
-            f"quality={quality.get('rule_source_fingerprint') or 'missing'}"
-        )
+    audit_fp = str(audit.get("rule_source_fingerprint") or "").strip()
+    quality_fp = str(quality.get("rule_source_fingerprint") or "").strip()
+    if audit_fp != quality_fp:
+        compat = quality.get("rule_source_compat")
+        compat = compat if isinstance(compat, dict) else {}
+        if not (str(compat.get("from") or "") == audit_fp
+                and str(compat.get("to") or "") == quality_fp
+                and compat.get("deterministic_recheck") == "identical"):
+            raise QualityGateError(
+                f"{stage} semantic audit fingerprint mismatch: "
+                f"audit={audit_fp or 'missing'} quality={quality_fp or 'missing'}"
+            )
     if stage == "step01":
         try:
             from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
