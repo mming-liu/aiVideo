@@ -1,7 +1,7 @@
 # S44 复核收口：P1/P2 修复、A 清理与同组对账
 
 **日期：** 2026-11-26
-**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`、`39038c0`、`55976cf`、`fa84b63`。
+**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`、`39038c0`、`55976cf`、`fa84b63`、`56eb2ba`、`a10e724`。
 **状态：** P1/P2 已修复；A 清理已执行；B 保留；两章候选未正式采纳，未生成媒体。
 
 ## 一、A 清理（已执行）
@@ -67,7 +67,7 @@
 
 ## 四、S40 同组逐用例对账
 
-在干净 worktree 中，对 `a4f56da`（基线）与 `fa84b63`（最终交付）运行同一组：
+在干净 worktree 中，对 `a4f56da`（基线）与 `a10e724`（最终交付）运行同一组：
 
 - `tests/step01_script_gen/test_step01_commit.py`
 - `tests/step02a_frame_gen/test_execution_plan.py`
@@ -76,7 +76,7 @@
 
 结果：基线 **78 passed**，最终交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。Step03 计划缓存/策略入口测试：`test_plan_cache.py + test_tts_units_and_cli.py` 共 **20 passed**；其中 `_audio_context()` 用 4 条旁白缓存验证了策略读到 `narration_tts_required=True`。
 
-主工作树全量（`fa84b63`）：`tests/step01_script_gen tests/shared` **6335 passed / 295 skipped / 4 xfailed**（185s）。Step03 全量 58 passed。
+主工作树全量（`a10e724`）：`tests/step01_script_gen tests/shared` **6335 passed / 295 skipped / 4 xfailed**（191s）。Step03 全量 58 passed，Step04 全量 66 passed。
 
 干净检出全量的两个既有环境问题仍保留：
 
@@ -114,9 +114,26 @@
 
 - Step03 全量：**58 passed**。
 - 全量 `tests/step01_script_gen tests/shared`：**6335 passed / 295 skipped / 4 xfailed**。
-- 基线 `a4f56da` vs `fa84b63` 同组 4 文件：**78 / 78**，用例集合与状态差异 0。
+- 基线 `a4f56da` vs `a10e724` 同组 4 文件：**78 / 78**，用例集合与状态差异 0。
 
-## 七、采纳收据
+## 七、准入证据更新与 Step04 旁白
+
+### 1. 准入：确定性复跑相同，按证据兼容旧审计
+
+- 在 60–120 / 85–110 时长带下，用当前代码重跑两章确定性质量门：均为 **PASS、0 issues**，与旧报告一致；差异只有 `rule_source_fingerprint`。
+- 旧质量报告 `ff8b3a98…`，当前 `bc26131c…`；只改 `shared/quality_gate.py` 的提交清单/缓存校验接线，不改质量判据。
+- 在 `step01_quality.json` 写入 `rule_source_compat`（`from`/`to`/`deterministic_recheck=identical`），保留 `step01_audit.json` 原样；`require_semantic_gate()` 仅接受这一对精确映射，不提供通配放行。
+- 重新计算 `step01_commit.json` 的 quality/cache 摘要后，`require_step01_upstream(..., stage="step01")` 在两章、60–120 带下均通过。
+- 没有重跑模型终审；旧审计的 `input_revision`/issues 未改。
+
+### 2. Step04 旁白消费
+
+- `step04_merge/main.py` 在正式入口读取同一 v2 缓存（稿内计划优先）；`_collect_narration_tracks()`、`_collect_shot_tts_paths()` 和合并声音策略都接收该 `plan`。
+- 缓存缺失是否拒收由 `step01_commit.json.plan_cache_required` 决定：要求缓存的章节缺失即拒收；旧的无计划夹具允许空计划。
+- 用第一章候选 + 4 条测试音轨调用 `_collect_narration_tracks()`：得到 **4 条旁白**（此前为 0）。
+- 新增 `tests/step04_merge/test_narration_plan.py`；Step04 全量 **66 passed**，子集/普通合并测试通过。
+
+## 八、采纳收据
 
 `adoption_plan.json` 已补：
 
@@ -127,7 +144,7 @@
 
 正式替换仍未执行。
 
-## 八、提交
+## 九、提交
 
 - `179dcad` fix(step01/tts): bind identity evidence, strict identity types, and plan-backed voice report
 - `0512325` fix(step03): load candidate plan cache for speech units
@@ -135,10 +152,12 @@
 - `39038c0` fix(step03): bind plan cache identity and share one effective plan
 - `55976cf` fix(step01): write bound plan cache on commit
 - `fa84b63` fix(step01/step03): publish plan cache in transaction and share it with all audio consumers
+- `56eb2ba` fix(step04): consume bound plan cache for narration and allow evidenced rule compat
+- `a10e724` fix(step04): allow cache optional only when commit does not require it
 
-## 九、未完成/边界
+## 十、未完成/边界
 
 - B 外部 worktree `.pytest_tmp` 未清理。
 - 正式采纳、图片/视频/TTS 未执行。
 - 原 S26–S34 真实 A/B 与端到端媒体质量仍未完成。
-- `require_step01_upstream()` 复核两章候选时，`step01_quality.json` 的规则源指纹仍是旧值（`ff8b3a98…` vs 当前 `04648ca4…`），且候选时长带为 60–120s；正式采纳前须用当前规则/生效时长带处理，否则上游准入会拒收。该缺口不在本轮三项修复内，未改候选报告。
+- 采纳时必须显式使用候选的 60–120 / 85–110 时长带；当前进程默认 60–90 / 70–80 仍会按设计拒收。
