@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 import os
 import asyncio
-import time
 import random
 import hashlib
 
@@ -31,7 +30,7 @@ load_dotenv(_PROJECT_ROOT / ".env.keys")
 import json
 from tts import create_provider
 from tts.config import config as tts_config
-from tts.voice_registry import get_registry, NARRATOR_VOICE, AVAILABLE_VOICES
+from tts.voice_registry import get_registry, NARRATOR_VOICE
 from tts.synthesis_job import (AudioArtifact, DurationRejectedError, SpeechUnit,
                                SynthesisError, TtsCandidateContext, finalize_in_place,
                                normalize_unit, partial_path, request_key_for,
@@ -39,7 +38,6 @@ from tts.synthesis_job import (AudioArtifact, DurationRejectedError, SpeechUnit,
 from tts.service import provider_capabilities
 from shared.paths import SHOT_AUDIO_FILENAME_FMT  # 单镜音频文件名单源: shared/paths.py
 from shared.constants import TTS_MAX_RETRIES  # 重试次数单源: shared/constants.py
-from shared.dialogue import strip_speaker_prefix
 from shared.narration_voice import narration_role
 from shared.audio_identity import (dialogue_speech_text, identity_path, read_identity,
                                    read_signature, sha256_text, speech_signature,

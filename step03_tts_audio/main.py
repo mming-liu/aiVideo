@@ -34,9 +34,25 @@ CHAPTER_DIR = chapter_dir()
 SCRIPT_FILE = script_file()
 AUDIO_OUTPUT_DIR = audio_dir()
 
-from step03_tts_audio.cli import (ENV_ATTEMPT_ID, ENV_CANDIDATE_ROOT, StageOptions,
+from step03_tts_audio.cli import (ENV_ATTEMPT_ID, StageOptions,
                                   attempt_id_from_env, candidate_root_from_env,
                                   plan_only_from_env, new_attempt_id)
+
+
+def _plan_for_script(script: dict) -> dict:
+    """优先用稿件内计划，其次读候选的正常计划缓存（S44/P1）."""
+    plan = script.get("chapter_outline") if isinstance(script, dict) else None
+    if isinstance(plan, dict) and plan:
+        return plan
+    cache = Path(CHAPTER_DIR) / "chapter_outline.cache.json"
+    if cache.is_file():
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            outline = data.get("outline") if isinstance(data, dict) and "outline" in data else data
+            return outline if isinstance(outline, dict) else {}
+        except (OSError, ValueError):
+            return {}
+    return {}
 
 
 class _LogContext:
@@ -122,7 +138,8 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
                      or (_caps_of(provider).provider if provider is not None else "")
                      or tts_config.PROVIDER)
     units = build_speech_units(script, scope=scope, script_revision=revision,
-                               provider_name=provider_name)
+                               provider_name=provider_name,
+                               plan=_plan_for_script(script))
     ctx = TtsCandidateContext.create(
         candidate_root, attempt_id=attempt_id, experiment_id=experiment_id,
         scope=scope, script_revision=revision, source=source, clips=clips_ctx,
@@ -381,7 +398,6 @@ def main(options=None):
     actual_audio_present = probe_actual_audio(clip_inputs)
     # 图外旁白是正交的一维（复核第 7 轮）：视频模型不会念它（旁白是叙述文字，
     # step02 的 prompt 不把它当台词），所以**无论 native 还是 tts_mix** 都要有独立音轨。
-    from step01_script_gen.plan_feasibility import plan_narration_entries
     from shared.audio_policy import require_narration_contract
     # **按计划自称的模式**核声音合同（主专题 §5）：新模式出现图外旁白 ⇒ **合同冲突**，
     # 退回规划者，不静默清空、也不"给它合成一条旁白轨"冒充合法无旁白。
@@ -449,7 +465,8 @@ def main(options=None):
         from tts.synthesis_job import write_speech_unit_plan
         units = build_speech_units(gen_script, scope=scope, script_revision=revision,
                                    only_indices=only_indices,
-                                   full_shots=script.get("shots"))
+                                   full_shots=script.get("shots"),
+                                   plan=_plan_for_script(gen_script))
         # S18-3：plan-only 打印扣除转场后的真实可用窗口（与 step04 同一时间线）。
         from step03_tts_audio.shot_tts import _compute_voice_windows
         # 子集：用**生成用脚本**（hook 已按子集移除）算窗口，否则计划打印会带上
@@ -525,7 +542,8 @@ def main(options=None):
             produced = {a.unit_id for a in artifacts}
             units = build_speech_units(gen_script, scope=scope, script_revision=revision,
                                        only_indices=only_indices,
-                                       full_shots=script.get("shots"))
+                                       full_shots=script.get("shots"),
+                                       plan=_plan_for_script(gen_script))
             missing_d = [u.unit_id for u in units
                          if u.kind == "dialogue" and u.unit_id not in produced]
             missing_n = [u.unit_id for u in units

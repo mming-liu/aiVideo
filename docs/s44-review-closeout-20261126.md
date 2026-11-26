@@ -27,6 +27,7 @@
 
 - `.tmp/s35/ch1_committed/chapter_outline.cache.json` = `{"outline": ch1_verified_plan}`；
 - `tools/voice_unit_report.py` 自动加载该缓存，作为 `build_speech_units(plan=...)` 的显式输入；
+- `step03_tts_audio/main.py` 的正常/候选/plan-only 三个入口都通过 `_plan_for_script()` 读取同一缓存；
 - `step03_tts_audio/shot_tts.py:build_speech_units()` 新增 `plan` 参数；不修改 `script_result.json`，不改变 `script_revision`。
 
 新报告 `.tmp/s44/ch1_voice_final.json`：
@@ -72,7 +73,7 @@
 
 结果：基线 **78 passed**，交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。
 
-主工作树全量（`e167ee7` 时）：`tests/step01_script_gen tests/shared` **6331 passed / 295 skipped / 4 xfailed**。P2 改动后新增/受影响测试 26 passed；全量未再重跑，明确记为未重跑，不冒充已重跑。
+主工作树全量（P2 后）：`tests/step01_script_gen tests/shared` **6333 passed / 295 skipped / 4 xfailed**（192s）。Step03 受影响的 11 条测试通过。
 
 干净检出全量的两个既有环境问题仍保留：
 
