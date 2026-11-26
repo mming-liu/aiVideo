@@ -1141,6 +1141,17 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         return script, summary
 
     _txn.commit()
+    # S44/P1：把本轮计划写成**受提交身份绑定**的缓存，供 Step03 正常入口消费。
+    if isinstance(plan, dict) and plan:
+        try:
+            from shared.plan_cache import FILENAME, write_plan_cache
+            write_plan_cache(
+                _mrt.CHAPTER_DIR / FILENAME, plan,
+                scope={"book_name": script.get("book_name"),
+                       "chapter": script.get("chapter_index")},
+                script_revision=revision)
+        except Exception as _pc_exc:                             # noqa: BLE001
+            _mrt._logger.warn("计划缓存写入失败（不改变已提交产物）: %s" % _pc_exc)
     summary["status"] = "COMMITTED"
     summary["revision"] = revision
     summary["manifest"] = manifest
