@@ -855,9 +855,9 @@ class Studio:
                 self.chapter / "step01_commit.json",
                 self.chapter / "step01_adoption.json",
             ])
-            written = self.pc.apply_refreshed_gate(self.receipt, files)
-            atomic_dump_json(self.chapter / "script_result.json", new_script,
-                             ensure_ascii=False, indent=2)
+            written = self.pc.apply_refreshed_gate(
+                self.receipt, files, script_payload=new_script,
+                label="studio.patch.shot%s" % shot)
             record_dir = self.production / "shot_patches"
             record_dir.mkdir(parents=True, exist_ok=True)
             atomic_dump_json(record_dir / ("shot_patch_%s.json" % _stamp()), {

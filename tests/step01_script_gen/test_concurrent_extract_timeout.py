@@ -15,7 +15,7 @@ def test_outline_worker_timeout_returns_structured_failure(monkeypatch):
         release.wait(10)
         return {"never": True}
 
-    monkeypatch.setattr("step01_script_gen.outline.generate_outline_result", _stuck)
+    monkeypatch.setattr("step01_script_gen.unified_plan.generate_unified_outline_result", _stuck)
     started = time.monotonic()
     try:
         out = extract_all_concurrent(

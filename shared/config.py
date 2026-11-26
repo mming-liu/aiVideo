@@ -101,12 +101,14 @@ def _duration_setting(name: str, default: float) -> float:
 _inherit_adoption_duration_band()
 
 # The lower bound is fixed: timecode/runtime_extend still implement the 60s floor.
+# S46：新生产默认时长带为 60–120s（优先目标 85–110s）；已采纳章节仍由上方的
+# `_inherit_adoption_duration_band()` / `production_context` 继承收据历史配置。
 DURATION_MIN_SEC = _duration_setting("DURATION_MIN_SEC", 60)
 if DURATION_MIN_SEC != 60:
     raise ValueError("DURATION_MIN_SEC must equal 60; configurable lower bounds are not supported")
-DURATION_MAX_SEC = _duration_setting("DURATION_MAX_SEC", 90)
-DURATION_TARGET_MIN_SEC = _duration_setting("DURATION_TARGET_MIN_SEC", 70)
-DURATION_TARGET_MAX_SEC = _duration_setting("DURATION_TARGET_MAX_SEC", 80)
+DURATION_MAX_SEC = _duration_setting("DURATION_MAX_SEC", 120)
+DURATION_TARGET_MIN_SEC = _duration_setting("DURATION_TARGET_MIN_SEC", 85)
+DURATION_TARGET_MAX_SEC = _duration_setting("DURATION_TARGET_MAX_SEC", 110)
 if not (DURATION_MIN_SEC <= DURATION_TARGET_MIN_SEC <= DURATION_TARGET_MAX_SEC <= DURATION_MAX_SEC):
     raise ValueError(
         "duration constraint requires DURATION_MIN_SEC <= DURATION_TARGET_MIN_SEC "

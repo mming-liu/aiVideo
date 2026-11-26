@@ -82,11 +82,9 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def _chapter_dir() -> Path:
-    """生产章节目录（旧单轮模式用；清单模式一律用隔离根）."""
-    from shared.config import NOVEL_CHAPTER, NOVEL_NAME, BOOK_INDEX, BOOK_NAME
-    return (ROOT / "output" / "video" / NOVEL_NAME
-            / f"part_{BOOK_INDEX:02d}_{BOOK_NAME}"
-            / f"chapter_{NOVEL_CHAPTER:03d}")
+    """生产章节目录（经 shared.paths 单源解析；清单模式一律用隔离根）."""
+    from shared.paths import chapter_dir
+    return chapter_dir()
 
 
 def _read_raw_chapter() -> str:

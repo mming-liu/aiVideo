@@ -41,13 +41,10 @@ from step03_tts_audio.cli import (ENV_ATTEMPT_ID, StageOptions,
 
 def _plan_for_script(script: dict, *, scope: dict | None = None,
                      script_revision: str = "") -> dict:
-    """优先用稿件内计划，其次读**已绑定身份**的候选计划缓存（S44/P1）."""
-    plan = script.get("chapter_outline") if isinstance(script, dict) else None
-    if isinstance(plan, dict) and plan:
-        return plan
-    from shared.plan_cache import FILENAME, load_plan_cache
-    return load_plan_cache(
-        Path(CHAPTER_DIR) / FILENAME, scope=scope or {}, script_revision=script_revision)
+    """优先用稿件内计划，其次从正式章节目录读取**已绑定身份**的计划缓存（S44/S48）."""
+    from shared.plan_cache import load_script_plan
+    return load_script_plan(
+        CHAPTER_DIR, script, scope=scope or {}, script_revision=script_revision)
 
 
 class _LogContext:

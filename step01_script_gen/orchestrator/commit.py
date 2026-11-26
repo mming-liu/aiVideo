@@ -151,15 +151,23 @@ def _sync_adoption_receipt(revision: str, run_id: str) -> str:
     atomic.write_text(json.dumps(receipt, ensure_ascii=False, indent=1), encoding="utf-8")
     from tools import production_context as _pc2
     try:
-        _pc2.load_receipt(atomic)
-        _pc2.verify(receipt, apply=False)
+        _pc2.validate_receipt(receipt, path=str(atomic))
     except Exception as exc:                                  # noqa: BLE001
         try:
             atomic.unlink()
         except OSError:
             pass
         raise RuntimeError("采纳凭据核验失败（不替换旧凭据）: %s" % exc) from exc
+    old_bytes = p.read_bytes()
     atomic.replace(p)
+    try:
+        _pc2.load_receipt(p)
+        _pc2.verify(receipt, apply=False)
+    except Exception as exc:                                  # noqa: BLE001
+        restore = p.with_suffix(".json.tmp")
+        restore.write_bytes(old_bytes)
+        restore.replace(p)
+        raise RuntimeError("采纳凭据核验失败（已回退旧凭据）: %s" % exc) from exc
     return "updated"
 
 
@@ -1093,7 +1101,16 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
     # 新 audit + 旧 script 的身份不一致组合。这里先备份、再写、验完再 commit；
     # **manifest 构造与写入也在事务内**——它抛错同样要回滚，不能留下半套发布。
     from shared.publish_txn import PublishTransaction
-    _txn = PublishTransaction(_mrt.CHAPTER_DIR, label="step01:%s" % run_id)
+    _expected_old = None
+    if _mrt.OUTPUT_FILE.is_file():
+        try:
+            _old_obj = json.loads(_mrt.OUTPUT_FILE.read_text(encoding="utf-8"))
+            if isinstance(_old_obj, dict):
+                _expected_old = compute_script_revision(_old_obj)
+        except Exception:
+            _expected_old = None
+    _txn = PublishTransaction(_mrt.CHAPTER_DIR, expected_old=_expected_old,
+                              label="step01:%s" % run_id)
     manifest = None
     try:
         _txn.begin()
@@ -1128,15 +1145,14 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
             # 不能和「审计跑成功」混为一谈。
             audit_status=str(summary.get("audit_status") or ""))
         write_step01_commit_manifest(_mrt.CHAPTER_DIR, manifest)
-        # 正式路径再自验一次（含 manifest）
+        # 语义门 + 凭据同步 + 完整新文件组最终核验（同事务内，任一步失败全量回滚）
         committed_script = json.loads(_mrt.OUTPUT_FILE.read_text(encoding="utf-8"))
         require_semantic_gate(_mrt.CHAPTER_DIR / "step01_quality.json",
                               _mrt.CHAPTER_DIR / "step01_audit.json", committed_script,
                               stage="step01")
+        summary["adoption"] = _sync_adoption_receipt(revision, run_id)
         verify_step01_commit_manifest(_mrt.CHAPTER_DIR, committed_script, stage="step01",
                                       expected_chapter=_mrt.NOVEL_CHAPTER)
-        # 凭据与新产物同事务：写失败同样回滚，避免"产物新、凭据旧"
-        summary["adoption"] = _sync_adoption_receipt(revision, run_id)
     except Exception as exc:
         try:
             _restored = _txn.rollback("发布失败: %s" % exc)

@@ -24,13 +24,17 @@ from pathlib import Path
 UNIFIED_CONTRACT_VERSION = "unified_plan.v1"
 UNIFIED_SOURCE_ENV = "STEP01_PLAN_SOURCE"
 UNIFIED_CACHE_NAME = "chapter_outline.unified.cache.json"
-SOURCES = ("lightweight", "legacy")
+SOURCES = ("lightweight",)
 
 
 def plan_source_setting(explicit: str | None = None) -> str:
-    """本次统一入口的计划来源；未知值在发送前失败."""
+    """本次统一入口的计划来源；S46 起已取消 legacy A/B 切换，旧配置在发送前显式拒绝."""
     value = str(explicit if explicit is not None else
                 os.getenv(UNIFIED_SOURCE_ENV) or "lightweight").strip().lower()
+    if value == "legacy":
+        raise ValueError(
+            "%s='legacy' 已取消：Step01 统一入口已收敛为紧凑规划＋独立内容核验主链，"
+            "请移除该旧配置" % UNIFIED_SOURCE_ENV)
     if value not in SOURCES:
         raise ValueError("%s=%r（合法：%s）" % (UNIFIED_SOURCE_ENV, value, list(SOURCES)))
     return value
@@ -160,24 +164,16 @@ def generate_unified_outline_result(
     deadline_monotonic=None, run_deadline_at=None, verify=None,
     max_verifications: int | None = None,
 ) -> dict:
-    """共同规划入口；返回沿用 `generate_outline_result` 的结构化结果.
+    """唯一 Step01 规划入口；返回沿用 `generate_outline_result` 的结构化结果.
 
-    `source` 缺省读 `STEP01_PLAN_SOURCE`（默认 lightweight）。`legacy` 来源直接复用
-    原版入口（它已含核验与修订）；`lightweight` 来源生成后必须经
-    `VerificationController`，核验记录与 `verified` 身份都成立才 `executable=True`。
+    S46 起取消 legacy/lightweight 双源 A/B 分支，统一走紧凑规划生成 + 原版
+    `VerificationController` 独立内容核验；核验记录与 `verified` 身份都成立才
+    `executable=True`。
     """
     source = plan_source_setting(source)
     deadlines = [float(x) for x in (deadline_monotonic, run_deadline_at)
                  if x is not None]
     deadline = min(deadlines) if deadlines else None
-    if source == "legacy":
-        from step01_script_gen.outline import generate_outline_result
-        result = generate_outline_result(
-            novel_text, model=model, cache_path=cache_path,
-            deadline_monotonic=deadline, run_deadline_at=deadline)
-        result["plan_source"] = "legacy"
-        result["unified_contract"] = UNIFIED_CONTRACT_VERSION
-        return result
 
     from step01_script_gen.lightweight_plan import (
         generate_lightweight_outline_result)

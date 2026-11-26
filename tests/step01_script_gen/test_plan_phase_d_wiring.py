@@ -279,8 +279,29 @@ def test_d03_cache_write_failure_keeps_the_plan_usable(tmp_path, monkeypatch):
 # D04 同一份截止 + 并发失败保真
 # ---------------------------------------------------------------------------
 def test_d04_the_same_absolute_deadline_reaches_every_entry(monkeypatch):
-    """D04：`extract_all_concurrent` → 首版请求与 `run_plan_revision` 收到**同一个**绝对时刻."""
+    """D04：`extract_all_concurrent` → 统一入口 / 首版请求 / 控制器收到**同一个**绝对时刻."""
+    from step01_script_gen import lightweight_plan as lw, unified_plan as up
     _DL = 1_700_000_000.5
+    _seen_unified: dict = {}
+    _real_unified = up.generate_unified_outline_result
+
+    def _spy_unified(*a, **kw):
+        _seen_unified.update(kw)
+        return {"executable": True, "plan": _legal_plan(), "failure": None,
+                "plan_source": "lightweight", "unified_contract": up.UNIFIED_CONTRACT_VERSION}
+
+    monkeypatch.setattr(up, "generate_unified_outline_result", _spy_unified)
+    _res = extract_all_concurrent(_SRC, None, None, enable_characters=False,
+                                 enable_scene_objects=False, enable_outline=True,
+                                 outline_cache_path=None,
+                                 outline_deadline_monotonic=_DL)
+    assert _seen_unified.get("deadline_monotonic") == _DL
+    assert _seen_unified.get("run_deadline_at") == _DL
+    assert isinstance(_res["outline"], dict) and _res["outline"]["executable"] is True
+    # 未启用的项**根本不出键**（既有行为，逐字不变）
+    assert "characters" not in _res and "scene_objects" not in _res, sorted(_res)
+
+    # 控制器直接路径仍接收同一份绝对截止（`budget.deadline_at <= _DL` 且 `run_deadline_at == _DL`）
     _seen: dict = {}
     _real = o.run_plan_revision
 
@@ -291,30 +312,25 @@ def test_d04_the_same_absolute_deadline_reaches_every_entry(monkeypatch):
     monkeypatch.setattr(o, "run_plan_revision", _spy)
     _svc = _patch(monkeypatch, [_broken_plan(),
                                 {"fact_carriers": [{"index": 1, "beat": 1, "mode": "台词1"}]}])
-    _res = extract_all_concurrent(_SRC, None, None, enable_characters=False,
-                                 enable_scene_objects=False, enable_outline=True,
-                                 outline_cache_path=None,
-                                 outline_deadline_monotonic=_DL)
-    # 复核之六 P1：**首版请求与控制器消费同一份截止**——`budget.deadline_at`
-    # = min(整次截止, 现在 + 本阶段上限)；本阶段上限更早时它就是更早的那个（旧写法
-    # 首版只拿整次截止 ⇒ 本阶段上限可以被外层绕过）。
+    _r_direct = o.generate_outline_result(_SRC, cache_path=None,
+                                          deadline_monotonic=_DL, run_deadline_at=_DL)
     _budget = _seen.get("budget")
     assert _budget is not None, _seen
     assert _svc.reqs[0].deadline_monotonic == _budget.deadline_at, "首版模型调用必须用同一份规划截止"
     assert _budget.deadline_at <= _DL, ("大于整次截止就不是「更早者」了", _budget.deadline_at, _DL)
     assert _seen.get("run_deadline_at") == _DL, ("控制器只开一次的那张表必须用同一个绝对截止",
                                                 _seen)
-    assert isinstance(_res["outline"], dict) and _res["outline"]["executable"] is True
-    # 未启用的项**根本不出键**（既有行为，逐字不变）
-    assert "characters" not in _res and "scene_objects" not in _res, sorted(_res)
+    assert _r_direct["executable"] is True
 
 
 def test_d04_an_outline_exception_becomes_a_structured_failure(monkeypatch):
     """G5：并发层不再把异常吞成 None——`failure.code`/`detail` 保真（type + message）."""
+    from step01_script_gen import unified_plan as up
+
     def _boom(*a, **k):
         raise RuntimeError("通道炸了")
 
-    monkeypatch.setattr(o, "generate_outline_result", _boom)
+    monkeypatch.setattr(up, "generate_unified_outline_result", _boom)
     _res = extract_all_concurrent(_SRC, None, None, enable_characters=False,
                                  enable_scene_objects=False, enable_outline=True)
     _out = _res["outline"]
@@ -328,13 +344,15 @@ def test_d04_characters_and_scene_objects_keep_their_none_behavior(monkeypatch):
     """资产提取的行为不变：抛异常 ⇒ 对应字段 None（不阻断），大纲照常出结构化结果."""
     import step01_script_gen.character_extractor as _ce
     import step01_script_gen.object_extractor as _oe
+    from step01_script_gen import unified_plan as up
 
     def _boom(*a, **k):
         raise RuntimeError("资产提取失败")
 
     monkeypatch.setattr(_ce, "extract_characters", _boom)
     monkeypatch.setattr(_oe, "extract_scene_objects", _boom)
-    _patch(monkeypatch, [_legal_plan()])
+    monkeypatch.setattr(up, "generate_unified_outline_result",
+                        lambda *a, **k: {"executable": True, "plan": _legal_plan(), "failure": None})
     _res = extract_all_concurrent(_SRC, None, None, enable_characters=True,
                                  enable_scene_objects=True, enable_outline=True)
     assert _res["characters"] is None and _res["scene_objects"] is None
@@ -449,9 +467,11 @@ def test_d05_a_call_class_failure_stays_the_terminal_even_with_a_baseline(
     断言：终局是**调用类失败**（`PlanInfeasibleError` + `conclusion=<码>`），
     基线的内容问题**单独记录**在同一份诊断里；**不落** `plan_contract_invalid`。
     """
-    from step01_script_gen import main as _m
+    from step01_script_gen import main as _m, unified_plan as up
     monkeypatch.setattr(_m, "CHAPTER_DIR", tmp_path)
     _patch(monkeypatch, [_broken_plan()] + list(payloads))
+    _direct = o.generate_outline_result(_SRC)
+    monkeypatch.setattr(up, "generate_unified_outline_result", lambda *a, **k: _direct)
     _out = extract_all_concurrent(_SRC, None, None, enable_characters=False,
                                   enable_scene_objects=False,
                                   enable_outline=True)["outline"]

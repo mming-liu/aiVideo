@@ -174,3 +174,95 @@ def test_load_receipt_still_annotates_path_and_digest(tmp_path):
     loaded = pc.load_receipt(path)
     assert loaded["_receipt_path"] == str(path)
     assert len(loaded["_receipt_sha256"]) == 64
+
+
+def test_apply_refreshed_gate_is_transactional_and_creates_previous_zip(tmp_path, clean_env):
+    from shared.paths import step01_previous_zip_for
+    from shared.publish_txn import verify_previous_backup
+
+    ch, script = _write_chapter(tmp_path)
+    receipt = _receipt(tmp_path, ch)
+    receipt_path = ch / "step01_adoption.json"
+    receipt_path.write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
+    loaded = pc.load_receipt(receipt_path)
+
+    # 注入半途失败（无效 JSON）：必须全组回滚且不留下半套刷新
+    bad_files = {
+        "step01_quality.json": json.dumps({"status": "PASS", "script_revision": "tampered"}),
+        "step01_audit.json": "{bad-json",
+        "step01_commit.json": "{}",
+        "step01_adoption.json": "{}",
+    }
+    old_quality = (ch / "step01_quality.json").read_text(encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        pc.apply_refreshed_gate(loaded, bad_files)
+    assert (ch / "step01_quality.json").read_text(encoding="utf-8") == old_quality
+    assert not step01_previous_zip_for(ch).exists()
+
+    # 合法刷新：提交后生成 snapshots/step01_previous.zip
+    good_files = {name: (ch / name).read_text(encoding="utf-8") for name in pc.REFRESH_ARTIFACTS}
+    written = pc.apply_refreshed_gate(loaded, good_files, script_payload=script)
+    assert "script_result.json" in written
+    manifest = verify_previous_backup(step01_previous_zip_for(ch))
+    assert manifest["previous_revision"] == receipt["script_revision"]
+
+
+def test_verify_is_readonly_and_rejects_snapshots_or_stale_adoption_on_disk(tmp_path, clean_env):
+    from shared.quality_gate import QualityGateError, require_step01_upstream
+
+    ch, script = _write_chapter(tmp_path)
+    receipt = _receipt(tmp_path, ch)
+    receipt_path = ch / "step01_adoption.json"
+    receipt_path.write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
+    before_bytes = receipt_path.read_bytes()
+
+    # 正常只读校验不得修改 step01_adoption.json
+    loaded = pc.load_receipt(receipt_path)
+    verified = pc.verify(loaded)
+    assert verified["script_revision"] == receipt["script_revision"]
+    assert receipt_path.read_bytes() == before_bytes
+
+    # 磁盘上的 step01_adoption.json revision 被篡改/过期时，下游统一入口也必须拒收
+    stale = dict(receipt, script_revision="stale-rev")
+    receipt_path.write_text(json.dumps(stale, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(QualityGateError) as qexc:
+        require_step01_upstream(ch, script, stage="step03", expected_chapter=1)
+    assert "adoption receipt revision mismatch" in str(qexc.value)
+
+    # 凭据路径若指向 snapshots/ 或 .zip 必须拒收
+    bad = dict(receipt, formal_chapter=str(ch / "snapshots" / "step01_previous.zip"))
+    with pytest.raises(pc.ContextError):
+        pc.verify(bad)
+
+
+def test_build_refreshed_gate_preserves_plan_cache_required(tmp_path, clean_env, monkeypatch):
+    from shared import quality_gate
+    from shared.plan_cache import FILENAME as PC_NAME, write_plan_cache
+    import step01_script_gen.main as m
+
+    ch, script = _write_chapter(tmp_path)
+    rev = script["script_revision"]
+    write_plan_cache(ch / PC_NAME, {"dialogue_lines": []},
+                     scope={"book_name": "book", "chapter": 1}, script_revision=rev)
+    man = quality_gate.build_step01_commit_manifest(
+        run_id="r1", created_at="2026-11-01T00:00:00+08:00", revision=rev,
+        rule_source_fingerprint=json.loads((ch / "step01_quality.json").read_text("utf-8"))["rule_source_fingerprint"],
+        rule_version=quality_gate.QUALITY_RULE_VERSION,
+        audit_scope="final_after_deterministic_fixes", chapter_dir=ch, status="COMMITTED")
+    quality_gate.write_step01_commit_manifest(ch, man)
+    receipt = _receipt(tmp_path, ch)
+    (ch / "step01_adoption.json").write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
+    loaded = pc.load_receipt(ch / "step01_adoption.json")
+
+    monkeypatch.setenv("PRODUCTION_CONTEXT_STAGING", str(tmp_path / "stage"))
+    monkeypatch.setattr(pc, "_read_novel_text", lambda *a, **k: "匿名原文")
+    monkeypatch.setattr(m, "_build_step01_quality_gate", lambda s, n: {
+        "status": "PASS", "report_type": "quality_gate", "script_revision": rev,
+        "rule_version": quality_gate.QUALITY_RULE_VERSION,
+        "rule_source_fingerprint": "fp-new", "duration_band": s.get("duration_band") or {"min": 60.0, "max": 120.0, "target_min": 85.0, "target_max": 110.0},
+        "blocking": [], "hard_count": 0, "visual_risk_count": 0,
+    })
+    files = pc.build_refreshed_gate(loaded)
+    commit_out = json.loads(files["step01_commit.json"])
+    assert commit_out["plan_cache_required"] is True
+    assert PC_NAME in commit_out["artifacts"]

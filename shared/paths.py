@@ -103,6 +103,8 @@ def script_file(chapter: int | None = None) -> Path:
 STEP01_ARTIFACT_FILES = ("script_result.json", "step01_quality.json", "step01_audit.json")
 #: 提交清单：三份正式产物替换完成后写的 manifest，是"提交完成"的唯一标志。
 STEP01_COMMIT_FILENAME = "step01_commit.json"
+#: S47：正式发布前上一版正式产物备份压缩包文件名（位于 `<chapter_dir>/snapshots/`）。
+STEP01_PREVIOUS_BACKUP_FILENAME = "step01_previous.zip"
 
 
 def step01_quality_file(chapter: int | None = None) -> Path:
@@ -118,6 +120,16 @@ def step01_audit_file(chapter: int | None = None) -> Path:
 def step01_commit_file(chapter: int | None = None) -> Path:
     """本章**提交清单**（manifest）：缺失/非 COMMITTED/摘要不符一律 fail-closed."""
     return chapter_dir(chapter) / STEP01_COMMIT_FILENAME
+
+
+def step01_previous_zip(chapter: int | None = None) -> Path:
+    """本章上一版正式产物压缩备份（<chapter_dir>/snapshots/step01_previous.zip）."""
+    return chapter_dir(chapter) / "snapshots" / STEP01_PREVIOUS_BACKUP_FILENAME
+
+
+def step01_previous_zip_for(chapter_path: "os.PathLike | str") -> Path:
+    """给定章节目录的上一版正式产物压缩备份路径（S47 单源）."""
+    return Path(chapter_path) / "snapshots" / STEP01_PREVIOUS_BACKUP_FILENAME
 
 
 def step02b_quality_file(chapter: int | None = None) -> Path:

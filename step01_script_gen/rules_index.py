@@ -1251,7 +1251,7 @@ RULES_INDEX: dict[str, RuleEntry] = {
         "tests": [
             "tests/step01_script_gen/constraints",
             "tests/step01_script_gen",
-            "tests/tools/test_bench_text_provider_ab.py",
+            "tests/step01_script_gen/constraints/test_provider_neutral_hardfix.py",
         ],
     },
 

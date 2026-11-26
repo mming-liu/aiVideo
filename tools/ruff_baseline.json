@@ -1188,12 +1188,6 @@
   "count": 1
  },
  {
-  "path": "tools/bench_text_provider_ab.py",
-  "code": "F401",
-  "name": "re",
-  "count": 1
- },
- {
   "path": "tools/build_s08_report.py",
   "code": "F401",
   "name": "shared.voice_preparation.build_voice_preparation",

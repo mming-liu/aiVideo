@@ -105,31 +105,36 @@ def _gen(svc, tmp_path=None):
 
 
 def test_mode_setting_default_and_unknown():
-    assert lw.plan_mode_setting() == "legacy"
-    assert lw.plan_mode_setting("lightweight") == "lightweight"
-    with pytest.raises(ValueError):
-        lw.plan_mode_setting("turbo")
+    assert lw.plan_mode_setting() == "unified"
+    assert lw.plan_mode_setting("unified") == "unified"
+    for bad in ("legacy", "lightweight", "turbo"):
+        with pytest.raises(ValueError):
+            lw.plan_mode_setting(bad)
 
 
 def test_unknown_mode_rejected_before_any_send(monkeypatch):
-    monkeypatch.setenv(lw.PLAN_MODE_ENV, "turbo")
-    started = []
-    monkeypatch.setattr(ce, "_run_tasks", lambda *a, **k: started.append(1) or {})
-    with pytest.raises(ValueError):
-        ce.extract_all_concurrent(NOVEL, None, None, enable_characters=False,
-                                  enable_scene_objects=False)
-    assert started == []
+    for bad in ("legacy", "lightweight", "turbo"):
+        monkeypatch.setenv(lw.PLAN_MODE_ENV, bad)
+        started = []
+        monkeypatch.setattr(ce, "_run_tasks", lambda *a, **k: started.append(1) or {})
+        with pytest.raises(ValueError):
+            ce.extract_all_concurrent(NOVEL, None, None, enable_characters=False,
+                                      enable_scene_objects=False)
+        assert started == []
 
 
-def test_default_mode_dispatches_legacy_generator(monkeypatch):
+def test_default_mode_dispatches_unified_generator(monkeypatch):
+    from step01_script_gen import unified_plan as up
     calls = []
     monkeypatch.setattr("step01_script_gen.outline.generate_outline_result",
                         lambda *a, **k: calls.append("legacy") or {"executable": False})
     monkeypatch.setattr(lw, "generate_lightweight_outline_result",
                         lambda *a, **k: calls.append("lightweight") or {})
+    monkeypatch.setattr(up, "generate_unified_outline_result",
+                        lambda *a, **k: calls.append("unified") or {"executable": False})
     ce.extract_all_concurrent(NOVEL, None, None, enable_characters=False,
                               enable_scene_objects=False)
-    assert calls == ["legacy"]
+    assert calls == ["unified"]
 
 
 def test_success_is_one_request_and_consumable(tmp_path):
@@ -182,7 +187,7 @@ def test_only_long_voice_is_replaced_in_the_single_revision():
     assert res["executable"], res["failure"]
     assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
     assert all(value in svc.prompts[0]
-               for value in ("10 条", "280 个汉字", "42 个汉字", "55–75"))
+               for value in ("10 条", "280 个汉字", "42 个汉字", f"55–{vr.target_sec():g}"))
     assert "只有这一次修订机会" in svc.prompts[1]
     rows = vr.prepare(answer, source)["rows"]
     assert [r["id"] for r in rows if r["editable"]] == ["N1"]
@@ -208,19 +213,24 @@ def test_whole_answer_redraw_uses_up_the_only_revision(tmp_path):
     assert res["plan"]["narration_lines"] == baseline["narration_lines"]
 
 
-def test_budget_trim_requires_full_reduction_and_preserves_beats():
+def test_budget_trim_requires_full_reduction_and_preserves_beats(monkeypatch):
+    monkeypatch.setenv("STEP01_VOICE_ALLOCATION_MAX_LINES", "12")
+    monkeypatch.setenv("STEP01_VOICE_ALLOCATION_MAX_HAN", "600")
     answer = _answer()
     source = NOVEL
     additions = []
     for location in ("码头", "山坡", "田边", "路口", "溪边", "小桥", "山脚", "镇口", "岗亭"):
-        text = f"远处的{location}亮起一盏灯，人们提起手里的行李，沿着岸边慢慢走向等候的船只。"
+        text = f"远处的{location}亮起微弱灯火，守夜人缓缓提起沉重木箱，沿着青石台阶，慢慢走向岸边小船，回头再看。"
         source += text + "\n"
         beat = dict(text=f"{location}亮灯", purpose="交代环境", source=text,
                     voice_kind="narration", voice_text=text, speaker="")
         additions.append(beat)
+    answer["events"][1]["beats"][1]["voice_text"] = "小船行到河心，风浪越发猛烈，船身左右摇晃不停，阿青紧紧抱住木箱，一刻也不敢松手。"
+    source += answer["events"][1]["beats"][1]["voice_text"] + "\n"
+    answer["events"][1]["beats"][1]["source"] = answer["events"][1]["beats"][1]["voice_text"]
     answer["events"][-1]["beats"].extend(additions)
     ctx = vr.prepare(answer, source)
-    assert ctx["seconds"] > 90
+    assert ctx is not None and ctx["seconds"] > vr.ceiling_sec()
     rows = [r for r in ctx["rows"] if r["text"] in {b["voice_text"] for b in additions}]
     deletes = [{"id": r["id"], "text": ""} for r in rows]
     # trim 只改达标所需的几句：一次修订删掉超出部分即可，其余声音不动
@@ -237,7 +247,7 @@ def test_budget_trim_requires_full_reduction_and_preserves_beats():
     assert res["executable"], res["failure"]
     assert svc.schemas == ["lightweight_outline", "lightweight_voice_edits"]
     assert f"至少 {round(ctx['seconds'] - vr.target_sec(), 2)} 秒" in svc.prompts[1]
-    assert "硬上限 90s" in svc.prompts[1]
+    assert f"硬上限 {vr.ceiling_sec():g}s" in svc.prompts[1]
     assert f"软目标约 {vr.target_sec():.0f}s" in svc.prompts[1]
     assert len(res["plan"]["shot_beats"]) == 6 + len(additions)
     kept_texts = {b["voice_text"] for b in additions} - {
@@ -247,17 +257,23 @@ def test_budget_trim_requires_full_reduction_and_preserves_beats():
     check_plan_before_generation(res["plan"], novel_text=source)
 
 
-def test_partial_progress_stops_after_the_single_revision(tmp_path):
+def test_partial_progress_stops_after_the_single_revision(tmp_path, monkeypatch):
     """有进展但仍超限：记录进展、给出分账残余，不再发第三次请求，不写缓存."""
+    monkeypatch.setenv("STEP01_VOICE_ALLOCATION_MAX_LINES", "12")
+    monkeypatch.setenv("STEP01_VOICE_ALLOCATION_MAX_HAN", "600")
     answer = _answer()
     source = NOVEL
+    answer["events"][1]["beats"][1]["voice_text"] = "小船行到河心，风浪越发猛烈，船身左右摇晃不停，阿青紧紧抱住木箱，一刻也不敢松手。"
+    answer["events"][1]["beats"][1]["source"] = answer["events"][1]["beats"][1]["voice_text"]
+    source += answer["events"][1]["beats"][1]["voice_text"] + "\n"
     for location in ("码头", "山坡", "田边", "路口", "溪边", "小桥", "山脚", "镇口", "岗亭"):
-        text = f"远处的{location}亮起一盏灯，人们提起手里的行李，沿着岸边慢慢走向等候的船只。"
+        text = f"远处的{location}亮起微弱灯火，守夜人缓缓提起沉重木箱，沿着青石台阶，慢慢走向岸边小船，回头再看。"
         source += text + "\n"
         answer["events"][-1]["beats"].append(dict(text=f"{location}亮灯", purpose="交代环境",
                                                   source=text, voice_kind="narration",
                                                   voice_text=text, speaker=""))
     ctx = vr.prepare(answer, source)
+    assert ctx is not None and ctx["seconds"] > vr.ceiling_sec()
     one = next(r for r in ctx["rows"] if r["deletable"])
     svc = _Svc([answer, {"edits": [{"id": one["id"], "text": ""}], "unfixable": []}])
     res = lw.generate_lightweight_outline_result(source, service=svc, cache_path=tmp_path / "c")
@@ -268,7 +284,7 @@ def test_partial_progress_stops_after_the_single_revision(tmp_path):
     assert "budget" in res["acceptance"]["residual"]
     reason = next(p["reason"] for p in res["failure"]["problems"]
                   if p["code"] == "lightweight_voice_budget")
-    assert "总时长" in reason and "> 90s" in reason
+    assert "总时长" in reason and f"> {vr.ceiling_sec():g}s" in reason
     assert not (tmp_path / lw.CACHE_FILE_NAME).exists()
 
 
@@ -391,7 +407,6 @@ def test_second_content_sample_compiles_through_same_entry():
 
 
 def test_hybrid_presentation_is_rejected_before_send(monkeypatch):
-    monkeypatch.setenv(lw.PLAN_MODE_ENV, "lightweight")
     monkeypatch.setenv("STEP01_PRESENTATION_MODE", "screen_hybrid")
     with pytest.raises(ValueError):
         ce.extract_all_concurrent(NOVEL, None, None, enable_characters=False,

@@ -118,36 +118,23 @@ def extract_all_concurrent(
         from step01_script_gen.object_extractor import extract_scene_objects
         return extract_scene_objects(novel_text, scene_objects_bank)
 
-    # 规划模式在**任何发送之前**裁决（未知值 / 不支持的组合直接抛，三路预提取都不启动）
-    from step01_script_gen.lightweight_plan import (PLAN_MODE_LIGHTWEIGHT,
-                                                    PLAN_MODE_UNIFIED,
-                                                    plan_mode_setting, preflight_problems)
-    _plan_mode = plan_mode_setting()
+    # 规划模式与来源在**任何发送之前**裁决（废弃旧开关 / 未知值 / 不支持组合直接抛）
+    from step01_script_gen.lightweight_plan import (plan_mode_setting,
+                                                    preflight_problems)
+    from step01_script_gen.unified_plan import (generate_unified_outline_result,
+                                                plan_source_setting)
+    plan_mode_setting()
     if enable_outline:
+        plan_source_setting()
         _pf = preflight_problems()
         if _pf:
             raise ValueError(_pf)
 
     def _do_outline() -> dict:
-        """**结构化**大纲结果（工作包 §4 D）：生产链路消费它，不再拿裸计划."""
-        from step01_script_gen.outline import (generate_outline_result,
-                                               _outline_result_skeleton)
+        """**结构化**大纲结果（S46 唯一统一入口：紧凑规划＋独立内容核验）."""
+        from step01_script_gen.outline import _outline_result_skeleton
         try:
-            if _plan_mode == PLAN_MODE_UNIFIED:
-                from step01_script_gen.unified_plan import (
-                    generate_unified_outline_result)
-                return generate_unified_outline_result(
-                    novel_text, model=model, cache_path=outline_cache_path,
-                    deadline_monotonic=outline_deadline_monotonic,
-                    run_deadline_at=outline_deadline_monotonic)
-            if _plan_mode == PLAN_MODE_LIGHTWEIGHT:
-                from step01_script_gen.lightweight_plan import (
-                    generate_lightweight_outline_result)
-                return generate_lightweight_outline_result(
-                    novel_text, model=model, cache_path=outline_cache_path,
-                    deadline_monotonic=outline_deadline_monotonic,
-                    run_deadline_at=outline_deadline_monotonic)
-            return generate_outline_result(
+            return generate_unified_outline_result(
                 novel_text, model=model, cache_path=outline_cache_path,
                 deadline_monotonic=outline_deadline_monotonic,
                 run_deadline_at=outline_deadline_monotonic)

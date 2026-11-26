@@ -38,8 +38,9 @@ def test_floor_uses_spoken_text_motion_and_keyframes():
 
 def test_only_needed_seconds_are_authorized_above_the_floor():
     # 每镜下限 4s；镜 2、镜 3 各有空余，超额只要镜 2 的一部分 ⇒ 只授权镜 2
-    n = int(DURATION_MAX_SEC // 4.0)
+    n = max(3, int((DURATION_MAX_SEC - 2.0) // 4.0))
     shots = [_shot(i + 1, 4.0) for i in range(n)]
+    shots[0] = _shot(1, DURATION_MAX_SEC - 2.0 - 4.0 * (n - 1), motion_end=4.0)
     shots[1] = _shot(2, 4.0 + 3.0)
     shots[2] = _shot(3, 4.0 + 1.0)
     need = sum(s["duration"] for s in shots) - DURATION_MAX_SEC

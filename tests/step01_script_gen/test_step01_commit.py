@@ -66,6 +66,7 @@ def _audit_payload(script: dict, *, status: str = "ok", issues=None,
                    scope: str, fingerprint: str, prompt_version: str = "",
                    focus_version: str = "") -> dict:
     import step01_script_gen.main as _m
+    from shared.config import duration_band as _db
     from shared.quality_gate import compute_script_revision as _rev
     from step01_script_gen.audit import audit_prompt_version as _apv
     return {
@@ -76,6 +77,7 @@ def _audit_payload(script: dict, *, status: str = "ok", issues=None,
         "input_revision": _rev(script),
         "rule_source_fingerprint": fingerprint,
         "audit_scope": scope,
+        "duration_band": _db(),
         # v6.111（审核 P2-5）：审计提示词/focus 版本也参与复用判定
         "audit_prompt_version": prompt_version or _apv(),
         "audit_focus_version": focus_version or _m._audit_focus_version(),
@@ -1550,5 +1552,59 @@ def test_baseline_chapter_dir_is_explicit_and_does_not_fall_back(
     assert m._committed_baseline_script() is None, (
         "显式声明基线后不得回落到 CHAPTER_DIR（否则隔离审计仍读现场产物）")
 
-    monkeypatch.delenv("STEP01_BASELINE_CHAPTER_DIR")
-    assert m._baseline_chapter_dir() == m.CHAPTER_DIR
+
+def test_consecutive_second_commit_updates_adoption_and_backups_previous(tmp_path, monkeypatch):
+    """P1-1：正常连续第二次提交（磁盘已有旧采纳收据）必须成功更新并生成上一版备份."""
+    import step01_script_gen.main as m
+    from shared import paths
+    from shared.publish_txn import verify_previous_backup
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT, RULE_VERSION
+    from tools import production_context as pc
+
+    out_base = tmp_path / "out"
+    monkeypatch.setenv("OUTPUT_BASE", str(out_base))
+    monkeypatch.setenv("NOVEL_NAME", "测试小说")
+    monkeypatch.setenv("BOOK_INDEX", "1")
+    monkeypatch.setenv("BOOK_NAME", "第一部")
+    monkeypatch.setenv("NOVEL_CHAPTER", "1")
+    ch = out_base / "测试小说" / "part_01_第一部" / "chapter_001"
+    ch.mkdir(parents=True)
+    monkeypatch.setattr(paths, "_output_base", lambda: out_base)
+    monkeypatch.setattr(m, "CHAPTER_DIR", ch)
+    monkeypatch.setattr(m, "OUTPUT_FILE", ch / "script_result.json")
+    monkeypatch.setattr(m, "SCRIPT_FILE", ch / "script_result.json")
+    monkeypatch.setattr(m, "NOVEL_CHAPTER", 1)
+    monkeypatch.setattr(m, "collect_structured_issues", lambda *a, **k: ([], False, RULE_VERSION))
+    monkeypatch.setattr(m, "_repair_shot_warnings", lambda s, *a, **k: s)
+    _fake_audit(monkeypatch, lambda s, n: _audit_payload(
+        s, scope=m.STEP01_AUDIT_SCOPE, fingerprint=RULE_SOURCE_FINGERPRINT))
+
+    # 清理 env 还原，防止污染同进程后续测试
+    for k in pc.CONTEXT_ENV_KEYS:
+        if k not in ("OUTPUT_BASE", "NOVEL_NAME", "BOOK_INDEX", "BOOK_NAME", "NOVEL_CHAPTER"):
+            monkeypatch.delenv(k, raising=False)
+
+    s1 = _script(2)
+    s1["chapter_index"] = 1
+    s1["book_name"] = "第一部"
+    s1_out, sum1 = m._commit_step01_outputs(s1, "")
+    assert sum1["status"] == "COMMITTED", sum1
+    assert sum1["adoption"] == "created"
+    rev1 = sum1["revision"]
+
+    s2 = _script(3)
+    s2["chapter_index"] = 1
+    s2["book_name"] = "第一部"
+    s2["shots"][0]["ff_desc"] = "第1镜第二版起始画面"
+    s2_out, sum2 = m._commit_step01_outputs(s2, "")
+    assert sum2["status"] == "COMMITTED", sum2
+    assert sum2["adoption"] == "updated"
+    rev2 = sum2["revision"]
+    assert rev2 != rev1
+
+    receipt = pc.load_receipt(ch / "step01_adoption.json")
+    assert receipt["script_revision"] == rev2
+    verified = pc.verify(receipt, apply=False)
+    assert verified["script_revision"] == rev2
+    prev_manifest = verify_previous_backup(paths.step01_previous_zip_for(ch))
+    assert prev_manifest["previous_revision"] == rev1

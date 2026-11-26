@@ -160,7 +160,11 @@ def main() -> None:
     不走到生成侧才发现。
     """
     from step01_script_gen.outline import presentation_mode
+    from step01_script_gen.lightweight_plan import plan_mode_setting
+    from step01_script_gen.unified_plan import plan_source_setting
 
+    plan_mode_setting()
+    plan_source_setting()
     _cli_mode = presentation_mode(_presentation_mode_argv())
     globals()["PRESENTATION_MODE"] = _cli_mode
     os.environ["STEP01_PRESENTATION_MODE"] = _cli_mode
@@ -304,25 +308,14 @@ def main() -> None:
         objects_bank_data = json.dumps(
             scene_objects_bank._data, ensure_ascii=False, sort_keys=True
         )
-        # 规划模式进脚本缓存身份：轻量模式不得命中 legacy 产出的脚本缓存（反之亦然）；
-        # 默认 legacy 时指纹逐字不变。
-        from step01_script_gen.lightweight_plan import (
-            PLAN_MODE_LEGACY as _PM_LEGACY,
-            plan_mode_setting as _plan_mode)
+        # 唯一统一规划模式与生效配置进脚本缓存身份，避免历史旧稿缓存被误用为本轮结果。
+        from step01_script_gen.lightweight_plan import plan_mode_setting as _plan_mode
         _pm_now = _plan_mode()
-        _script_rule_version = _mrt.RULE_VERSION
-        # 旧模式 + 旧默认配置保持逐字身份（不惊动旧正式稿缓存）；一旦进入统一/轻量
-        # 或显式改了时长/声音策略，就把配置身份并入缓存键，避免旧稿被当本轮结果。
         from shared.config import duration_band as _db, voice_allocation_limits as _vl
         _config_identity = {"duration": _db(), "voice": _vl()}
-        _needs_config_identity = (
-            _pm_now != _PM_LEGACY
-            or _db() != {"min": 60, "max": 90, "target_min": 70, "target_max": 80}
-            or _vl().get("max_han") != 280 or _vl().get("max_lines") != 10)
-        if _needs_config_identity:
-            _script_rule_version = "%s|plan_mode=%s|config=%s" % (
-                _mrt.RULE_VERSION, _pm_now,
-                json.dumps(_config_identity, ensure_ascii=False, sort_keys=True))
+        _script_rule_version = "%s|plan_mode=%s|config=%s" % (
+            _mrt.RULE_VERSION, _pm_now,
+            json.dumps(_config_identity, ensure_ascii=False, sort_keys=True))
         prompt_changed = _mrt._prompt_changed(
             Path(__file__).parent / "prompts.py", _mrt.SCRIPT_FILE, novel_source_text, _mrt.NOVEL_CHAPTER,
             objects_bank_data, rule_version=_script_rule_version,

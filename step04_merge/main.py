@@ -1171,24 +1171,12 @@ def _run_merge(options, attempt):
 
   # 同源身份 + 候选清单（按稳定身份取片/取音轨，不按镜号猜路径）
   scope, script_revision = _run_identity(script)
-  # S44/P1：Step04 与 Step03 共用同一 v2 计划缓存；稿内计划优先。
-  from shared.plan_cache import FILENAME as PLAN_CACHE_NAME, load_plan_cache
-  plan = script.get("chapter_outline")
-  if not isinstance(plan, dict) or not plan:
-    _cache_path = CHAPTER_DIR / PLAN_CACHE_NAME
-    _manifest_path = CHAPTER_DIR / "step01_commit.json"
-    _cache_required = False
-    if _manifest_path.is_file():
-      try:
-        _cache_required = bool(json.loads(
-          _manifest_path.read_text(encoding="utf-8")).get("plan_cache_required"))
-      except (OSError, ValueError):
-        _cache_required = False
-    plan = load_plan_cache(
-      _cache_path,
-      scope={"book_name": script.get("book_name"), "chapter": script.get("chapter_index")},
-      script_revision=script_revision, allow_missing=not _cache_required)
-    plan = plan if isinstance(plan, dict) else {}
+  # S44/S48：Step04 与 Step03 共用同一正式计划装载入口（仅读正式章节目录）。
+  from shared.plan_cache import load_script_plan
+  plan = load_script_plan(
+    CHAPTER_DIR, script,
+    scope={"book_name": script.get("book_name"), "chapter": script.get("chapter_index")},
+    script_revision=script_revision)
   # 逐镜身份摘要走**已有单源**（shared.quality_gate.per_shot_revisions / shot_semantic_digest）
   from shared.quality_gate import per_shot_revisions as _per_shot_revisions
   shot_digests = _per_shot_revisions(script)

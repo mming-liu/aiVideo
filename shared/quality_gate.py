@@ -851,6 +851,26 @@ def verify_step01_commit_manifest(chapter_dir: Path, script: dict,
             raise QualityGateError(f"{stage} plan cache missing: {target}")
         if not isinstance(item, dict) or sha1_file(target) != str(item.get("sha1")):
             raise QualityGateError(f"{stage} plan cache changed after commit: {cache_name}")
+    adoption_path = Path(chapter_dir) / "step01_adoption.json"
+    if adoption_path.is_file():
+        import json as _json
+        try:
+            adoption = _json.loads(adoption_path.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError) as exc:
+            raise QualityGateError(f"{stage} adoption receipt unreadable: {exc}") from exc
+        if not isinstance(adoption, dict) or str(adoption.get("status") or "") != "adopted_and_verified":
+            raise QualityGateError(f"{stage} adoption receipt invalid status")
+        ad_rev = str(adoption.get("script_revision") or "").strip()
+        if ad_rev and ad_rev != revision:
+            raise QualityGateError(
+                f"{stage} adoption receipt revision mismatch: "
+                f"adoption={ad_rev} current={revision}")
+        if expected_chapter is not None:
+            ad_ch = (adoption.get("scope") or {}).get("chapter") if isinstance(adoption.get("scope"), dict) else None
+            if ad_ch is not None and int(ad_ch) != int(expected_chapter):
+                raise QualityGateError(
+                    f"{stage} adoption receipt chapter mismatch: "
+                    f"expected={expected_chapter} adoption={ad_ch}")
     return manifest
 
 

@@ -157,6 +157,8 @@ tests/step01_script_gen/*
 !tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
 # 2026-11-13 S02：后处理不得编造无来源内容
 !tests/step01_script_gen/constraints/test_s02_content_independence.py
+# 2026-11-26 S49：迁移自 A/B 工具的 provider-neutral 硬约束测试
+!tests/step01_script_gen/constraints/test_provider_neutral_hardfix.py
 !tests/step01_script_gen/test_repair_target_rollback.py
 !tests/step01_script_gen/test_step01_commit.py
 !tests/step01_script_gen/test_plan_phase_e_commit_chain.py
@@ -229,6 +231,8 @@ tests/step01_script_gen/constraints/*
 !tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
 # 2026-11-13 S02：后处理不得编造无来源内容
 !tests/step01_script_gen/constraints/test_s02_content_independence.py
+# 2026-11-26 S49：迁移自 A/B 工具的 provider-neutral 硬约束测试
+!tests/step01_script_gen/constraints/test_provider_neutral_hardfix.py
 !tests/enhancements/
 tests/enhancements/*
 !tests/enhancements/test_subtitle_contract.py
@@ -290,6 +294,8 @@ tests/shared/*
 !tests/shared/test_audit_authorization_chain.py
 # 2026-11-15：delta.v1 R0 全 kind 通用化的契约回归入库（对应 shared/delta_reconcile.py 修改）。
 !tests/shared/test_delta_reconcile_r0.py
+# 2026-11-26 S46/S52：采纳收据生效配置继承回归（含 60-90 历史带与 env 还原）
+!tests/shared/test_adoption_config_inheritance.py
 # 2026-11-08：本轮修复涉及的契约回归**入库**（干净 clone 可复现同一套 0 failed）
 !tests/_text_gen/test_agent_plan_provider.py
 !tests/_text_gen/test_agent_plan_guard.py
@@ -387,6 +393,8 @@ tests/tools/fixtures/p4_admission/*
 # 2026-11-14 U6-FIN WP1c：构建/冻结脚本的手写 JSON 落盘棘轮——防"多写一个尾部
 # 换行导致同一份内容两个 SHA-256"再次复发，用例必须随仓库走。
 !tests/tools/test_json_artifact_serialization.py
+# 2026-11-26 S49：迁移自 A/B 工具的运镜指标与脚本基础指标测试
+!tests/tools/test_bench_reasoning.py
 !tests/step02a_frame_gen/
 tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_step02a_offline_fixups.py

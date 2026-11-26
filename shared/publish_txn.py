@@ -22,19 +22,22 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import time
+import zipfile
 from pathlib import Path
 
-from shared.paths import STEP01_ARTIFACT_FILES
+from shared.paths import STEP01_ARTIFACT_FILES, step01_previous_zip_for
 
 JOURNAL_NAME = "step01_publish_journal.json"
 LOCK_NAME = ".publish.lock"
 LOCK_STALE_SEC = 600
+PREVIOUS_BACKUP_SCHEMA = "step01.previous_backup.v1"
 
-#: 发布事务覆盖的文件组：三份正式产物 + 提交清单 + 采纳凭据。
+#: 发布事务覆盖的固定正式文件组（6 个）：三份正式产物 + 计划缓存 + 提交清单 + 采纳凭据。
 PUBLISH_FILES = (tuple(STEP01_ARTIFACT_FILES)
                  + ("chapter_outline.cache.json", "step01_commit.json",
                     "step01_adoption.json"))
@@ -101,6 +104,10 @@ class PublishTransaction:
         self._done = False
         self.old_revision = ""
         self.recovered: dict = {}
+        self.had_previous_zip = False
+        self._old_previous_zip_backup: Path | None = None
+        self._staged_previous_zip: Path | None = None
+        self.previous_backup_path: Path | None = None
 
     # -- 锁 ---------------------------------------------------------------
     def _lock_owner(self):
@@ -155,6 +162,7 @@ class PublishTransaction:
                    "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                    "backup_dir": self.backup_dir.name,
                    "backed_up": self.existing, "created": self.created,
+                   "had_previous_zip": self.had_previous_zip,
                    "old_revision": self.old_revision, "detail": detail}
         try:
             _atomic_write_bytes(self.journal_path,
@@ -198,6 +206,15 @@ class PublishTransaction:
                     self.existing.append(name)
                 else:
                     self.created.append(name)
+            if self.existing:
+                self._staged_previous_zip = _stage_previous_backup_zip(
+                    self.backup_dir, existing=self.existing, label=self.label)
+            prev_zip = step01_previous_zip_for(self.chapter)
+            if prev_zip.is_file():
+                old_zip_bak = self.backup_dir / "step01_previous.zip.old"
+                shutil.copy2(prev_zip, old_zip_bak)
+                self.had_previous_zip = True
+                self._old_previous_zip_backup = old_zip_bak
             self._begun = True
             self._journal("begun")
             return self
@@ -209,12 +226,22 @@ class PublishTransaction:
         if not self._begun:
             raise PublishError("事务未 begin 就 commit")
         try:
+            if self._staged_previous_zip is not None and self._staged_previous_zip.exists():
+                dest = step01_previous_zip_for(self.chapter)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write_bytes(dest, self._staged_previous_zip.read_bytes())
+                verify_previous_backup(dest)
+                self.previous_backup_path = dest
             self._journal("committed")
         except PublishError:
-            self.rollback("commit 时 journal 写失败")
+            self.rollback("commit 时上一版备份校验或 journal 写失败")
             raise
+        except Exception as exc:                                  # noqa: BLE001
+            self.rollback("commit 时上一版备份写盘失败: %s" % exc)
+            raise PublishError("上一版备份写入/校验失败: %s" % exc) from exc
         self._done = True
         self._release()
+        _cleanup_routine_backups(self.chapter, keep_failed=True)
 
     def rollback(self, detail: str = "") -> list:
         """把发布文件组恢复到 begin 时的状态；部分失败 → 保留锁并抛错."""
@@ -235,6 +262,21 @@ class PublishTransaction:
                     touched.append(name + "(removed)")
             except Exception as exc:                             # noqa: BLE001
                 failures.append("%s: %s" % (name, exc))
+        prev_zip = step01_previous_zip_for(self.chapter)
+        try:
+            if self.had_previous_zip:
+                old_zip = self.backup_dir / "step01_previous.zip.old"
+                if not old_zip.is_file():
+                    failures.append("snapshots/step01_previous.zip: 旧备份缺失")
+                else:
+                    prev_zip.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write_bytes(prev_zip, old_zip.read_bytes())
+                    touched.append("snapshots/step01_previous.zip")
+            elif prev_zip.exists():
+                prev_zip.unlink()
+                touched.append("snapshots/step01_previous.zip(removed)")
+        except Exception as exc:                                 # noqa: BLE001
+            failures.append("snapshots/step01_previous.zip: %s" % exc)
         if failures:
             # **绝不**把不完整回滚记成 rolled_back，也不释放锁：留着让恢复入口处理。
             _jnote = ""
@@ -359,6 +401,24 @@ def recover_pending(chapter_dir, *, lock_held: bool = False) -> dict:
                 removed.append(name)
             except OSError as exc:
                 failed.append("%s: %s" % (name, exc))
+    prev_zip = step01_previous_zip_for(chapter)
+    if journal.get("had_previous_zip"):
+        old_zip = backup / "step01_previous.zip.old"
+        if not old_zip.is_file():
+            failed.append("snapshots/step01_previous.zip: 旧备份缺失")
+        else:
+            try:
+                prev_zip.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write_bytes(prev_zip, old_zip.read_bytes())
+                restored.append("snapshots/step01_previous.zip")
+            except Exception as exc:                             # noqa: BLE001
+                failed.append("snapshots/step01_previous.zip: %s" % exc)
+    elif "had_previous_zip" in journal and prev_zip.exists():
+        try:
+            prev_zip.unlink()
+            removed.append("snapshots/step01_previous.zip")
+        except OSError as exc:
+            failed.append("snapshots/step01_previous.zip: %s" % exc)
 
     _finish_journal(journal_p, journal,
                     "rollback_failed" if failed else "recovered",
@@ -387,5 +447,145 @@ def _finish_journal(journal_p: Path, journal: dict, state: str,
     except Exception as exc:                                     # noqa: BLE001
         raise PublishError("恢复结论无法写入 journal（旧记录未更新，禁止开始新事务）: %s"
                            % exc) from exc
+
+
+def _read_json_safe(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def build_previous_manifest(backup_dir: Path, *, existing: list, label: str = "") -> dict:
+    """构造上一版正式产物备份清单（只记录真实读到的上一版范围、revision、有效配置与摘要）."""
+    existing_set = set(existing or ())
+    adoption = _read_json_safe(backup_dir / "step01_adoption.json")
+    script = _read_json_safe(backup_dir / "script_result.json")
+    commit = _read_json_safe(backup_dir / "step01_commit.json")
+    quality = _read_json_safe(backup_dir / "step01_quality.json")
+
+    scope = adoption.get("scope") if isinstance(adoption.get("scope"), dict) else None
+    if not scope and script:
+        raw_scope = {
+            "novel": script.get("novel_name"),
+            "book_index": script.get("book_index"),
+            "book_name": script.get("book_name"),
+            "chapter": script.get("chapter_index"),
+        }
+        if any(v not in (None, "") for v in raw_scope.values()):
+            scope = raw_scope
+
+    prev_revision = str(
+        script.get("script_revision")
+        or commit.get("script_revision")
+        or adoption.get("script_revision")
+        or ""
+    )
+
+    effective_config = (
+        adoption.get("effective_config")
+        if isinstance(adoption.get("effective_config"), dict) and adoption.get("effective_config")
+        else None
+    )
+    if effective_config is None and isinstance(quality.get("duration_band"), dict):
+        effective_config = {"duration_band": quality["duration_band"]}
+
+    files = {}
+    for name in PUBLISH_FILES:
+        src = backup_dir / name
+        if name in existing_set and src.is_file():
+            data = src.read_bytes()
+            files[name] = {
+                "exists": True,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        else:
+            files[name] = {"exists": False, "size": None, "sha256": None}
+
+    return {
+        "schema": PREVIOUS_BACKUP_SCHEMA,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "label": str(label or ""),
+        "scope": scope,
+        "previous_revision": prev_revision,
+        "effective_config": effective_config,
+        "files": files,
+    }
+
+
+def _stage_previous_backup_zip(backup_dir: Path, *, existing: list, label: str = "") -> Path:
+    """在事务备份目录生成并自验上一版压缩包，仅在 commit() 后替换 snapshots/step01_previous.zip."""
+    manifest = build_previous_manifest(backup_dir, existing=existing, label=label)
+    staged = backup_dir / "step01_previous.zip.staged"
+    with zipfile.ZipFile(staged, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name in PUBLISH_FILES:
+            info = manifest["files"][name]
+            if info["exists"]:
+                zf.write(backup_dir / name, arcname=name)
+        zf.writestr("manifest.json",
+                    json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+    verify_previous_backup(staged)
+    return staged
+
+
+def verify_previous_backup(zip_path: Path) -> dict:
+    """校验上一版正式产物备份包（ZIP 完整性 + manifest + 逐文件 SHA-256）."""
+    zp = Path(zip_path)
+    if not zp.is_file():
+        raise PublishError("上一版备份不存在: %s" % zp)
+    try:
+        with zipfile.ZipFile(zp, "r") as zf:
+            bad_entry = zf.testzip()
+            if bad_entry is not None:
+                raise PublishError("上一版备份 CRC 损坏: %s (%s)" % (zp, bad_entry))
+            names = set(zf.namelist())
+            if "manifest.json" not in names:
+                raise PublishError("上一版备份缺 manifest.json: %s" % zp)
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            if not isinstance(manifest, dict) or manifest.get("schema") != PREVIOUS_BACKUP_SCHEMA:
+                raise PublishError("上一版备份 manifest schema 不符: %r"
+                                   % (manifest.get("schema") if isinstance(manifest, dict) else None))
+            files = manifest.get("files")
+            if not isinstance(files, dict):
+                raise PublishError("上一版备份 manifest.files 非法")
+            for name in PUBLISH_FILES:
+                entry = files.get(name)
+                if not isinstance(entry, dict):
+                    raise PublishError("上一版备份缺文件声明: %s" % name)
+                if entry.get("exists"):
+                    if name not in names:
+                        raise PublishError("上一版备份缺文件实体: %s" % name)
+                    data = zf.read(name)
+                    if len(data) != entry.get("size"):
+                        raise PublishError("上一版备份长度不符: %s" % name)
+                    if hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+                        raise PublishError("上一版备份 SHA-256 不符: %s" % name)
+                else:
+                    if name in names:
+                        raise PublishError("上一版备份存在未声明文件: %s" % name)
+            return manifest
+    except PublishError:
+        raise
+    except Exception as exc:                                      # noqa: BLE001
+        raise PublishError("上一版备份读取/解析失败（%s）: %s" % (zp, exc)) from exc
+
+
+def _cleanup_routine_backups(chapter_dir: Path, *, keep_failed: bool = True) -> None:
+    """新发布与上一版 ZIP 均校验提交后，轮转清理例行事务临时备份目录；未完成恢复现场原样保留."""
+    chapter = Path(chapter_dir)
+    if keep_failed:
+        journal = _read_json_safe(chapter / JOURNAL_NAME)
+        if str(journal.get("state") or "") != "committed":
+            return
+    for d in sorted(chapter.glob("_publish_backup_*")):
+        if d.is_dir():
+            try:
+                shutil.rmtree(d)
+            except OSError:
+                pass
 
 

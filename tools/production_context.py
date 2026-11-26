@@ -227,6 +227,7 @@ def verify(receipt: dict, *, apply: bool = True) -> dict:
             current=have_band, expected=want_band)
 
     from shared.paths import chapter_dir
+    from shared.plan_cache import PlanCacheError, load_script_plan
     from shared.quality_gate import require_step01_upstream
 
     ch = Path(chapter_dir())
@@ -235,6 +236,9 @@ def verify(receipt: dict, *, apply: bool = True) -> dict:
                            "shared.paths 解析到 %s，但凭据的正式目录是 %s"
                            % (ch, receipt["formal_chapter"]),
                            resolved=str(ch), expected=str(receipt["formal_chapter"]))
+    if "snapshots" in Path(receipt["formal_chapter"]).parts or str(receipt["formal_chapter"]).lower().endswith(".zip"):
+        raise ContextError("invalid_formal_chapter_path",
+                           "凭据指向备份或快照路径而非正式章节目录: %s" % receipt["formal_chapter"])
 
     script_path = ch / "script_result.json"
     if not script_path.exists():
@@ -258,11 +262,23 @@ def verify(receipt: dict, *, apply: bool = True) -> dict:
                            expected=str(receipt["script_revision"]), actual=revision)
 
     expected_chapter = int((receipt.get("scope") or {}).get("chapter") or 0) or None
+    if expected_chapter is not None and script.get("chapter_index") is not None:
+        if int(script["chapter_index"]) != expected_chapter:
+            raise ContextError("script_chapter_mismatch",
+                               "script_result.json 的 chapter_index=%r 与凭据第 %d 章不符"
+                               % (script.get("chapter_index"), expected_chapter))
     try:
         manifest = require_step01_upstream(ch, script, stage="step01",
                                            expected_chapter=expected_chapter)
     except Exception as exc:                                  # noqa: BLE001 - 统一成 code
         raise ContextError("upstream_gate_failed", "step01 准入未通过：%s" % exc) from exc
+
+    if manifest.get("plan_cache_required"):
+        try:
+            load_script_plan(ch, script, scope=receipt.get("scope"),
+                             script_revision=revision, commit_manifest=manifest)
+        except PlanCacheError as exc:
+            raise ContextError("plan_cache_invalid", "计划缓存核验未通过：%s" % exc) from exc
 
     timeline = script.get("timeline") or []
     return {
@@ -418,6 +434,9 @@ def build_refreshed_gate(receipt: dict, *, novel_file: "str | None" = None) -> d
     staging = root / _chapter_rel(ch)
     staging.mkdir(parents=True, exist_ok=True)
     (staging / "script_result.json").write_bytes(script_path.read_bytes())
+    plan_cache_src = ch / "chapter_outline.cache.json"
+    if plan_cache_src.is_file():
+        (staging / "chapter_outline.cache.json").write_bytes(plan_cache_src.read_bytes())
 
     # 导入 step01.main 会按 OUTPUT_BASE 建日志；确定性检查器运行时也会写日志。
     # 暂存根可写、正式根在沙箱里不可写，因此整段构建期都把 OUTPUT_BASE 指向暂存根
@@ -583,6 +602,9 @@ def build_shot_patch_gate(receipt: dict, new_script: dict, *, patch_meta: dict,
     # 否则暂存脚本缺新 revision，adoption 的 sha 与实际文件对不上。
     atomic_dump_json(staging / "script_result.json", new_script,
                      ensure_ascii=False, indent=2)
+    plan_cache_src = ch / "chapter_outline.cache.json"
+    if plan_cache_src.is_file():
+        (staging / "chapter_outline.cache.json").write_bytes(plan_cache_src.read_bytes())
 
     audit = _json.loads((ch / "step01_audit.json").read_text(encoding="utf-8"))
     if str(audit.get("status") or "").strip().lower() != "ok":
@@ -638,15 +660,32 @@ def build_shot_patch_gate(receipt: dict, new_script: dict, *, patch_meta: dict,
     return files, adoption, revision
 
 
-def apply_refreshed_gate(receipt: dict, files: dict) -> list:
-    """按 quality → audit → commit → adoption 顺序原子替换正式产物."""
+def apply_refreshed_gate(receipt: dict, files: dict, *,
+                         script_payload: "dict | None" = None,
+                         label: str = "production_context.gate_refresh") -> list:
+    """在同一 PublishTransaction 内原子替换正式产物，提交后生成 snapshots/step01_previous.zip."""
     from shared.json_io import atomic_dump_json
+    from shared.publish_txn import PublishTransaction
+
     ch = Path(receipt["formal_chapter"])
+    expected_old = str(receipt.get("script_revision") or "")
+    txn = PublishTransaction(ch, expected_old=expected_old or None, label=label)
     written = []
-    for name in REFRESH_ARTIFACTS:
-        payload = json.loads(files[name])
-        atomic_dump_json(ch / name, payload, ensure_ascii=False, indent=2)
-        written.append(name)
+    txn.begin()
+    try:
+        if script_payload is not None:
+            atomic_dump_json(ch / "script_result.json", script_payload,
+                             ensure_ascii=False, indent=2)
+            written.append("script_result.json")
+        for name in REFRESH_ARTIFACTS:
+            payload = json.loads(files[name])
+            atomic_dump_json(ch / name, payload, ensure_ascii=False, indent=2)
+            written.append(name)
+        txn.commit()
+    except Exception as exc:
+        if getattr(txn, "_begun", False) and not getattr(txn, "_done", False):
+            txn.rollback("门禁/补丁发布失败: %s" % exc)
+        raise
     return written
 
 
@@ -788,12 +827,12 @@ def main(argv=None) -> int:
                              "before_revision": receipt.get("script_revision"),
                              "meta": patch_meta})
                 return 0
-            written = apply_refreshed_gate(receipt, files)
-            from shared.json_io import atomic_dump_json
-            atomic_dump_json(script_path, new_script, ensure_ascii=False, indent=2)
+            written = apply_refreshed_gate(
+                receipt, files, script_payload=new_script, label="shot_patch")
             record_dir = ch / "_production" / "shot_patches"
             record_dir.mkdir(parents=True, exist_ok=True)
             stamp = _now().replace(":", "").replace("+", "_")
+            from shared.json_io import atomic_dump_json
             atomic_dump_json(record_dir / ("shot_patch_%s.json" % stamp), {
                 "schema": "production.shot_patch_record/1", "at": _now(),
                 "meta": patch_meta, "before_revision": receipt.get("script_revision"),

@@ -24,12 +24,13 @@ import time
 from pathlib import Path
 
 PLAN_MODE_ENV = "STEP01_PLAN_MODE"
+#: 历史模式常量：内部轻量结果/缓存标签仍使用 `"lightweight"`，但用户配置不得再切回单独旁路。
 PLAN_MODE_LEGACY = "legacy"
 PLAN_MODE_LIGHTWEIGHT = "lightweight"
-#: S29：共同生产入口。规划源可为 legacy / lightweight；默认 lightweight +
-#: 独立内容核验（把原版的 VerificationController 接到轻量计划上）。
+#: S46 唯一生产入口：统一规划＋独立内容核验＋完整分镜。
 PLAN_MODE_UNIFIED = "unified"
-PLAN_MODES = (PLAN_MODE_LEGACY, PLAN_MODE_LIGHTWEIGHT, PLAN_MODE_UNIFIED)
+PLAN_MODES = (PLAN_MODE_UNIFIED,)
+_DEPRECATED_PLAN_MODES = frozenset({PLAN_MODE_LEGACY, PLAN_MODE_LIGHTWEIGHT})
 CONTRACT_VERSION = "lightweight_outline.v1"
 #: 逻辑请求上限：首答 + 最多一次定点声音修订（2026-11-23 主线计划 S04）。非法回答也消耗这次
 #: 修订机会，不暗中重答；底层传输重试由 provider 另计，不占这里的次数。
@@ -41,24 +42,26 @@ CACHE_FILE_NAME = "chapter_outline.lightweight.cache.json"
 
 
 def plan_mode_setting(explicit: str | None = None) -> str:
-    """本次运行的规划模式；未知值**在任何发送之前**抛 `ValueError`."""
+    """本次运行的规划模式；S46 起只允许唯一统一入口（unified），旧开关在任何发送前拒绝."""
     _v = str(explicit if explicit is not None else os.getenv(PLAN_MODE_ENV) or "").strip()
     if not _v:
-        return PLAN_MODE_LEGACY
+        return PLAN_MODE_UNIFIED
+    if _v in _DEPRECATED_PLAN_MODES:
+        raise ValueError(
+            "%s=%r 已废弃：Step01 生产入口已收敛为唯一统一主链（%s），"
+            "请移除该旧配置或改为空/unified" % (PLAN_MODE_ENV, _v, PLAN_MODE_UNIFIED))
     if _v not in PLAN_MODES:
         raise ValueError("非法规划模式 %s=%r（合法：%s）" % (PLAN_MODE_ENV, _v, list(PLAN_MODES)))
     return _v
 
 
 def preflight_problems() -> str:
-    """发送前的组合检查：轻量/统一模式只支持旧呈现模式（legacy_audio）."""
-    _mode = plan_mode_setting()
-    if _mode not in (PLAN_MODE_LIGHTWEIGHT, PLAN_MODE_UNIFIED):
-        return ""
+    """发送前的组合检查：先校验规划模式，再核对统一入口只支持 legacy_audio 呈现模式."""
+    plan_mode_setting()
     from step01_script_gen.outline import presentation_mode
     from shared.presentation_contract import MODE_LEGACY
     if presentation_mode() != MODE_LEGACY:
-        return ("STEP01_PLAN_MODE=lightweight 只支持 %s 呈现模式（当前 %s）"
+        return ("Step01 统一规划入口只支持 %s 呈现模式（当前 %s）"
                 % (MODE_LEGACY, presentation_mode()))
     return ""
 

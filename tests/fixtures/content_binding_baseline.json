@@ -233,7 +233,6 @@
     "step04_merge/test_narration_overlay.py": 15,
     "step04_merge/test_step04_shots_subset_e2e.py": 4,
     "test_disk_governance.py": 1,
-    "tools/test_bench_text_provider_ab.py": 6,
     "tools/test_bench_video_prompt_patterns.py": 2,
     "tools/test_diag_prop_anchor_generation.py": 9,
     "tts/test_voice_registry_contract.py": 17

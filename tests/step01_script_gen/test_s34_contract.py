@@ -79,7 +79,7 @@ def test_new_band_and_voice_limits_reach_all_consumers(tmp_path):
     assert out["cache"]
 
 
-def test_defaults_stay_legacy_until_explicitly_configured(tmp_path):
+def test_defaults_use_unified_60_120_band_and_voice_defaults(tmp_path):
     out = _run(tmp_path, r'''
         from shared.config import duration_band, voice_allocation_limits
         from step01_script_gen.lightweight_plan import _cache_key
@@ -89,9 +89,26 @@ def test_defaults_stay_legacy_until_explicitly_configured(tmp_path):
     ''', {"DURATION_MIN_SEC": "", "DURATION_MAX_SEC": "", "DURATION_TARGET_MIN_SEC": "",
           "DURATION_TARGET_MAX_SEC": "", "STEP01_VOICE_ALLOCATION_MAX_LINES": "",
           "STEP01_VOICE_ALLOCATION_MAX_HAN": ""})
-    assert out["band"] == {"min": 60.0, "max": 90.0, "target_min": 70.0, "target_max": 80.0}
+    assert out["band"] == {"min": 60.0, "max": 120.0, "target_min": 85.0, "target_max": 110.0}
     assert out["lim"]["max_lines"] == 10 and out["lim"]["max_han"] == 280
-    assert out["lim"]["target_sec"] == 75.0
+    assert out["lim"]["target_sec"] == 97.5
+
+
+def test_deprecated_plan_mode_and_source_rejected_before_send(tmp_path):
+    for key, val in (("STEP01_PLAN_MODE", "legacy"),
+                     ("STEP01_PLAN_MODE", "lightweight"),
+                     ("STEP01_PLAN_SOURCE", "legacy")):
+        out = _run(tmp_path, r'''
+            from step01_script_gen.concurrent_extract import extract_all_concurrent
+            try:
+                extract_all_concurrent("原文", None, None, enable_characters=False,
+                                       enable_scene_objects=False, enable_outline=True)
+            except ValueError as exc:
+                print("RESULT:" + json.dumps({"err": str(exc)}, ensure_ascii=False))
+            else:
+                raise AssertionError("expected ValueError for deprecated switch")
+        ''', {key: val})
+        assert out["err"]
 
 
 def test_unified_entry_cache_identity_and_contract(tmp_path, monkeypatch):

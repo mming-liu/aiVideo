@@ -93,3 +93,44 @@ def load_plan_cache(path, *, scope, script_revision: str,
     if not digest or digest != plan_digest(outline):
         raise PlanCacheError("计划缓存的 plan_sha256 不符（内容被改动或损坏）")
     return outline
+
+
+def assert_formal_chapter_path(chapter_dir) -> Path:
+    """拒绝把快照目录、备份压缩包或临时目录当作正式章节目录消费（S48）."""
+    p = Path(chapter_dir)
+    if p.suffix.lower() == ".zip" or "snapshots" in p.parts:
+        raise PlanCacheError(f"禁止直接把备份/快照路径作为正式章节读取: {p}")
+    return p
+
+
+def load_script_plan(chapter_dir, script: dict, *, scope=None,
+                     script_revision: str | None = None,
+                     commit_manifest: dict | None = None) -> dict:
+    """统一下游计划装载（S48）：仅从正式章节目录读取，不再自行查找临时目录或 A/B 稿."""
+    ch = assert_formal_chapter_path(chapter_dir)
+    embedded = script.get("chapter_outline") if isinstance(script, dict) else None
+    if isinstance(embedded, dict) and embedded:
+        return embedded
+
+    manifest = commit_manifest
+    if manifest is None:
+        manifest_path = ch / "step01_commit.json"
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise PlanCacheError(f"step01_commit.json 不可读: {exc}") from exc
+
+    cache_required = bool(manifest.get("plan_cache_required")) if isinstance(manifest, dict) else True
+    eff_scope = scope if scope is not None else {
+        "book_name": script.get("book_name"),
+        "chapter": script.get("chapter_index"),
+    }
+    eff_rev = str(
+        script_revision if script_revision is not None
+        else (script.get("script_revision") or "")
+    )
+    loaded = load_plan_cache(
+        ch / FILENAME, scope=eff_scope, script_revision=eff_rev,
+        allow_missing=not cache_required)
+    return loaded if isinstance(loaded, dict) else {}
