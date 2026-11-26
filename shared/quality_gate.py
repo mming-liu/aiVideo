@@ -516,6 +516,25 @@ def _require_duration_band(record: dict, stage: str) -> None:
             f"expected={duration_band()!r}; re-run the upstream stage")
 
 
+def rule_source_compat_ok(compat, *, audit_fp: str, quality_fp: str) -> bool:
+    """精确、可核验的旧审计兼容声明；缺任一证据字段即拒绝."""
+    if not isinstance(compat, dict):
+        return False
+    if str(compat.get("from") or "") != str(audit_fp or ""):
+        return False
+    if str(compat.get("to") or "") != str(quality_fp or ""):
+        return False
+    if compat.get("deterministic_recheck") != "identical":
+        return False
+    if not str(compat.get("verified_at") or "").strip():
+        return False
+    ev = compat.get("evidence")
+    if not isinstance(ev, dict):
+        return False
+    return (ev.get("status") == "PASS" and ev.get("blocking") == 0
+            and ev.get("issues") == 0)
+
+
 def require_semantic_gate(quality_path: Path, audit_path: Path, script: dict,
                           *, stage: str = "step01") -> dict:
     """Require both structural PASS and a non-blocking final audit."""
@@ -538,10 +557,7 @@ def require_semantic_gate(quality_path: Path, audit_path: Path, script: dict,
     quality_fp = str(quality.get("rule_source_fingerprint") or "").strip()
     if audit_fp != quality_fp:
         compat = quality.get("rule_source_compat")
-        compat = compat if isinstance(compat, dict) else {}
-        if not (str(compat.get("from") or "") == audit_fp
-                and str(compat.get("to") or "") == quality_fp
-                and compat.get("deterministic_recheck") == "identical"):
+        if not rule_source_compat_ok(compat, audit_fp=audit_fp, quality_fp=quality_fp):
             raise QualityGateError(
                 f"{stage} semantic audit fingerprint mismatch: "
                 f"audit={audit_fp or 'missing'} quality={quality_fp or 'missing'}"
