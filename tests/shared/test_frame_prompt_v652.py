@@ -170,7 +170,7 @@ def test_roster_keeps_full_list_when_all_off_screen():
         [{"name": "甲", "on_screen": False}, {"name": "乙", "on_screen": False}],
         [{"name": "甲", "on_screen": False}])
     ff = _roster(add_image_strict_constraints("x", "首帧", shot=shot, characters=_CHARS3))
-    assert "甲" in ff, ff            # 全离屏不塌缩成"0 人"
+    assert "总共0人" in ff, ff       # S03 契约统一：显式全离屏明确无人出镜（不再退回全员）
 
 
 def test_roster_without_layout_keeps_everyone():

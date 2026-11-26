@@ -270,9 +270,11 @@ def _default_frames(frames, all_frames: bool):
 
 
 def _scoped_asset_identifiers(script: dict, units: list[dict]) -> dict:
-    """目标镜头实际引用的场景/道具资产 id（S13B：子集运行不连带全章）."""
+    """目标镜头实际引用的场景/道具/角色资产 id（支持 frame_layouts 别名与道具术语）."""
     import json
     from shared.assets_bank import PropAssetsBank, SceneAssetsBank
+    from shared.frame_spec import get_frame_spec, is_on_screen
+    from shared.prompt_facts import _character_lookup, _resolve_character
 
     scene_ids: set = set()
     sbank = SceneAssetsBank()
@@ -283,14 +285,53 @@ def _scoped_asset_identifiers(script: dict, units: list[dict]) -> dict:
             if loc and (sid in loc or loc in sid):
                 scene_ids.add(sid)
                 break
+
     prop_ids: set = set()
     pbank = PropAssetsBank()
     pbank.load()
     text = json.dumps(units, ensure_ascii=False)
+    prop_assets = script.get("prop_assets") if isinstance(script, dict) else {}
     for pid in pbank.get_all_identifiers():
-        if pid and pid in text:
+        if not pid:
+            continue
+        terms = [pid]
+        if isinstance(prop_assets, dict) and isinstance(prop_assets.get(pid), dict):
+            terms.extend(
+                str(t).strip() for t in (prop_assets[pid].get("consistent_terms") or [])
+                if str(t or "").strip()
+            )
+        if any(t in text for t in terms):
             prop_ids.add(pid)
-    return {"scenes": scene_ids, "props": prop_ids}
+            continue
+        for unit in units:
+            for fk, kf_cnt in (("first_frame", [None]), ("last_frame", [None]),
+                               ("keyframe", list(range(len(unit.get("keyframes") or []))))):
+                for kf_i in kf_cnt:
+                    for spec_item in get_frame_spec(unit, fk, kf_i):
+                        if is_on_screen(spec_item) and any(
+                            p in terms for p in (spec_item.get("props") or [])
+                        ):
+                            prop_ids.add(pid)
+                            break
+
+    char_ids: set = set()
+    chars_list = list((script or {}).get("characters") or [])
+    chars_map, alias_index = _character_lookup(chars_list)
+    for unit in units:
+        for fk, kf_cnt in (("first_frame", [None]), ("last_frame", [None]),
+                           ("keyframe", list(range(len(unit.get("keyframes") or []))))):
+            for kf_i in kf_cnt:
+                for spec_item in get_frame_spec(unit, fk, kf_i):
+                    if not is_on_screen(spec_item):
+                        continue
+                    raw_name = str(spec_item.get("name") or "").strip()
+                    if not raw_name:
+                        continue
+                    cid, c_obj, _mk, _issue = _resolve_character(raw_name, chars_map, alias_index)
+                    if c_obj and cid:
+                        char_ids.add(cid)
+
+    return {"scenes": scene_ids, "props": prop_ids, "characters": char_ids}
 
 
 class _ConsoleLogger:

@@ -10,13 +10,10 @@
 
 from __future__ import annotations
 
-import copy
-import json
 import os
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 # 画风来自 .env.content 的 VIDEO_STYLE。这里显式加载一次（幂等、shell 优先），
 # 避免「先 import style_prefix、后 import config」时静默退回 gufeng——那会让
@@ -456,10 +453,9 @@ def validate_fps_consistency(script: dict) -> None:
 # 权威替换词表统一收敛在 shared/content_safety.py（审计 P0-2：敏感词三套合一）。
 # style_prefix / content_policy_fix / scene_compliance 不再各自维护词表。
 from shared.content_safety import (
-    SENSITIVE_SUBSTITUTIONS,
     sanitize as _safety_sanitize,
     FORBIDDEN_WORDS,
-    WEAPON_WORDS, WEAPON_HIDDEN_WORDS, WEAPON_VISIBLE_WORDS, WEAPON_STAB_VERBS,
+    WEAPON_WORDS,
 )
 
 
@@ -1490,10 +1486,12 @@ def _age_label(value) -> str:
 
 def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                                  shot: dict | None = None,
-                                 characters: list | None = None) -> str:
+                                 characters: list | None = None,
+                                 kf_index: int | None = None) -> str:
     """为图片生成添加严格约束，防止 AI 幻觉生成错误画面。
 
     frame_type: "首帧"、"尾帧" 或 "关键帧"
+    kf_index: frame_type="关键帧" 时对应的关键帧序号（用于读取 frame_layouts.kfs[kf_index]）
     shot: 镜头数据（可选）。传入时根据镜头实际出现的角色动态生成约束，
           避免向无刺客的镜头注入刺客描述导致图片模型脑补多余人物。
     characters: 角色表（可选）。M6 修复 2026-08-14：约束原先按第一章硬编码
@@ -1560,53 +1558,88 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 shot.get("ff_desc", ""), shot.get("lf_desc", ""),
                 shot.get("motion_desc", "") or shot.get("prompt", ""),
             ]))
-        from shared.vimax_bridge import _threat_visible_in
-        _threat_vis = _threat_visible_in(_threat_desc, characters)
-        _threat_onscreen = _threat_vis is True
-        _threat_invisible_only = has_threat and _threat_vis is False
-
-        # 本镜实际出场的注册角色（按 identifier 在镜头文本中匹配）
-        present_chars = []
-        for c in (characters or []):
-            ident = (c.get("identifier") or "").strip()
-            if ident and ident in shot_text:
-                present_chars.append(c)
-
-        # S23-1：frame_layouts 的 on_screen 名单是“当帧出镜”事实源。非注册角色
-        # （远景农人/群演等）不在 script.characters 里，但正文可能明确写了他们；
-        # 只按注册角色生成“只允许 N 人”会与正文直接打架（正文有农人，末尾却
-        # 禁止任何其他人物）。把当帧 on_screen 的非注册名并入允许名单，并在
-        # 存在此类角色时改用“描述明确提到的人物”口径，不硬编码具体人名。
-        _frame_kind = {"首帧": "first_frame", "尾帧": "last_frame"}.get(frame_type)
-        _spec_on_screen: list[str] = []
+        _frame_kind = {"首帧": "first_frame", "尾帧": "last_frame", "关键帧": "keyframe"}.get(frame_type)
+        _proj = None
         if _frame_kind:
             try:
-                from shared.frame_spec import get_frame_spec, is_on_screen
-                _spec_on_screen = [
-                    str(s.get("name", "")).strip()
-                    for s in get_frame_spec(shot, _frame_kind)
-                    if is_on_screen(s) and str(s.get("name", "")).strip()
-                ]
+                from shared.prompt_facts import project_frame_facts
+                _proj = project_frame_facts(shot, _frame_kind, characters, kf_index=kf_index)
             except Exception:
-                _spec_on_screen = []
-        _known_names: set[str] = set()
-        try:
-            from shared.vimax_bridge import _char_aliases
-        except Exception:
-            _char_aliases = None
-        for c in (characters or []):
-            ident = str(c.get("identifier") or "").strip()
-            if not ident:
-                continue
-            if _char_aliases is not None:
-                _known_names.update(_char_aliases(ident, characters))
-            else:
-                _known_names.add(ident)
-        _extra_on_screen = [
-            n for n in dict.fromkeys(_spec_on_screen) if n not in _known_names
-        ]
+                _proj = None
+        _fl_governed = bool(
+            _proj is not None
+            and _proj.get("spec_source") == "frame_layouts"
+            and _proj.get("spec_present")
+        )
 
-        if has_threat:
+        from shared.vimax_bridge import _threat_visible_in
+        if _fl_governed:
+            from shared.frame_spec import spec_threat_visible
+            _threat_onscreen = spec_threat_visible(shot, _THREAT_NAMES, _frame_kind, kf_index)
+            _threat_vis = True if _threat_onscreen else _threat_visible_in(_threat_desc, characters)
+            _threat_invisible_only = has_threat and (not _threat_onscreen) and (_threat_vis is False)
+        else:
+            _threat_vis = _threat_visible_in(_threat_desc, characters)
+            _threat_onscreen = _threat_vis is True
+            _threat_invisible_only = has_threat and _threat_vis is False
+
+        _char_by_id = {
+            str(c.get("identifier") or "").strip(): c
+            for c in (characters or [])
+            if isinstance(c, dict) and str(c.get("identifier") or "").strip()
+        }
+        _extra_on_screen: list[str] = []
+        _spec_on_screen: list[str] = []
+        if _fl_governed:
+            present_chars = []
+            _seen_present: set[str] = set()
+            for _ent in (_proj.get("entities") or []):
+                _ename = str(_ent.get("name") or "").strip()
+                if not _ename:
+                    continue
+                _spec_on_screen.append(_ename)
+                _cid = _ent.get("character_id")
+                if _cid and _cid in _char_by_id and _cid not in _seen_present:
+                    present_chars.append(_char_by_id[_cid])
+                    _seen_present.add(_cid)
+                elif not _cid and _ename not in _extra_on_screen:
+                    _extra_on_screen.append(_ename)
+        else:
+            # 本镜实际出场的注册角色（按 identifier 在镜头文本中匹配）
+            present_chars = []
+            for c in (characters or []):
+                ident = (c.get("identifier") or "").strip()
+                if ident and ident in shot_text:
+                    present_chars.append(c)
+
+            if _frame_kind:
+                try:
+                    from shared.frame_spec import get_frame_spec, is_on_screen
+                    _spec_on_screen = [
+                        str(s.get("name", "")).strip()
+                        for s in get_frame_spec(shot, _frame_kind, kf_index)
+                        if is_on_screen(s) and str(s.get("name", "")).strip()
+                    ]
+                except Exception:
+                    _spec_on_screen = []
+            _known_names: set[str] = set()
+            try:
+                from shared.vimax_bridge import _char_aliases
+            except Exception:
+                _char_aliases = None
+            for c in (characters or []):
+                ident = str(c.get("identifier") or "").strip()
+                if not ident:
+                    continue
+                if _char_aliases is not None:
+                    _known_names.update(_char_aliases(ident, characters))
+                else:
+                    _known_names.add(ident)
+            _extra_on_screen = [
+                n for n in dict.fromkeys(_spec_on_screen) if n not in _known_names
+            ]
+
+        if has_threat and (not _fl_governed or _threat_onscreen):
             # 武器归属：武器只能由威胁源持有；其余出场角色不得持武器/蒙面。
             # 08-16：威胁源自己持有武器，不应被列入"无武器"——否则同段既写
             # "武器只能由刺客持有"又写"刺客手中没有武器"自相矛盾。
@@ -1648,53 +1681,77 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                     f"【性别】{ident}是{age_note}男子；必须画成男性。"
                 )
 
-        # 08-16：人数名单只列**该帧可见**角色。威胁源在本帧若仅以非实体方式
-        # 出现（水下黑影/刀尖/没入水中）→ 画面没有完整刺客，不列入（否则
-        # hook ff「总共4人」会逼图片模型画出完整刺客）。同时去重——has_threat
-        # 追加"刺客"曾与 present_chars 里已匹配的刺客重复，出现"杨旭、听香、
-        # 刺客、刺客，总共4人"的严重幻觉源。
-        _count_chars = [c for c in present_chars
-                        if c["identifier"] not in _THREAT_NAMES or _threat_onscreen]
-        char_names = list(dict.fromkeys(c["identifier"] for c in _count_chars))
-        if has_threat and _threat_onscreen and not any(
-                n in _THREAT_NAMES for n in char_names):
-            # S25：不要把“刺客”硬追加到已经是“神秘人/蒙面人”的名单上，
-            # 否则同一人会被写成“神秘人、刺客，总共2人”。
-            _threat_label = next((n for n in _THREAT_NAMES if n in shot_text), "刺客")
-            char_names.append(_threat_label)
-        # S23-1：非注册但本帧 on_screen 的角色（远景农人/群演）并入允许名单。
-        for _n in _extra_on_screen:
-            if _n not in char_names:
-                char_names.append(_n)
-        # 2026-11-08（WP2）：名单只保留**本帧 on_screen** 的角色。
-        # 首帧/尾帧的出镜人不同（shot 5/8/12 实测），旧实现把整镜 present_chars
-        # 全写进「总共 N 人」，与本帧 frame_layouts 直接打架，也触发
-        # image_final_prompt_offscreen_entity。全离屏时保留原名单，避免"总共 0 人"。
-        if _frame_kind and _spec_on_screen:
-            _visible_names = set(_spec_on_screen)
-            _alias_of: dict = {}
-            for _c in (characters or []):
-                _ident = str(_c.get("identifier") or "").strip()
-                if not _ident:
-                    continue
-                try:
-                    _alias_of[_ident] = set(_char_aliases(_ident, characters or []))
-                except Exception:
-                    _alias_of[_ident] = {_ident}
+        if _fl_governed:
+            # Spec-governed frames take the exact on-screen entity list from
+            # frame_layouts (canonical IDs for registered entities, preserving
+            # sanitized threat aliases like "神秘人" when used in spec_name).
+            def _display_name(_ent: dict) -> str:
+                _nm = str(_ent.get("name") or "").strip()
+                _snm = str(_ent.get("spec_name") or "").strip()
+                if _snm and _nm in _THREAT_NAMES and _snm in _THREAT_NAMES:
+                    return _snm
+                return _nm
 
-            def _is_visible(_name: str) -> bool:
-                """名字（含威胁别名）在本帧是否可见：按**角色身份**而不是字面名判定."""
-                if _name in _visible_names:
-                    return True
-                for _ident, _aliases in _alias_of.items():
-                    if _name in _aliases and (_ident in _visible_names
-                                                or _aliases & _visible_names):
+            _count_entities = [
+                _ent for _ent in (_proj.get("entities") or [])
+                if _ent.get("name")
+                and (
+                    (_ent.get("name") not in _THREAT_NAMES
+                     and not any(t in _ent.get("name", "") for t in _THREAT_NAMES))
+                    or _threat_onscreen
+                )
+            ]
+            char_names = list(dict.fromkeys(_display_name(e) for e in _count_entities))
+            if not char_names:
+                strict_constraints += (
+                    "【人物数量限制】本帧画面无人出镜（总共0人），"
+                    "禁止画面中出现任何人物、人影或人形轮廓。"
+                )
+        else:
+            # 08-16：人数名单只列**该帧可见**角色。威胁源在本帧若仅以非实体方式
+            # 出现（水下黑影/刀尖/没入水中）→ 画面没有完整刺客，不列入（否则
+            # hook ff「总共4人」会逼图片模型画出完整刺客）。同时去重——has_threat
+            # 追加"刺客"曾与 present_chars 里已匹配的刺客重复，出现"杨旭、听香、
+            # 刺客、刺客，总共4人"的严重幻觉源。
+            _count_chars = [c for c in present_chars
+                            if c["identifier"] not in _THREAT_NAMES or _threat_onscreen]
+            char_names = list(dict.fromkeys(c["identifier"] for c in _count_chars))
+            if has_threat and _threat_onscreen and not any(
+                    n in _THREAT_NAMES for n in char_names):
+                # S25：不要把“刺客”硬追加到已经是“神秘人/蒙面人”的名单上，
+                # 否则同一人会被写成“神秘人、刺客，总共2人”。
+                _threat_label = next((n for n in _THREAT_NAMES if n in shot_text), "刺客")
+                char_names.append(_threat_label)
+            # S23-1：非注册但本帧 on_screen 的角色（远景农人/群演）并入允许名单。
+            for _n in _extra_on_screen:
+                if _n not in char_names:
+                    char_names.append(_n)
+            # 2026-11-08（WP2）：名单只保留**本帧 on_screen** 的角色。
+            if _frame_kind and _spec_on_screen:
+                _visible_names = set(_spec_on_screen)
+                _alias_of: dict = {}
+                for _c in (characters or []):
+                    _ident = str(_c.get("identifier") or "").strip()
+                    if not _ident:
+                        continue
+                    try:
+                        _alias_of[_ident] = set(_char_aliases(_ident, characters or []))
+                    except Exception:
+                        _alias_of[_ident] = {_ident}
+
+                def _is_visible(_name: str) -> bool:
+                    """名字（含威胁别名）在本帧是否可见：按**角色身份**而不是字面名判定."""
+                    if _name in _visible_names:
                         return True
-                return False
+                    for _ident, _aliases in _alias_of.items():
+                        if _name in _aliases and (_ident in _visible_names
+                                                    or _aliases & _visible_names):
+                            return True
+                    return False
 
-            _filtered = [n for n in char_names if _is_visible(n)]
-            if _filtered:
-                char_names = _filtered
+                _filtered = [n for n in char_names if _is_visible(n)]
+                if _filtered:
+                    char_names = _filtered
 
         if char_names:
             # 威胁源以水下黑影/刀尖呈现时，黑影是剧情要素，不在禁用之列——
@@ -1792,9 +1849,21 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                 "禁止全身入画拉远景别。"
             )
 
-        # 首帧禁血/禁动作结果（08-09 首帧杨旭胸口血迹、刺客血眼）：首帧是动作
-        # 「前一刻」（破水前/未刺中），画面必须干净无血。血污/伤口只允许出现在尾帧。
-        if frame_type == "首帧" and has_threat:
+        # 首帧禁血/禁动作结果：若当帧 states 合同已显式声明伤痕/血迹状态（如“心口暗红”），
+        # 不得注入“禁止血迹”与之打架。
+        _explicit_blood_contract = False
+        if _fl_governed and _proj:
+            _blood_marks = ("血", "伤", "暗红", "青紫", "淤青")
+            for _ent in (_proj.get("entities") or []):
+                _st_list = (_ent.get("current") or {}).get("states")
+                if isinstance(_st_list, list) and any(
+                    any(m in str(st) for m in _blood_marks)
+                    and not str(st).strip().startswith(("无", "未", "没有", "不"))
+                    for st in _st_list
+                ):
+                    _explicit_blood_contract = True
+                    break
+        if frame_type == "首帧" and has_threat and not _explicit_blood_contract:
             _victim_note = "。".join(f"{c['identifier']}胸口、身上必须干净无伤" for c in present_chars)
             # S25：威胁源已在本帧可见（半身探出/举刀）时不得再写“尚未出水”，
             # 否则前段“破水探出”与后段“尚未出水”直接矛盾。
@@ -1861,15 +1930,23 @@ THREAT_ALIASES = ("神秘人", "黑衣人", "蒙面人", "黑影", "杀手", "�
 def is_empty_scene(shot: dict, characters: list[dict]) -> bool:
     """判断镜头是否为空镜（画面中不应出现任何人物）.
 
-    依据：main_subject 不是角色、画面描述（motion_desc/ff_desc）未提到
-    角色名、也无泛人物字眼。注意不检查 context_bridge —— 它描述的是
-    上一镜头的画面，常含上一镜头的角色名，会造成误判。
-
-    B4 修复：角色匹配含威胁源别名——合规替换把「刺客→神秘人」后文本用
-    「神秘人」，但注册角色名是「刺客」；仅 ident in search_text 会漏配
-    （此前靠单字「人」意外命中），导致带威胁源的空镜镜头被误判为空镜、
-    人物渗入（威胁源肖像漏注入）。现按别名显式匹配。
+    依据：frame_layouts 中若任一帧声明 on_screen=True 则绝非空镜；
+    其余依据 main_subject、画面描述（motion_desc/ff_desc）与角色标识/别名/泛人物词。
     """
+    fl = shot.get("frame_layouts") if isinstance(shot, dict) else None
+    if isinstance(fl, dict):
+        from shared.frame_spec import is_on_screen
+        buckets: list = []
+        for k in ("ff", "lf"):
+            if isinstance(fl.get(k), list):
+                buckets.extend(fl[k])
+        if isinstance(fl.get("kfs"), list):
+            for kf_list in fl["kfs"]:
+                if isinstance(kf_list, list):
+                    buckets.extend(kf_list)
+        if any(isinstance(e, dict) and is_on_screen(e) for e in buckets):
+            return False
+
     main_subject = shot.get("main_subject", "")
     motion_desc = shot.get("motion_desc", "").strip() or shot.get("prompt", "")
     ff_desc = shot.get("ff_desc", "")
@@ -1880,8 +1957,11 @@ def is_empty_scene(shot: dict, characters: list[dict]) -> bool:
         ident = c.get("identifier") or ""
         if not ident:
             continue
-        # 精确名 + 威胁源别名（合规替换后的称谓）都算"画面出现角色"
+        # 精确名 + 显式 aliases + 威胁源别名（合规替换后的称谓）都算"画面出现角色"
         if ident in search_text:
+            has_character = True
+            break
+        if any(str(a) in search_text for a in (c.get("aliases") or []) if str(a or "").strip()):
             has_character = True
             break
         if ident in THREAT_ALIASES and any(a in search_text for a in THREAT_ALIASES):

@@ -30,6 +30,7 @@ REQUEST_EVENTS = (
     "request_sent", "response_received", "account_refused", "transport_failed",
     "image_saved", "image_download_failed",
     "qc_passed", "qc_rejected", "qc_call_failed", "qc_not_run", "qc_stale",
+    "decision_ledger",
 )
 
 _LOCK = threading.Lock()
@@ -116,6 +117,52 @@ def events_for(request_id: str, path: str | Path | None = None) -> list[dict]:
     return [e for e in read_events(path) if e.get("request_id") == request_id]
 
 
+def emit_decision_ledger(
+    *,
+    chapter_scope: str = "",
+    shot_index: int | None = None,
+    frame_role: str = "",
+    shot_complexity: str = "",
+    provider: str = "",
+    model_id: str = "",
+    prompt_version: str = "",
+    ref_strategy: str = "",
+    ref_identities: list[str] | None = None,
+    attempt_index: int | None = None,
+    action_type: str = "generate",
+    defect_class: str = "none",
+    qc_verdict: str = "",
+    human_usability: str = "pending",
+    non_target_damage: bool = False,
+    estimated_cost_cny: float | None = None,
+    request_id: str = "",
+    detail: str = "",
+) -> None:
+    """Append a structured Stage 4 decision ledger record into step02_events.jsonl."""
+    emit(
+        "decision_ledger",
+        request_id=request_id,
+        kind="image_decision",
+        chapter_scope=chapter_scope,
+        shot_index=shot_index,
+        frame_role=frame_role,
+        shot_complexity=shot_complexity,
+        provider=provider,
+        model_id=model_id,
+        prompt_version=prompt_version,
+        ref_strategy=ref_strategy,
+        ref_identities=list(ref_identities) if ref_identities is not None else [],
+        attempt_index=attempt_index,
+        action_type=action_type,
+        defect_class=defect_class,
+        qc_verdict=qc_verdict,
+        human_usability=human_usability,
+        non_target_damage=bool(non_target_damage),
+        estimated_cost_cny=estimated_cost_cny,
+        detail=detail[:240] if detail else None,
+    )
+
+
 def summarize(path: str | Path | None = None) -> dict:
     """按事件/结果计数；用于报告与恢复核对（不推断缺失的终局）."""
     counts: dict[str, int] = {}
@@ -128,5 +175,5 @@ def summarize(path: str | Path | None = None) -> dict:
 
 
 __all__ = ["REQUEST_EVENTS", "begin_request", "clear_request", "current_request_id",
-           "emit", "events_for", "events_path", "new_request_id", "read_events",
-           "summarize"]
+           "emit", "emit_decision_ledger", "events_for", "events_path",
+           "new_request_id", "read_events", "summarize"]

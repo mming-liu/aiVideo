@@ -40,46 +40,226 @@ def is_on_screen(entry: dict, default: bool = True) -> bool:
     return bool(entry.get("on_screen", default))
 
 
-def get_frame_spec(
+_FRAME_BUCKET_MAP = {
+    "first_frame": "ff",
+    "ff": "ff",
+    "last_frame": "lf",
+    "lf": "lf",
+    "keyframe": "kfs",
+    "kf": "kfs",
+}
+
+
+def _normalize_frame_bucket(frame_kind: str) -> Optional[str]:
+    """Map caller frame_kind strings to canonical frame_layouts buckets."""
+    return _FRAME_BUCKET_MAP.get(str(frame_kind or "").strip())
+
+
+def _validate_spec_entries(raw: list, source: str) -> tuple[list[dict], list[dict]]:
+    """Validate raw spec items and collect structured contract issues."""
+    entries: list[dict] = []
+    issues: list[dict] = []
+    seen_names: dict[str, list[tuple[int, bool]]] = {}
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            issues.append({
+                "code": "invalid_spec_entry_type",
+                "source": source,
+                "index": idx,
+                "actual_type": type(item).__name__,
+            })
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            issues.append({
+                "code": "blank_entity_name",
+                "source": source,
+                "index": idx,
+            })
+            entries.append(item)
+            continue
+        if ("on_screen" in item and item["on_screen"] is not None
+                and not isinstance(item["on_screen"], bool)):
+            issues.append({
+                "code": "invalid_on_screen_type",
+                "source": source,
+                "index": idx,
+                "name": name,
+                "actual_type": type(item["on_screen"]).__name__,
+            })
+        if ("states" in item and item["states"] is not None
+                and not isinstance(item["states"], list)):
+            issues.append({
+                "code": "invalid_states_type",
+                "source": source,
+                "index": idx,
+                "name": name,
+                "actual_type": type(item["states"]).__name__,
+            })
+        seen_names.setdefault(name, []).append((idx, is_on_screen(item)))
+        entries.append(item)
+    for name, occs in seen_names.items():
+        if len(occs) > 1:
+            on_vals = {occ[1] for occ in occs}
+            code = "conflicting_entity_on_screen" if len(on_vals) > 1 else "duplicate_entity_name"
+            issues.append({
+                "code": code,
+                "source": source,
+                "name": name,
+                "indices": [occ[0] for occ in occs],
+            })
+    return entries, issues
+
+
+def inspect_frame_spec(
     shot: dict,
     frame_kind: str,
     kf_index: Optional[int] = None,
-) -> list[dict]:
-    """返回当帧出镜表 spec.
+) -> dict:
+    """Inspect a frame's contract source, status, entries, and structural issues.
 
-    Args:
-        shot: 分镜 dict（必有 frame_layouts，新章；可无，老章降级）
-        frame_kind: "first_frame" | "last_frame" | "keyframe"
-        kf_index: 当 frame_kind="keyframe" 时取 shot['frame_layouts']['kfs'][kf_index]；
-                  越界/类型不匹配时返回 [] 并 warn
-
-    Returns:
-        当帧出镜表（每项是 _FRAME_SPEC_ITEM 结构的 dict）。
-        - 优先读 frame_layouts.ff / lf / kfs
-        - 缺失时降级读 char_layout 派生
-
-    降级路径：旧章节只存 char_layout，按「全镜出镜表」派生 spec 兜底，
-    缺失字段 on_screen=True（保守估计在场）；pose=''；gaze_target='无'；props=[]。
+    Distinguishes:
+    - source="frame_layouts", status="valid", all on_screen=False -> explicit empty frame
+    - status="missing" -> missing frame_layouts/char_layout or empty [] list
+    - status="invalid" -> malformed container/entries, out-of-range kf_index,
+      blank/duplicate/conflicting entity names, or wrong field types.
     """
-    fl = shot.get("frame_layouts")
-    if isinstance(fl, dict):
-        if frame_kind == "first_frame":
-            return fl.get("ff") or []
-        if frame_kind == "last_frame":
-            return fl.get("lf") or []
-        if frame_kind == "keyframe":
-            kfs = fl.get("kfs") or []
-            if kf_index is None or kf_index < 0 or kf_index >= len(kfs):
-                _log.warning(
-                    "get_frame_spec: kf_index=%s 越界（kfs 长度 %s，shot index=%s）",
-                    kf_index, len(kfs), shot.get("index"),
-                )
-                return []
-            return kfs[kf_index] or []
-        _log.warning("get_frame_spec: 未知 frame_kind=%r", frame_kind)
+    bucket = _normalize_frame_bucket(frame_kind)
+    if bucket is None:
+        return {
+            "source": "missing",
+            "status": "invalid",
+            "entries": [],
+            "issues": [{"code": "unknown_frame_kind", "frame_kind": frame_kind}],
+        }
+    if not isinstance(shot, dict):
+        return {
+            "source": "missing",
+            "status": "invalid",
+            "entries": [],
+            "issues": [{"code": "invalid_shot_type", "actual_type": type(shot).__name__}],
+        }
+    if "frame_layouts" in shot and shot.get("frame_layouts") is not None:
+        fl = shot.get("frame_layouts")
+        if not isinstance(fl, dict):
+            return {
+                "source": "frame_layouts",
+                "status": "invalid",
+                "entries": [],
+                "issues": [{"code": "invalid_frame_layouts_type", "actual_type": type(fl).__name__}],
+            }
+        if bucket == "kfs":
+            if "kfs" not in fl or fl.get("kfs") is None:
+                return {
+                    "source": "missing",
+                    "status": "missing",
+                    "entries": [],
+                    "issues": [{"code": "missing_frame_spec", "bucket": "kfs", "kf_index": kf_index}],
+                }
+            kfs = fl.get("kfs")
+            if not isinstance(kfs, list):
+                return {
+                    "source": "frame_layouts",
+                    "status": "invalid",
+                    "entries": [],
+                    "issues": [{"code": "invalid_kfs_type", "actual_type": type(kfs).__name__}],
+                }
+            if not kfs:
+                return {
+                    "source": "frame_layouts",
+                    "status": "missing",
+                    "entries": [],
+                    "issues": [{"code": "empty_kfs_bucket", "kf_index": kf_index}],
+                }
+            if (kf_index is None or isinstance(kf_index, bool)
+                    or not isinstance(kf_index, int) or kf_index < 0 or kf_index >= len(kfs)):
+                return {
+                    "source": "frame_layouts",
+                    "status": "invalid",
+                    "entries": [],
+                    "issues": [{
+                        "code": "kf_index_out_of_range",
+                        "kf_index": kf_index,
+                        "kfs_len": len(kfs),
+                    }],
+                }
+            raw = kfs[kf_index]
+            if raw is None:
+                return {
+                    "source": "missing",
+                    "status": "missing",
+                    "entries": [],
+                    "issues": [{"code": "missing_frame_spec", "bucket": "kfs", "kf_index": kf_index}],
+                }
+        else:
+            if bucket not in fl or fl.get(bucket) is None:
+                return {
+                    "source": "missing",
+                    "status": "missing",
+                    "entries": [],
+                    "issues": [{"code": "missing_frame_spec", "bucket": bucket}],
+                }
+            raw = fl.get(bucket)
+        if not isinstance(raw, list):
+            return {
+                "source": "frame_layouts",
+                "status": "invalid",
+                "entries": [],
+                "issues": [{
+                    "code": "invalid_spec_list_type",
+                    "bucket": bucket,
+                    "kf_index": kf_index,
+                    "actual_type": type(raw).__name__,
+                }],
+            }
+        if not raw:
+            return {
+                "source": "frame_layouts",
+                "status": "missing",
+                "entries": [],
+                "issues": [{"code": "empty_frame_spec", "bucket": bucket, "kf_index": kf_index}],
+            }
+        entries, issues = _validate_spec_entries(raw, source="frame_layouts")
+        return {
+            "source": "frame_layouts",
+            "status": "invalid" if issues else "valid",
+            "entries": entries,
+            "issues": issues,
+        }
+
+    cl = shot.get("char_layout")
+    if "char_layout" not in shot or cl is None or cl == []:
+        return {
+            "source": "missing",
+            "status": "missing",
+            "entries": [],
+            "issues": [{"code": "missing_frame_spec"}],
+        }
+    if not isinstance(cl, list):
+        return {
+            "source": "char_layout",
+            "status": "invalid",
+            "entries": [],
+            "issues": [{"code": "invalid_char_layout_type", "actual_type": type(cl).__name__}],
+        }
+    derived = _legacy_spec_from_char_layout(shot)
+    entries, issues = _validate_spec_entries(derived, source="char_layout")
+    return {
+        "source": "char_layout",
+        "status": "invalid" if issues else "valid",
+        "entries": entries,
+        "issues": issues,
+    }
+
+
+def get_frame_spec(shot: dict, frame_kind: str,
+                   kf_index: Optional[int] = None) -> list[dict]:
+    """Compatibility reader; strict consumers inspect provenance and issues."""
+    record = inspect_frame_spec(shot, frame_kind, kf_index)
+    if record["status"] == "invalid":
+        _log.warning("invalid frame spec: %s", record["issues"])
         return []
-    # 降级路径：老章只存 char_layout → 派生 spec
-    return _legacy_spec_from_char_layout(shot)
+    return record["entries"]
 
 
 def _legacy_spec_from_char_layout(shot: dict) -> list[dict]:
@@ -272,42 +452,15 @@ def spec_threat_visible(
     return False
 
 
-def spec_roster_or_none(
-    shot: dict,
-    frame_kind: str,
-    kf_index: Optional[int] = None,
-) -> Optional[set[str]]:
-    """本帧出镜名单（on_screen=True 的 name 集合），保留「缺失 vs 明确无人」区分.
-
-    与 spec_on_screen_names 的区别：本函数额外区分
-      - None  = spec 缺失/无条目（frame_layouts 无该帧 / kfs 越界 / 该帧为空表）
-                → 调用方应回退文本匹配（旧行为）
-      - set() = spec 存在且**明确本帧无人出镜**（全 on_screen=False）
-                → 调用方必须照空名单处理，禁止回退文本
-
-    专供 vimax_bridge 参考图/拼图「用到才拼」的 None 语义（get_frame_spec 的
-    [] 无法区分这两种情况）。on_screen 缺省走 is_on_screen（True）。
-    """
-    fl = shot.get("frame_layouts")
-    if not isinstance(fl, dict):
+def spec_roster_or_none(shot: dict, frame_kind: str,
+                        kf_index: Optional[int] = None) -> Optional[set[str]]:
+    """None means missing/legacy; an empty set means explicitly off-screen."""
+    record = inspect_frame_spec(shot, frame_kind, kf_index)
+    if record["status"] == "invalid":
+        raise ValueError(str(record["issues"]))
+    if record["status"] != "valid" or record["source"] != "frame_layouts":
         return None
-    if frame_kind == "keyframe":
-        kfs = fl.get("kfs") or []
-        if kf_index is None or kf_index < 0 or kf_index >= len(kfs):
-            return None
-        entries = kfs[kf_index]
-    else:
-        entries = fl.get(frame_kind)
-    if not entries:
-        return None
-    roster: set[str] = set()
-    for e in entries:
-        if not is_on_screen(e):
-            continue
-        name = str(e.get("name", "")).strip()
-        if name:
-            roster.add(name)
-    return roster
+    return {e['name'].strip() for e in record['entries'] if is_on_screen(e)}
 
 
 # 【角色锚定】注入块标记（生成端：shared/vimax_bridge.py _extract_char_layout；
@@ -331,3 +484,5 @@ def strip_polluted_char_anchor_block(desc: str) -> str:
     if CHAR_ANCHOR_BLOCK_MARKER not in desc or "未指定" not in desc:
         return desc
     return desc.split(CHAR_ANCHOR_BLOCK_MARKER, 1)[0].rstrip("。！？，,;；")
+
+

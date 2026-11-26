@@ -160,19 +160,19 @@ def _keyframes_consumed_by_video() -> bool:
     return video_consumes_intermediate_frames()
 
 
+PRODUCT_ACCEPTANCE_SCHEMA = "step02a.product_acceptance/2"
+
+
 def build_image_product_quality(script: dict, work_dir: Path, *,
                                  only_indices=None, require_keyframes=None,
                                  media_policy=None) -> dict:
-    """Validate actual Step02a frame products and **build** the acceptance payload.
+    """Validate actual Step02a frame products, bound QC, and admission separately.
 
-    2026-11-18 O2：拆出纯构建函数，``--verify-only`` 可在不写盘、不生图、不跑
-    视觉 QC 的前提下复用同一份判据；``write_image_product_quality`` 保持原签名。
-
-    only_indices: 只核验这些镜头（--shots 子集运行）；None=全章。
-    require_keyframes: None ⇒ 全章运行按旧行为要求关键帧；子集运行按当前视频
-        模型是否消费 keyframe 决定（1.0-pro 不消费则不要求）。
+    S05: qc_rejected, qc_not_run, qc_call_failed, or qc_stale blocks admission
+    even when all image files exist and decode cleanly.
     """
-    from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
+    from shared.image_qc import build_qc_frame_meta, qc_state
+    from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME, is_core_keyframe_file
     from step01_script_gen.quality_issues import RULE_VERSION
 
     units = []
@@ -191,60 +191,159 @@ def build_image_product_quality(script: dict, work_dir: Path, *,
     from shared.video_media_plan import active_media_policy, required_frames
     policy = media_policy or active_media_policy()
     need = required_frames(policy)
+    characters = list(script.get("characters") or [])
+
     missing = []
+    file_missing = []
+    qc_failures = []
     outputs = {}
     issues_by_shot = {}
+
+    def _is_frame_locked(shot_dir_obj: Path, role: str, kf_i: int | None = None) -> bool:
+        if role == "keyframe" and kf_i is not None:
+            names = (f".lock_frame_keyframe_{kf_i}", ".lock_frame_keyframe")
+        elif role == "first_frame":
+            names = (".lock_frame_first_frame", ".lock_frame_ff")
+        elif role == "last_frame":
+            names = (".lock_frame_last_frame", ".lock_frame_lf")
+        else:
+            names = ()
+        return any((shot_dir_obj / nm).exists() for nm in names)
+
+    def _check_frame_qc(
+        shot_obj: dict, frame_path: Path, frame_kind: str, kf_index: int | None = None,
+    ) -> dict:
+        meta = build_qc_frame_meta(shot_obj, frame_kind, characters, kf_index=kf_index)
+        st = qc_state(frame_path, expected_frame=meta)
+        return {
+            "status": str(st.get("status") or "qc_not_run"),
+            "reason": str(st.get("reason") or ""),
+            "sha256": str((st.get("image") or {}).get("sha256") or ""),
+            "frame": meta,
+        }
+
+    all_required_locked = bool(units)
     for shot in units:
         idx = shot.get("index", 0)
         issue_start = len(missing)
         shot_dir = Path(work_dir) / "shots" / str(idx)
         ff = shot_dir / FIRST_FRAME_FILENAME
         lf = shot_dir / LAST_FRAME_FILENAME
-        # v6.110：只认**核心**关键帧文件，并按**序号逐一核对**。
-        #
-        # 原实现有两个漏洞（实测 shot 3 缺 `keyframe_0.png` 却报 PASS）：
-        #   ① `keyframe_*.png` 把二修标注图 `keyframe_1_doodle.png` 也算进来 →
-        #      数量凑够，缺图被掩盖；
-        #   ② 只比**数量**不比**序号** → 即便没有 doodle，「缺 0 号、多一个 4 号」
-        #      这种错位也照样通过。
-        from shared.paths import is_core_keyframe_file
+
         expected_kfs = sum(1 for k in (shot.get("keyframes") or [])
                            if isinstance(k, dict) and str(k.get("desc") or "").strip())
         kfs = sorted([p for p in shot_dir.glob("keyframe_*.png")
                       if is_core_keyframe_file(p)],
                      key=lambda p: int(p.stem.split("_")[1]))
-        if "ff" in need and (
-                not ff.exists() or ff.stat().st_size <= 0 or not _image_decodable(ff)):
-            missing.append(f"shot {idx}: missing/undecodable {ff.name}")
-        if "lf" in need and (
-                not lf.exists() or lf.stat().st_size <= 0 or not _image_decodable(lf)):
-            missing.append(f"shot {idx}: missing/undecodable {lf.name}")
+
+        ff_file_ok = ff.exists() and ff.stat().st_size > 0 and _image_decodable(ff)
+        lf_file_ok = lf.exists() and lf.stat().st_size > 0 and _image_decodable(lf)
+        if "ff" in need and not ff_file_ok:
+            msg = f"shot {idx}: missing/undecodable {ff.name}"
+            missing.append(msg)
+            file_missing.append(msg)
+        if "lf" in need and not lf_file_ok:
+            msg = f"shot {idx}: missing/undecodable {lf.name}"
+            missing.append(msg)
+            file_missing.append(msg)
         if policy == "reference" and not (ff.exists() or lf.exists() or kfs):
-            missing.append(f"shot {idx}: reference 策略需要 ff/lf/kf 任一素材")
+            msg = f"shot {idx}: reference 策略需要 ff/lf/kf 任一素材"
+            missing.append(msg)
+            file_missing.append(msg)
         _miss_kf = [i for i in range(expected_kfs)
                     if not (shot_dir / ("keyframe_%d.png" % i)).exists()]
         if _miss_kf and require_keyframes:
-            missing.append(
+            msg = (
                 f"shot {idx}: 缺关键帧文件 {_miss_kf}（应有 {expected_kfs} 帧，"
                 f"实有核心帧 {len(kfs)} 个）")
+            missing.append(msg)
+            file_missing.append(msg)
         if not require_keyframes:
             kfs = []
         for kf in kfs:
             if not _image_decodable(kf):
-                missing.append(f"shot {idx}: undecodable {kf.name}")
-        issues_by_shot[str(idx)] = missing[issue_start:]
+                msg = f"shot {idx}: undecodable {kf.name}"
+                missing.append(msg)
+                file_missing.append(msg)
+
+        qc_states: dict = {}
+        locked_map: dict = {}
+        if "ff" in need or (policy == "reference" and ff_file_ok):
+            locked_map["ff"] = _is_frame_locked(shot_dir, "first_frame")
+        if ff_file_ok and ("ff" in need or policy == "reference"):
+            ff_qc = _check_frame_qc(shot, ff, "first_frame")
+            qc_states["ff"] = ff_qc
+            if ff_qc["status"] != "qc_passed":
+                msg = (
+                    f"shot {idx}: {ff.name} qc={ff_qc['status']}"
+                    + (f" ({ff_qc['reason']})" if ff_qc["reason"] else "")
+                )
+                missing.append(msg)
+                qc_failures.append(msg)
+        if "lf" in need or (policy == "reference" and lf_file_ok):
+            locked_map["lf"] = _is_frame_locked(shot_dir, "last_frame")
+        if lf_file_ok and ("lf" in need or policy == "reference"):
+            lf_qc = _check_frame_qc(shot, lf, "last_frame")
+            qc_states["lf"] = lf_qc
+            if lf_qc["status"] != "qc_passed":
+                msg = (
+                    f"shot {idx}: {lf.name} qc={lf_qc['status']}"
+                    + (f" ({lf_qc['reason']})" if lf_qc["reason"] else "")
+                )
+                missing.append(msg)
+                qc_failures.append(msg)
+        kf_qc_map: dict[str, dict] = {}
+        for kf in kfs:
+            if not _image_decodable(kf):
+                continue
+            try:
+                kf_i = int(kf.stem.split("_")[1])
+            except (IndexError, ValueError):
+                kf_i = None
+            locked_map[kf.name] = _is_frame_locked(shot_dir, "keyframe", kf_i)
+            kf_qc = _check_frame_qc(shot, kf, "keyframe", kf_index=kf_i)
+            kf_qc_map[kf.name] = kf_qc
+            if kf_qc["status"] != "qc_passed":
+                msg = (
+                    f"shot {idx}: {kf.name} qc={kf_qc['status']}"
+                    + (f" ({kf_qc['reason']})" if kf_qc["reason"] else "")
+                )
+                missing.append(msg)
+                qc_failures.append(msg)
+        if kf_qc_map:
+            qc_states["keyframes"] = kf_qc_map
+
+        shot_issues = missing[issue_start:]
+        shot_locked = bool(locked_map) and all(locked_map.values())
+        if not shot_locked:
+            all_required_locked = False
+        shot_admitted = not shot_issues
+        issues_by_shot[str(idx)] = shot_issues
         outputs[str(idx)] = {
             "ff": {"path": str(ff), "sha1": _file_digest(ff)} if ff.exists() else None,
             "lf": {"path": str(lf), "sha1": _file_digest(lf)} if lf.exists() else None,
             "keyframes": {p.name: {"path": str(p), "sha1": _file_digest(p)} for p in kfs},
+            "qc_states": qc_states,
+            "locked_human_approved": {"frames": locked_map, "all_required": shot_locked},
+            "admitted": shot_admitted,
         }
+
+    status = "BLOCK" if missing else "PASS"
     payload = {
+        "schema_version": PRODUCT_ACCEPTANCE_SCHEMA,
         "source": "step02a.product_acceptance",
         "report_type": "product_acceptance",
         "rule_version": RULE_VERSION,
-        "status": "BLOCK" if missing else "PASS",
+        "status": status,
+        "admission_status": status,
+        "admitted": status == "PASS",
+        "locked_human_approved": all_required_locked,
+        "file_ok": not bool(file_missing),
+        "qc_ok": not bool(qc_failures),
         "blocking": bool(missing),
         "missing": missing,
+        "file_missing": file_missing,
+        "qc_failures": qc_failures,
         "outputs": outputs,
         "issues_by_shot": issues_by_shot,
         "scope": {"shots": sorted(int(u.get("index", 0)) for u in units),

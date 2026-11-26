@@ -105,6 +105,7 @@ SEEDREAM_CAPS: list[tuple[str, SeedreamCap]] = [
     ("doubao-seedream-4-5-251128", SeedreamCap(("2K", "4K"), 3_686_400, 16_777_216, 3)),
     ("doubao-seedream-4-0-250828", SeedreamCap(("1K", "2K", "4K"), 921_600, 16_777_216, 3)),
     ("seedream-5-0-pro", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
+    ("seedream-5-0-flash", SeedreamCap(("1K", "1.5K", "2K"), 921_600, 4_624_220, 10)),
     ("seedream-5-0-lite", SeedreamCap(("2K", "3K", "4K"), 3_686_400, 16_777_216, 14)),
     # 点号/下划线写法（doubao-seedream-5.0.lite、doubao_seedream_4_5）由
     # shared.model_alias.normalize_model_name 归一为破折号后在此命中，

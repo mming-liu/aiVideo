@@ -54,9 +54,11 @@ def normalize_model_name(model: str) -> str:
     return m.strip("-")
 
 
-# Seedream 图片模型：简写必须落到明确的 lite 端点，不能落到不带 lite 的正式端点。
+# Seedream 图片模型：简写必须落到明确的端点，不能落到不带后缀的歧义端点。
 _IMAGE_MODEL_CANONICAL = {
     "doubao-seedream-5-0-lite": "doubao-seedream-5-0-lite-260128",
+    "doubao-seedream-5-0-pro": "doubao-seedream-5-0-pro-260628",
+    "doubao-seedream-5-0-flash": "doubao-seedream-5-0-flash-260915",
 }
 
 

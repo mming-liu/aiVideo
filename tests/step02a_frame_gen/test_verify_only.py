@@ -34,22 +34,35 @@ def _frame(path: Path, color=(10, 20, 30)):
 
 
 def _fixture(tmp_path, monkeypatch):
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
+
     ch = tmp_path / "chapter_001"
     work = ch / "vimax_working"
     ch.mkdir(parents=True)
+    script = _script()
     (ch / "script_result.json").write_text(
-        json.dumps(_script(), ensure_ascii=False), encoding="utf-8")
+        json.dumps(script, ensure_ascii=False), encoding="utf-8")
     d1, d2 = work / "shots" / "1", work / "shots" / "2"
     _frame(d1 / "first_frame.png")
     _frame(d1 / "last_frame.png", (200, 30, 40))
     _frame(d2 / "first_frame.png", (30, 200, 40))
-    for d in (d1, d2):
+    for d, shot in ((d1, script["shots"][0]), (d2, script["shots"][1])):
         (d / "first_frame_qc_log.json").write_text(
             json.dumps([{"ts": "2026-11-18 00:00:00", "has_hallucination": False}]),
             encoding="utf-8")
+        write_sidecar(
+            d / "first_frame.png",
+            QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+            frame_meta=build_qc_frame_meta(shot, "first_frame", []),
+        )
     (d1 / "last_frame_qc_log.json").write_text(
         json.dumps([{"ts": "2026-11-18 00:00:00", "has_hallucination": False}]),
         encoding="utf-8")
+    write_sidecar(
+        d1 / "last_frame.png",
+        QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+        frame_meta=build_qc_frame_meta(script["shots"][0], "last_frame", []),
+    )
     (d1 / ".lock_frame_first_frame").write_text("", encoding="utf-8")
     (d1 / ".lock_frame_last_frame").write_text("", encoding="utf-8")
     (d2 / ".lock_frame_first_frame").write_text("", encoding="utf-8")
@@ -75,6 +88,26 @@ def test_verify_only_merges_per_shot_scope(tmp_path, monkeypatch):
     assert report["scope"]["requirements"]["2"]["frames"] == ["ff"]
     assert (work / "visual_plan.json").is_file()
     assert (ch / "_enhancement" / "verify_only").is_dir()
+
+
+def test_verify_only_prunes_stale_frames_not_required_by_policy(tmp_path, monkeypatch):
+    """R7.2：first_only 镜头不留在旧计划里的 shot-N:lf 帧条目."""
+    ch, work = _fixture(tmp_path, monkeypatch)
+    assert va.run_verify_only(ch / "script_result.json", work,
+                              shots={1, 2}, policies={1: "auto", 2: "first_only"}) == 0
+    plan = json.loads((work / "visual_plan.json").read_text(encoding="utf-8"))
+    plan["frames"].append({
+        "frame_id": "shot-2:lf", "shot_index": 2, "frame": "lf", "kind": "lf",
+        "status": "planned", "prompt": "祖先计划残留", "references": []})
+    (work / "visual_plan.json").write_text(
+        json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+
+    assert va.run_verify_only(ch / "script_result.json", work,
+                              shots={1, 2}, policies={1: "auto", 2: "first_only"}) == 0
+    merged = json.loads((work / "visual_plan.json").read_text(encoding="utf-8"))
+    frame_ids = [f.get("frame_id") for f in merged.get("frames") or []]
+    assert "shot-2:lf" not in frame_ids          # 锁定 first_only 的帧不得残留
+    assert {"shot-1:ff", "shot-1:lf", "shot-2:ff"} <= set(frame_ids)
 
 
 def test_verify_only_rejects_unlocked(tmp_path, monkeypatch):

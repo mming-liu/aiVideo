@@ -151,6 +151,7 @@ Codex 收到执行反馈后独立核对上述交付映射，合理调整原规�
 | 任务 | 查阅入口 |
 |---|---|
 | 阶段入口与命令行 | `step01_script_gen/main.py`、`step02a_frame_gen/main.py`、`step02b_video_gen/main.py`、`step03_tts_audio/main.py`、`step04_merge/main.py`；运行范围见 `shared/run_scope.py` |
+| Step02a 帧契约与生成评阅 | `shared/frame_spec.py`、`shared/prompt_facts.py`、`shared/vimax_bridge.py`、`shared/vimax_adapters.py`、`shared/image_qc.py`、`step02a_frame_gen/execution_plan.py`、`step02a_frame_gen/image_prompt_quality.py`；执行与评阅流程见 [aivideo-frame-review](.agents/skills/aivideo-frame-review/SKILL.md) 与 [Step02a 帧契约文档](docs/step02a-frame-contract/README.md) |
 | 计划、承载与生成 | `step01_script_gen/outline.py`、`plan_feasibility.py`、`prompts.py`、`timecode.py`（均在该包内） |
 | 审计、修复、提交与候选 | `step01_script_gen/main.py`、`audit.py`、`validation.py`、`constraints/`；身份与提交核验见 `shared/quality_gate.py` |
 | 声音策略、身份与合并 | `shared/audio_policy.py`、`shared/audio_identity.py`、`step03_tts_audio/shot_tts.py`、`step04_merge/main.py` |

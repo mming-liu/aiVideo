@@ -59,18 +59,28 @@ def test_image_quality_clean(monkeypatch,tmp_path):
 
 def test_image_product_acceptance_uses_root_keyframe_paths(monkeypatch, tmp_path):
     import step02a_frame_gen.image_prompt_quality as q
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
+
     work = tmp_path / "working"
     shot_dir = work / "shots" / "1"
     shot_dir.mkdir(parents=True)
     from PIL import Image
-    Image.new("RGB", (8, 8), "white").save(shot_dir / "first_frame.png")
-    Image.new("RGB", (8, 8), "white").save(shot_dir / "last_frame.png")
-    Image.new("RGB", (8, 8), "white").save(shot_dir / "keyframe_0.png")
+    script = {"shots": [{"index": 1, "keyframes": [{"desc": "k"}]}]}
+    shot = script["shots"][0]
+    for fname, kind, kf_i in (("first_frame.png", "first_frame", None),
+                              ("last_frame.png", "last_frame", None),
+                              ("keyframe_0.png", "keyframe", 0)):
+        fp = shot_dir / fname
+        Image.new("RGB", (8, 8), "white").save(fp)
+        write_sidecar(
+            fp,
+            QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+            frame_meta=build_qc_frame_meta(shot, kind, [], kf_index=kf_i),
+        )
     monkeypatch.setattr(q, "chapter_dir", lambda: tmp_path)
     # 固定「当前视频模型消费关键帧」，避免断言随 .env 的 VIDEO_PROVIDER/型号漂移
     monkeypatch.setattr(q, "_keyframes_consumed_by_video", lambda: True)
-    r = q.write_image_product_quality(
-        {"shots": [{"index": 1, "keyframes": [{"desc": "k"}]}]}, work)
+    r = q.write_image_product_quality(script, work)
     assert r["status"] == "PASS"
     assert "keyframe_0.png" in r["outputs"]["1"]["keyframes"]
 

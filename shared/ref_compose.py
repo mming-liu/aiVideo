@@ -79,12 +79,15 @@ MODEL_REF_LIMITS: list[tuple[str, int]] = [
     ("wan2.6-image", 9),
     # Seedream 按官方档位细分（与 shared/model_caps.SEEDREAM_CAPS 一致）
     ("seedream-5-0-pro", 10),
+    ("seedream-5-0-flash", 10),
     ("seedream-5-0-lite", 14),
     # 点号形式兜底官方免费预置模型 ID（doubao-seedream-5.0-lite）
     ("seedream-5.0-pro", 10),
+    ("seedream-5.0-flash", 10),
     ("seedream-5.0-lite", 14),
     # 双点号形式（doubao-seedream-5.0.lite，方舟开通管理免费预置展示写法）
     ("seedream-5.0.pro", 10),
+    ("seedream-5.0.flash", 10),
     ("seedream-5.0.lite", 14),
     ("seedream-4-5", 14),
     ("seedream-4-0", 14),
@@ -534,6 +537,11 @@ def _write_compose_report(sheet_dir, sheet_tag: str, buckets, composed,
         return
 
 
+def _is_planned_frame_or_sheet(path_str: str) -> bool:
+    name = Path(str(path_str)).name.lower()
+    return name in (FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME) or name.startswith("ref_sheet_")
+
+
 def fit_refs(
     buckets: list[tuple[str, list[str]]],
     limit: int,
@@ -542,25 +550,13 @@ def fit_refs(
     omissions: list[dict] | None = None,
     *,
     dry_run: bool = False,
+    strict: bool = False,
+    allow_planned_frames: bool = False,
 ) -> list[str]:
     """把分组参考图无损压缩到 limit 个名额.
 
-    Args:
-        buckets: [(类别名, [路径...]), ...] 按优先级降序（前面的类别保留更多原图名额）
-        limit:   模型参考图上限
-        sheet_dir: 参考表落盘目录（如 vimax_working/shots/<idx>）
-        sheet_tag: 参考表文件名前缀（如 "ff"/"lf"/"shot3"），防不同帧互相覆盖
-
-    omissions: 本次**主动省略**的参考类别及依据（如「特写帧不注入场景资产图」）。
-        省略必须带理由，写进组合报告；没有依据的省略不允许静默发生。
-
-    dry_run: 只计算「会返回哪些路径」，**不建目录、不拼图、不写报告**。供
-        `--plan-only` 与生成链共用同一组合顺序；若上一次生成留下的参考表还在，
-        路径与字节摘要与实跑一致，缓存判据因此同源（2026-11-14 Step D）。
-
-    Returns:
-        ≤limit 个路径的列表。极端兜底（拼图全部失败）时裁剪到 limit 并保留
-        优先级在前的图，绝不返回超过 limit 的列表（防 provider 400）。
+    strict=True: 缺失真实参考图或拼图失败时显式抛异常，绝不静默丢弃或裁剪。
+    allow_planned_frames=True（仅 dry_run=True）: 允许尚待生成的 first_frame/last_frame/ref_sheet 进入预估清单。
     """
     seen: set[str] = set()
     clean: list[tuple[str, list[str]]] = []
@@ -568,16 +564,25 @@ def fit_refs(
     for name, items in buckets:
         bucket: list[str] = []
         for p in items or []:
-            if p and p not in seen and Path(p).exists():
-                seen.add(p)
-                bucket.append(p)
-                flat.append(p)
+            if not p or p in seen:
+                continue
+            exists = Path(p).exists()
+            planned_ok = dry_run and allow_planned_frames and _is_planned_frame_or_sheet(p)
+            if not exists and not planned_ok:
+                if strict:
+                    raise FileNotFoundError(f"参考图不存在: {p}")
+                continue
+            seen.add(p)
+            bucket.append(p)
+            flat.append(p)
         if bucket:
             clean.append((name, bucket))
 
     if len(flat) <= limit:
         return flat
     if limit <= 0:
+        if strict and flat:
+            raise RuntimeError(f"参考图名额上限为 {limit}，无法容纳 {len(flat)} 张参考图")
         return []
 
     sheet_dir = _resolve_sheet_dir(sheet_dir)
@@ -585,11 +590,10 @@ def fit_refs(
         try:
             sheet_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
-            pass
+            if strict:
+                raise
 
     def _sheet(name: str, paths: list[str], kind: str | None = None) -> str:
-        # 文件名后缀仅作向后兼容的**辅助**线索；成员身份与区域以 refmap sidecar
-        # 为准（旧表无 sidecar 时说明层不回填身份）。
         suffix = ""
         if name == "chars":
             names = identity_names_of(paths)
@@ -597,9 +601,6 @@ def fit_refs(
                 suffix = "_" + "+".join(names)
         out = str(sheet_dir / f"ref_sheet_{sheet_tag}_{name}{suffix}.png")
         if dry_run:
-            # 只预测路径：不拼图、不落盘。参考表是**内容寻址**的（成员路径+字节
-            # 摘要后缀），这里用同一算法算出目标名；上一轮生成过则文件仍在，
-            # 摘要可复用，缓存判据与实跑同源。
             h = hashlib.sha256()
             for item in paths:
                 p = Path(item)
@@ -607,12 +608,14 @@ def fit_refs(
                 try:
                     h.update(hashlib.sha256(p.read_bytes()).digest())
                 except OSError:
-                    h.update(b"unreadable")
+                    h.update(b"planned" if allow_planned_frames and _is_planned_frame_or_sheet(item) else b"unreadable")
             target = Path(out)
             target = target.with_name(
                 target.stem + "_" + h.hexdigest()[:20] + target.suffix)
             return str(target)
         stitched, _layout = _atomic_reference_sheet(paths, out, kind=kind or name)
+        if not stitched and strict:
+            raise RuntimeError(f"参考表拼图失败: kind={kind or name}, count={len(paths)}")
         return stitched if stitched else ""
 
     # 单张上限：全部拼成一张大参考表
@@ -620,12 +623,10 @@ def fit_refs(
         merged = _sheet("all", flat, kind=clean[0][0] if len(clean) == 1 else "all")
         if merged:
             return [merged]
+        if strict:
+            raise RuntimeError("单图参考表拼图失败，拒绝裁剪")
         return flat[:1]
 
-    # 类别数超过名额：前面类别各占 1 名额，尾部类别共享 1 名额。
-    # 尾巴恰好是单个类别时保留其真实类别名（scene/chars/props），拼图表命名与
-    # 参考图编号说明才能对上（参考图3=道具外观参考表，而非"综合参考表"）；
-    # 多个类别合并才叫 mix（综合参考表）。
     groups: list[tuple[str, list[str]]] = clean[: limit - 1]
     if len(clean) > limit - 1:
         tail_buckets = clean[limit - 1:]
@@ -635,7 +636,6 @@ def fit_refs(
             tail = [p for _, items in tail_buckets for p in items]
             groups.append(("mix", tail))
 
-    # 基础名额：每组 1 个；剩余名额分给「图最多」的组（让更多原图保真直传）
     slots = [1] * len(groups)
     leftover = limit - len(groups)
     while leftover > 0:
@@ -653,12 +653,15 @@ def fit_refs(
         keep, tail = items[: s - 1], items[s - 1:]
         if len(tail) >= 2:
             stitched = _sheet(name, tail)
+            if not stitched and strict:
+                raise RuntimeError(f"参考表拼图失败: group={name}")
             composed += keep + ([stitched] if stitched else tail[:1])
         else:
             composed += keep + tail
-    # 拼图异常兜底：裁剪保优先级（比 400 中断生成轻）
     dropped = []
     if len(composed) > limit:
+        if strict:
+            raise RuntimeError(f"压缩后参考图仍超上限: {len(composed)} > {limit}")
         dropped = [{"path": p, "reason": "limit_truncation"} for p in composed[limit:]]
         composed = composed[:limit]
     if not dry_run:
@@ -672,21 +675,53 @@ def fit_flat(
     limit: int,
     sheet_dir: Path | str,
     sheet_tag: str,
+    *,
+    dry_run: bool = False,
+    strict: bool = False,
+    allow_planned_frames: bool = False,
 ) -> list[str]:
     """无类别信息的兜底压缩：保留前 limit-1 张原图 + 尾部拼 1 张参考表."""
-    valid = [p for p in paths or [] if p and Path(p).exists()]
+    valid: list[str] = []
+    for p in paths or []:
+        if not p:
+            continue
+        exists = Path(p).exists()
+        planned_ok = dry_run and allow_planned_frames and _is_planned_frame_or_sheet(p)
+        if not exists and not planned_ok:
+            if strict:
+                raise FileNotFoundError(f"参考图不存在: {p}")
+            continue
+        valid.append(p)
     if len(valid) <= limit:
         return valid
     if limit <= 1:
-        return fit_refs([("all", valid)], limit, sheet_dir, sheet_tag)
+        return fit_refs(
+            [("all", valid)], limit, sheet_dir, sheet_tag,
+            dry_run=dry_run, strict=strict, allow_planned_frames=allow_planned_frames,
+        )
     keep = limit - 1
+    out = str(_resolve_sheet_dir(sheet_dir) / f"ref_sheet_{sheet_tag}_extra.png")
+    if dry_run:
+        h = hashlib.sha256()
+        for item in valid[keep:]:
+            p = Path(item)
+            h.update(str(p).encode("utf-8"))
+            try:
+                h.update(hashlib.sha256(p.read_bytes()).digest())
+            except OSError:
+                h.update(b"planned" if allow_planned_frames and _is_planned_frame_or_sheet(item) else b"unreadable")
+        target = Path(out)
+        target = target.with_name(target.stem + "_" + h.hexdigest()[:20] + target.suffix)
+        return valid[:keep] + [str(target)]
     try:
-        sheet_dir = _resolve_sheet_dir(sheet_dir)
-        sheet_dir.mkdir(parents=True, exist_ok=True)
-        out = str(sheet_dir / f"ref_sheet_{sheet_tag}_extra.png")
-        stitched, _layout = _atomic_reference_sheet(valid[keep:], out, kind="extra")
+        resolved = _resolve_sheet_dir(sheet_dir)
+        resolved.mkdir(parents=True, exist_ok=True)
+        stitched, _layout = _atomic_reference_sheet(valid[keep:], str(resolved / f"ref_sheet_{sheet_tag}_extra.png"), kind="extra")
         if stitched:
             return valid[:keep] + [stitched]
     except Exception:
-        pass
+        if strict:
+            raise
+    if strict:
+        raise RuntimeError(f"平面参考表拼图失败，拒绝裁剪至 {limit} 张")
     return valid[:limit]

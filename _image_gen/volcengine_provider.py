@@ -15,6 +15,7 @@ https://www.volcengine.com/docs/82379/1541594
 """
 
 import base64
+import hashlib
 import mimetypes
 import os
 import re
@@ -228,51 +229,109 @@ class VolcengineImageService(ImageGenerationService):
         # 与"真实失败"（如 5xx、限速、解析错误）区分——后者仍 raise 失败链路。
         sensitive_skip = False
 
-        while model_idx < len(self._model_queue):
-            model = self._model_queue[model_idx]
-            cap = get_seedream_cap(model)
-            # 关键修复：按当前模型能力重算 ref_limit（每个模型上限可能不同：
-            # 4.0/4.5/5.0-lite 免费版=3，5.0-pro=10，4.5/4.0 付费版=14）。
-            # 旧实现在循环外用主模型上限，回退到不同能力模型后可能超限或浪费额度。
-            ref_limit = cap.max_refs
+        def _verify_and_build_payload(model_name: str, cap_obj) -> tuple[dict | None, str | None, list[str]]:
+            """Prepare wire payload and verify prompt/ref/model/size invariants before POST."""
+            from pathlib import Path as _P
+            from shared.ref_compose import build_ref_manifest
+
+            contract = getattr(req, "frame_contract", None)
+            if isinstance(contract, dict):
+                expected_sha = contract.get("prompt_sha256")
+                actual_sha = hashlib.sha256(str(req.prompt or "").encode("utf-8")).hexdigest()
+                if expected_sha and actual_sha != expected_sha:
+                    return None, "请求 prompt 与准备阶段契约摘要不一致，拒绝发送", []
+
+            ref_limit = cap_obj.max_refs
             ref_paths = list(original_refs)
             if len(ref_paths) > ref_limit:
                 from shared.paths import shot_work_dir
                 sheet_dir = shot_work_dir(req.shot_index)
-                ref_paths = fit_flat(ref_paths, ref_limit, sheet_dir, f"shot{req.shot_index}_{req.frame_desc or 'frame'}")
-                _verbose_write(f"  [镜头{req.shot_index}] 模型 {model} 参考图上限 {ref_limit}，"
-                      f"原 {len(original_refs)} 张无损压缩为 {len(ref_paths)} 张")
-            # base64 编码也按当前模型的最终 ref_paths 重新生成
-            ref_urls = []
-            for ref_path in ref_paths:
-                url = _encode_image(ref_path)
-                if url:
-                    ref_urls.append(url)
-                else:
-                    _verbose_write(f"  [镜头{req.shot_index}] 参考图读取失败 {ref_path}")
-            size_str = _resolve_size(req, model)
-            payload: dict = {
-                "model": model,
-                "prompt": req.prompt,
+                try:
+                    ref_paths = fit_flat(
+                        ref_paths, ref_limit, sheet_dir,
+                        f"shot{req.shot_index}_{req.frame_desc or 'frame'}",
+                        strict=True,
+                    )
+                except Exception as exc:
+                    return None, f"参考图超限压缩失败 [{model_name}]: {exc}", []
+                _verbose_write(
+                    f"  [镜头{req.shot_index}] 模型 {model_name} 参考图上限 {ref_limit}，"
+                    f"原 {len(original_refs)} 张无损压缩为 {len(ref_paths)} 张"
+                )
+
+            if len(ref_paths) > ref_limit:
+                return None, f"参考图数量 {len(ref_paths)} 仍超过模型 {model_name} 上限 {ref_limit}", []
+
+            # Reconcile contract ref digests when unchanged; reconcile manifest when compressed on fallback.
+            wire_prompt = req.prompt
+            if isinstance(contract, dict) and ref_paths == list(contract.get("ref_paths") or []):
+                expected_hashes = list(contract.get("ref_sha256s") or [])
+                for rp, exp_sha in zip(ref_paths, expected_hashes):
+                    p_obj = _P(rp)
+                    if not p_obj.is_file():
+                        return None, f"参考图在发送前缺失: {rp}", []
+                    if exp_sha and hashlib.sha256(p_obj.read_bytes()).hexdigest() != exp_sha:
+                        return None, f"参考图内容在发送前发生篡改: {rp}", []
+            elif isinstance(contract, dict) and contract.get("manifest_injected"):
+                _consumer = str(contract.get("consumer_kind") or "")
+                _new_manifest = build_ref_manifest(
+                    ref_paths, numbered=False, consumer_kind=_consumer,
+                ) if len(ref_paths) >= 2 else ""
+                _old_pat = re.compile(r"(?:\n\n)?【参考图说明】[^\n]*")
+                if _old_pat.search(wire_prompt):
+                    wire_prompt = _old_pat.sub(
+                        (f"\n\n{_new_manifest}" if _new_manifest else ""),
+                        wire_prompt,
+                    )
+
+            ref_urls: list[str] = []
+            for rp in ref_paths:
+                url = _encode_image(rp)
+                if not url:
+                    return None, f"参考图读取/编码失败（拒绝静默丢弃）: {rp}", []
+                ref_urls.append(url)
+
+            size_str = _resolve_size(req, model_name)
+            if not size_str:
+                return None, f"无效分辨率输出: model={model_name}", []
+
+            wire_payload: dict = {
+                "model": canonical_image_model_id(model_name),
+                "prompt": wire_prompt,
                 "size": size_str,
                 "response_format": "url",
                 "watermark": False,
             }
             if ref_urls:
-                # Seedream: 单张用字符串，多张用数组
-                payload["image"] = ref_urls[0] if len(ref_urls) == 1 else ref_urls
-            # 官方图片生成 API 不提供 negative_prompt / seed；仅当模型能力声明
-            # 支持时才发送，避免每张图都触发 400 重试（cap 默认 False）
-            if req.negative_prompt and cap.supports_negative_prompt:
-                payload["negative_prompt"] = req.negative_prompt
-            if req.seed is not None and cap.supports_seed:
-                payload["seed"] = req.seed
+                wire_payload["image"] = ref_urls[0] if len(ref_urls) == 1 else ref_urls
+            if req.negative_prompt and cap_obj.supports_negative_prompt:
+                wire_payload["negative_prompt"] = req.negative_prompt
+            if req.seed is not None and cap_obj.supports_seed:
+                wire_payload["seed"] = req.seed
+
+            # Verify encoded payload shape matches ref_paths cardinality and order.
+            if ref_paths:
+                sent_imgs = wire_payload.get("image")
+                sent_count = 1 if isinstance(sent_imgs, str) else len(sent_imgs or [])
+                if sent_count != len(ref_paths) or sent_count != len(ref_urls):
+                    return None, f"编码后参考图数量不一致: expected={len(ref_paths)} got={sent_count}", []
+
+            return wire_payload, None, ref_paths
+
+        while model_idx < len(self._model_queue):
+            model = self._model_queue[model_idx]
+            cap = get_seedream_cap(model)
+            payload, verify_err, ref_paths = _verify_and_build_payload(model, cap)
+            if verify_err or payload is None:
+                last_error = verify_err or "请求预检失败"
+                _verbose_write(f"  [镜头{req.shot_index}] [VERIFY-BLOCK] {last_error}")
+                return _finish(ImageGenerationResult(success=False, error=last_error))
 
             frame_label = req.frame_desc if req.frame_desc else "首帧"
             _verbose_write(f"  [镜头{req.shot_index}] 正在生成{frame_label} [{model}]...")
-            _verbose_write(f"[DEBUG] image_submit: model={model}, size={size_str}, "
-                  f"ratio={req.ratio}, refs={len(ref_urls)}, seed={req.seed}")
-            _verbose_write(f"[DEBUG] image_submit: prompt全文={req.prompt}")
+            _verbose_write(f"[DEBUG] image_submit: model={model}, size={payload['size']}, "
+                  f"ratio={req.ratio}, refs={len(ref_paths)}, seed={req.seed}")
+            _verbose_write(f"[DEBUG] image_submit: prompt全文={payload['prompt']}")
             for i, src in enumerate(ref_paths):
                 _verbose_write(f"[DEBUG] image_submit: ref[{i}] 源路径={src}")
 
@@ -367,6 +426,22 @@ class VolcengineImageService(ImageGenerationService):
                           f"切换到 {self._model_queue[model_idx]}")
                     continue
                 last_error = f"所有模型均返回 403: {resp.text[:300]}"
+                break
+
+            # ---- 400/404 端点关闭或模型未开通（InvalidEndpoint.ClosedEndpoint / ModelNotOpen）：回退下一模型 ----
+            if resp.status_code in (400, 404) and any(
+                tok in resp.text
+                for tok in ("InvalidEndpoint", "ClosedEndpoint", "ModelNotOpen", "UnsupportedModel")
+            ):
+                _record("transport_failed")
+                if model_idx + 1 < len(self._model_queue):
+                    model_idx += 1
+                    _verbose_write(
+                        f"  [镜头{req.shot_index}] [!] 模型 {model} 端点不可用 [{resp.status_code}]，"
+                        f"切换到 {self._model_queue[model_idx]}"
+                    )
+                    continue
+                last_error = f"所有模型端点均不可用 [{resp.status_code}]: {resp.text[:300]}"
                 break
 
             # ---- 400 + OutputImageSensitiveContentDetected：输出图片被内容安全过滤拦截 ----

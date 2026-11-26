@@ -12,11 +12,12 @@ aiVideo 的 provider 是同步的（create_task → wait_for_completion → 下�
 """
 
 import asyncio
+import hashlib
 import os
 import re
 from math import gcd
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 from weakref import WeakKeyDictionary
 
 from PIL import Image
@@ -26,8 +27,8 @@ import _video_gen
 from _image_gen import ImageGenerationRequest
 from _video_gen import VideoGenerationRequest
 from shared.style_prefix import style_profile, ensure_prefix, sanitize_prompt
-from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT, IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, IMAGE_HALLUCINATION_EXTRA_NEGATIVE
-from shared.style_prefix import image_negative_prompt, video_negative_prompt, image_lock_prompt
+from shared.style_prefix import IMAGE_HALLUCINATION_EXTRA_NEGATIVE
+from shared.style_prefix import image_negative_prompt, image_lock_prompt
 
 from vimax.interfaces import ImageOutput, VideoOutput
 
@@ -92,76 +93,78 @@ class ImageGeneratorAiVideoAdapter:
         self._enable_hallucination_lock = enable_hallucination_lock
         self._svc = _image_gen.create_service(_image_gen.config.PROVIDER)
 
-    async def generate_single_image(
+    def prepare_single_image(
         self,
         prompt: str,
         reference_image_paths: List[str] | None = None,
+        *,
+        materialize: bool = False,
         **kwargs,
-    ) -> ImageOutput:
-        # 优先从 kwargs 取尺寸，其次实例默认
+    ) -> ImageGenerationRequest:
+        """Assemble & validate a single image request with zero silent ref loss.
+
+        materialize=False: dry preparation (may accept planned frame/sheet refs,
+        never writes stitch sheets to disk); materialize=True: validates files
+        on disk, stitches sheets atomically when over limit, fails closed on
+        missing/unreadable/stitch-failed refs or contract errors.
+        """
         size = kwargs.get("size", self.size)
         skip_prefix = kwargs.get("skip_prefix", self._skip_prefix)
         skip_sanitize = kwargs.get("skip_sanitize", self._skip_sanitize)
         shot_index = kwargs.get("shot_index", 0)
         frame_desc = kwargs.get("frame_desc", "")
-        # 参考图：根据 IMAGE_MULTI_REF 决定传单张还是多张
-        # 1（默认）= 只取第一张（向后兼容）；2+ = 传入全部（上限 IMAGE_MULTI_REF）
-        # force_multi_ref（首帧/尾帧生成路径）: 场景+角色+道具混合参考必须全部传入，
-        # 不受 IMAGE_MULTI_REF 限制——单张参考无法同时锚定场景/人物/道具三要素。
         force_multi_ref = bool(kwargs.get("force_multi_ref", False))
+        spec_issues = list(kwargs.get("spec_issues") or [])
+        if spec_issues:
+            raise ValueError(f"帧契约校验失败，拒绝构建生图请求: {spec_issues}")
+
         from shared.config import IMAGE_MULTI_REF
-        refs = reference_image_paths or []
+        refs = [str(p) for p in (reference_image_paths or []) if p]
+        for ref_item in refs:
+            if not Path(ref_item).is_file():
+                from shared.ref_compose import _is_planned_frame_or_sheet
+                if materialize or not _is_planned_frame_or_sheet(ref_item):
+                    raise FileNotFoundError(f"参考图缺失或不可读，拒绝发送: {ref_item}")
+
         if (force_multi_ref or IMAGE_MULTI_REF >= 2) and len(refs) > 1:
             ref_paths = refs[:max(IMAGE_MULTI_REF, len(refs))] if force_multi_ref else refs[:IMAGE_MULTI_REF]
-            ref = None  # 多张走 reference_image_paths
+            ref = None
         else:
             ref_paths = []
             ref = refs[0] if refs else None
 
-        # 参考图数量上限兜底（通用方法，2026-08-15）：
-        # - provider 只支持单张参考图 → 全部拼成 1 张大参考表（不丢信息）
-        # - provider 支持多图但超上限 → 保留前 N-1 张原图 + 尾部拼 1 张参考表
-        # 上限按当前 IMAGE_PROVIDER 主模型从 shared.ref_compose 注册表解析
-        # （qwen=3 / seedream 4.5=14 / image-01=1 ...），未注册模型回退 IMAGE_MAX_REFS；
-        # 不写死在这里，跟具体模型走。
-        from shared.ref_compose import fit_refs, fit_flat, active_image_ref_limit
+        from shared.ref_compose import (
+            active_image_ref_limit, build_ref_manifest, fit_flat, fit_refs,
+        )
         from shared.paths import shot_work_dir
         max_refs = active_image_ref_limit()
         sheet_dir = shot_work_dir(shot_index)
         if ref_paths and not getattr(self._svc, "supports_multi_ref", True):
-            try:
-                merged = fit_refs([("all", ref_paths)], 1, sheet_dir, f"shot{shot_index}_{frame_desc or 'frame'}")
-                if merged:
-                    ref = merged[0]
-                    ref_paths = []
-            except Exception:
-                # 拼图失败则退回第一张，保证不中断生成
-                ref = ref_paths[0]
-                ref_paths = []
+            merged = fit_refs(
+                [("all", ref_paths)], 1, sheet_dir,
+                f"shot{shot_index}_{frame_desc or 'frame'}",
+                dry_run=not materialize, strict=True, allow_planned_frames=not materialize,
+            )
+            if not merged:
+                raise RuntimeError("单图参考压缩未产出有效参考图，拒绝降级")
+            ref = merged[0]
+            ref_paths = []
         elif len(ref_paths) > max_refs:
-            try:
-                from shared.log_utils import verbose_write
-                composed = fit_flat(ref_paths, max_refs, sheet_dir, f"shot{shot_index}_{frame_desc or 'frame'}")
+            from shared.log_utils import verbose_write
+            composed = fit_flat(
+                ref_paths, max_refs, sheet_dir,
+                f"shot{shot_index}_{frame_desc or 'frame'}",
+                dry_run=not materialize, strict=True, allow_planned_frames=not materialize,
+            )
+            if materialize:
                 verbose_write(
                     f"  [镜头{shot_index}] 参考图 {len(ref_paths)} 张超过上限 {max_refs}，"
                     f"无损压缩为 {len(composed)} 张（原图 + 尾部参考表）",
                     log_file="step02a.log",
                 )
-                ref_paths = composed
-            except Exception:
-                # 拼图失败则裁剪到上限，保证不中断
-                dropped = len(ref_paths) - max_refs
-                from shared.log_utils import verbose_write
-                verbose_write(
-                    f"  [镜头{shot_index}] 参考图超上限拼图失败，裁剪掉 {dropped} 张",
-                    log_file="step02a.log",
-                )
-                ref_paths = ref_paths[:max_refs]
+            ref_paths = composed
 
-        full_prompt = prompt
         if not skip_prefix:
-            # 前缀跟随当前 VIDEO_STYLE，并按本适配器的实际画幅改写预设里写死的比例
-            # （anime 预设是「16:9短视频画幅」，直接拼进 9:16 竖图会画成横幅）。
             _prefix = style_profile(ratio=_canvas_ratio(self.size)).prefix
             full_prompt = sanitize_prompt(ensure_prefix(prompt, _prefix)) if not skip_sanitize else ensure_prefix(prompt, _prefix)
         elif not skip_sanitize:
@@ -169,48 +172,69 @@ class ImageGeneratorAiVideoAdapter:
         else:
             full_prompt = prompt
 
-        # 参考图清单注入（图生图编号说明，2026-08-15）：多张参考图时按
-        # 上传顺序生成「参考图N：用途」，拼图表（ref_sheet_*）明示
-        # 「多图拼合、只取各单项特征、禁止当作画面构图」——防止模型把
-        # 人物参考表当成画面内容抄进生成图。单张/零张参考不注入。
-        try:
-            final_refs = ref_paths if ref_paths else ([ref] if ref else [])
-            if len(final_refs) >= 2:
-                from shared.ref_compose import build_ref_manifest
-                _frame_text = str(frame_desc or "")
-                _consumer = ("last_frame" if "尾帧" in _frame_text
-                             else "keyframe" if "关键帧" in _frame_text else "")
-                manifest = build_ref_manifest(final_refs, numbered=False,
-                                              consumer_kind=_consumer)
-                if manifest:
-                    full_prompt = f"{full_prompt}\n\n{manifest}"
-        except Exception:
-            pass
+        final_refs = ref_paths if ref_paths else ([ref] if ref else [])
+        _consumer = (
+            "last_frame" if "尾帧" in str(frame_desc or "")
+            else "keyframe" if "关键帧" in str(frame_desc or "") else ""
+        )
+        manifest_text = ""
+        if len(final_refs) >= 2:
+            manifest_text = build_ref_manifest(
+                final_refs, numbered=False, consumer_kind=_consumer,
+            )
+            if manifest_text:
+                full_prompt = f"{full_prompt}\n\n{manifest_text}"
 
-        # 图片防幻觉锁图关键词注入（仅在启用时）
-        # 默认用完整锁图（含"场景布局不变"）；尾帧/关键帧通过 lock_prompt 传入
-        # 无布局锁版本，允许构图随动作演变（详见 style_prefix.py 注释）。
-        # 英文半句仅 Agnes 使用，中文模型用纯中文版（image_lock_prompt 按 IMAGE_PROVIDER 判定）
         if self._enable_hallucination_lock:
             lock_prompt = kwargs.get("lock_prompt", image_lock_prompt(layout_lock=True))
             full_prompt = f"{lock_prompt}，{full_prompt}"
 
-        req = ImageGenerationRequest(
+        ref_sha256s: list[str | None] = []
+        for rp in final_refs:
+            p_obj = Path(rp)
+            if p_obj.is_file():
+                ref_sha256s.append(hashlib.sha256(p_obj.read_bytes()).hexdigest())
+            elif materialize:
+                raise FileNotFoundError(f"最终参考图缺失: {rp}")
+            else:
+                ref_sha256s.append(None)
+
+        contract = {
+            "prompt_sha256": hashlib.sha256(full_prompt.encode("utf-8")).hexdigest(),
+            "ref_paths": list(final_refs),
+            "ref_sha256s": ref_sha256s,
+            "manifest_injected": bool(manifest_text),
+            "consumer_kind": _consumer,
+            "size": size,
+            "ratio": kwargs.get("ratio", "9:16"),
+            "shot_index": shot_index,
+            "frame_desc": frame_desc,
+            "identity_reference": kwargs.get("identity_reference") or ("verified" if final_refs else "unverified"),
+        }
+
+        return ImageGenerationRequest(
             prompt=full_prompt,
             shot_index=shot_index,
             negative_prompt=self.negative_prompt,
             size=size,
-            # 显式保存路径：资产图/肖像等非帧图直接落盘，避免写默认 shot_N_ff.png
             save_path=kwargs.get("save_path"),
-            # 纵横比透传（资产图传 16:9；帧图用默认 9:16）
             ratio=kwargs.get("ratio", "9:16"),
             reference_image_path=ref,
             reference_image_paths=ref_paths,
             frame_desc=frame_desc,
-            # 传递幻觉检测开关（可选禁用）
             enable_hallucination_detection=self._enable_hallucination_lock,
-            # 从 kwargs 传递期望物体列表
             expected_objects=kwargs.get("expected_objects"),
+            frame_contract=contract,
+        )
+
+    async def generate_single_image(
+        self,
+        prompt: str,
+        reference_image_paths: List[str] | None = None,
+        **kwargs,
+    ) -> ImageOutput:
+        req = self.prepare_single_image(
+            prompt, reference_image_paths, materialize=True, **kwargs,
         )
         # 全局并发信号量：自动根据当前供应商调整并发数（按事件循环缓存）
         if ImageGeneratorAiVideoAdapter._MAX_CONCURRENT > 0:

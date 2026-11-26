@@ -300,6 +300,8 @@ tests/shared/*
 !tests/_text_gen/test_agent_plan_provider.py
 !tests/_text_gen/test_agent_plan_guard.py
 !tests/shared/test_frame_prompt_v652.py
+!tests/shared/test_frame_spec_and_prompt_facts.py
+!tests/shared/test_frame_prompt_contract_s03.py
 !tests/step01_script_gen/test_p4_stability_stop_guard.py
 !tests/step02a_frame_gen/test_frame_replay_wp3.py
 !tests/step02b_video_gen/test_stub_clips_wp4.py
@@ -337,6 +339,7 @@ tests/enhancements/*
 !docs/step01-motion-governance-plan-2026-11-01.md
 !docs/step03-zero-call-check-2026-11-01.md
 !docs/shot01-patch-application-2026-11-01.md
+!docs/step02a-frame-contract/
 
 # 2026-10：根目录「代理/复核隔离」调试产物曾被误入库
 # （`review-f-isolated-*` / `review-candidate-isolated-*` / `review-f-round2-*` / `unused.wav`）。
@@ -414,6 +417,10 @@ tests/step02a_frame_gen/*
 # 2026-11-08 裁决：全量跑实际执行的两份用例一并入库，消除「本机多跑、干净检出少跑」。
 !tests/step02a_frame_gen/test_dump_safety.py
 !tests/step02a_frame_gen/test_gen_all_frames_parallel.py
+!tests/step02a_frame_gen/test_frame_refs_and_provider_s04.py
+!tests/step02a_frame_gen/test_qc_admission_s05.py
+!tests/step02a_frame_gen/test_frame_contract_matrix_s06.py
+!tests/step02a_frame_gen/test_stage1_closure.py
 !tests/step04_merge/
 tests/step04_merge/*
 !tests/step04_merge/test_step04_shots_subset.py

@@ -38,20 +38,23 @@ def _is_locked(shot_dir: Path, role: str) -> bool:
     return any((shot_dir / name).exists() for name in _lock_names(role))
 
 
-def _qc_passed(shot_dir: Path, role: str) -> bool:
-    name = {"first_frame": "first_frame_qc_log.json",
-            "last_frame": "last_frame_qc_log.json"}.get(role)
-    if name is None:
+def _qc_passed(
+    shot_dir: Path,
+    role: str,
+    *,
+    expected_frame: dict | None = None,
+) -> bool:
+    from shared.image_qc import qc_state
+    from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
+
+    filename = {
+        "first_frame": FIRST_FRAME_FILENAME,
+        "last_frame": LAST_FRAME_FILENAME,
+    }.get(role)
+    if filename is None:
         return True
-    path = shot_dir / name
-    try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(entries, list) or not entries:
-        return False
-    last = entries[-1]
-    return isinstance(last, dict) and last.get("has_hallucination") is False
+    st = qc_state(shot_dir / filename, expected_frame=expected_frame)
+    return st.get("status") == "qc_passed"
 
 
 def _roles_for_outputs(outputs: dict) -> list[str]:
@@ -65,7 +68,16 @@ def _roles_for_outputs(outputs: dict) -> list[str]:
     return roles
 
 
-def _verify_shot(payload: dict, idx: int, work_dir: Path) -> list[str]:
+def _verify_shot(
+    payload: dict,
+    idx: int,
+    work_dir: Path,
+    *,
+    shot: dict | None = None,
+    characters: list | None = None,
+) -> list[str]:
+    from shared.image_qc import build_qc_frame_meta
+
     problems = []
     outputs = (payload.get("outputs") or {}).get(str(idx)) or {}
     if payload.get("status") != "PASS":
@@ -80,7 +92,8 @@ def _verify_shot(payload: dict, idx: int, work_dir: Path) -> list[str]:
     for role in _roles:
         if not _is_locked(shot_dir, role):
             problems.append("shot %s %s not locked" % (idx, role))
-        if not _qc_passed(shot_dir, role):
+        exp = build_qc_frame_meta(shot, role, characters) if isinstance(shot, dict) else None
+        if not _qc_passed(shot_dir, role, expected_frame=exp):
             problems.append("shot %s %s QC not passed" % (idx, role))
     return problems
 
@@ -101,6 +114,8 @@ def merge_acceptances(payloads: dict[int, dict], policies: dict[int, str],
         requirements[str(idx)] = (payload.get("scope") or {}).get("requirements") or {}
     merged.update({
         "status": "PASS" if all(p.get("status") == "PASS" for p in payloads.values()) else "BLOCK",
+        "admitted": all(p.get("status") == "PASS" for p in payloads.values()),
+        "locked_human_approved": all(bool(p.get("locked_human_approved")) for p in payloads.values()),
         "blocking": any(p.get("blocking") for p in payloads.values()),
         "missing": [m for p in payloads.values() for m in (p.get("missing") or [])],
         "outputs": outputs,
@@ -149,6 +164,22 @@ def _merge_visual_plan(work_dir: Path, script: dict,
              if isinstance(s, dict) and s.get("shot_index") is not None}
     frames = {str(f.get("frame_id")): f for f in (base.get("frames") or [])
               if isinstance(f, dict) and f.get("frame_id")}
+    # 2026-11-21 R7.2：本次覆盖的镜头只保留**新策略实际要求**的帧。
+    # 旧计划可能残留祖先版本留下的 shot-N:lf 等条目（例如 shot 2 已锁 first_only，
+    # 计划里却仍有 last_frame）——不剪掉会让执行侧画面计划与锁定策略不一致。
+    covered = {int(i) for i in policies}
+    required = {str(f.get("frame_id")) for plan in built
+                for f in (plan.get("frames") or [])
+                if isinstance(f, dict) and f.get("frame_id")}
+
+    def _belongs_to_covered(frame: dict) -> bool:
+        try:
+            return int(frame.get("shot_index")) in covered
+        except (TypeError, ValueError):
+            return False
+
+    frames = {fid: f for fid, f in frames.items()
+              if fid in required or not _belongs_to_covered(f)}
     for plan in built:
         for s in plan.get("shots") or []:
             if isinstance(s, dict) and s.get("shot_index") is not None:
@@ -182,6 +213,14 @@ def run_verify_only(script_path: Path, work_dir: Path, *,
                           "shots": missing_policies}, ensure_ascii=False))
         return 2
 
+    units_by_idx: dict[int, dict] = {}
+    if isinstance(script.get("hook"), dict):
+        units_by_idx[int(script["hook"].get("index", 0))] = script["hook"]
+    for s in (script.get("shots") or []):
+        if isinstance(s, dict) and s.get("index") is not None:
+            units_by_idx[int(s["index"])] = s
+    characters = list(script.get("characters") or [])
+
     payloads: dict[int, dict] = {}
     problems: list[str] = []
     for idx in sorted(shots):
@@ -189,7 +228,9 @@ def run_verify_only(script_path: Path, work_dir: Path, *,
             script, work_dir, only_indices={idx},
             media_policy=policies[idx], require_keyframes=False)
         payloads[idx] = payload
-        problems.extend(_verify_shot(payload, idx, work_dir))
+        problems.extend(_verify_shot(
+            payload, idx, work_dir, shot=units_by_idx.get(idx), characters=characters,
+        ))
     if problems:
         print(json.dumps({"ok": False, "code": "verify_failed",
                           "problems": problems, "model_sends": 0},

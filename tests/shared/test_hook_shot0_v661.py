@@ -26,7 +26,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from shared.vimax_bridge import (
     _extract_char_layout,
-    _inject_frame_spec,
     _doodle_refine_first_frame,
 )
 from shared.image_qc import _threat_shadow_not_counted, _expected_persons
@@ -174,14 +173,17 @@ def test_kf_desc_full_no_layout_lock_tail():
     """kf prompt 尾巴改为环境延续层（人物布局以本帧描述为准）.
 
     旧尾巴「环境构图与首帧保持一致…镜头机位…不变」与 kfs[i] 差异化站位冲突；
-    09-05 hook kf 全部站位错的一环。此测试锁住新文案存在 + 旧文案消失。
+    09-05 hook kf 全部站位错的一环。S03 将关键帧组装收敛进 compose_frame_prompt，
+    _gen_keyframes_async 直接委托之。
     """
     import inspect
     from shared import vimax_bridge
-    src = inspect.getsource(vimax_bridge._gen_keyframes_async)
-    assert "环境延续首帧" in src
-    assert "环境构图与首帧保持一致" not in src
-    assert "人物站位/动作以本帧描述为准" in src
+    gen_src = inspect.getsource(vimax_bridge._gen_keyframes_async)
+    compose_src = inspect.getsource(vimax_bridge.compose_frame_prompt)
+    assert "compose_frame_prompt" in gen_src
+    assert "环境延续首帧" in compose_src
+    assert "环境构图与首帧保持一致" not in compose_src
+    assert "人物站位/动作以本帧描述为准" in compose_src
 
 
 # ── 根因5：doodle_refine 显式 save_path（代码级锁定）────────────────

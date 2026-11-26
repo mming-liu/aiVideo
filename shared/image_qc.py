@@ -229,17 +229,20 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     # roster/肖像拼接侧单源一致）。回退口径：spec 条目存在但全员 off_screen →
     # 信任 spec 计 0 人（回退 char_layout 会重新引入人数打架）；spec 桶为空
     # （空镜合法形态 / LLM 漏写整桶）→ 回退 char_layout（shot1 空 ff 实证）。
-    from shared.frame_spec import get_frame_spec as _get_spec, is_on_screen as _on_screen
+    from shared.prompt_facts import project_frame_facts
     _spec_names: list[str] = []
     _spec_trusted = False
-    if frame_kind in ("first_frame", "last_frame"):
-        _spec_entries = [s for s in (_get_spec(shot, frame_kind) or [])
-                         if isinstance(s, dict)]
-        if _spec_entries:
-            _spec_names = [str(s.get("name", "")).strip()
-                           for s in _spec_entries
-                           if _on_screen(s) and str(s.get("name", "")).strip()]
+    try:
+        _proj_qc = project_frame_facts(shot, frame_kind, characters, kf_index=kf_index)
+        if _proj_qc.get("spec_source") == "frame_layouts" and _proj_qc.get("spec_present"):
+            _spec_names = [
+                str(e.get("name") or "").strip()
+                for e in (_proj_qc.get("entities") or [])
+                if str(e.get("name") or "").strip()
+            ]
             _spec_trusted = True
+    except Exception:
+        _spec_trusted = False
     if _spec_trusted:
         _cl_entities = _spec_names
     else:
@@ -487,14 +490,90 @@ def read_sidecar(frame_path: str | Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def qc_state(frame_path: str | Path) -> dict:
-    """当前图片的 QC 状态（**按内容摘要**判定结果是否属于这张图）.
+QC_CONTRACT_VERSION = 2
 
-    Returns:
-        {"status", "reason", "image", "data"}
-        旧 sidecar 缺 image.sha256 → qc_stale/unbound（允许补检，不静默升级为
-        当前图的有效 PASS）。
-    """
+
+def frame_qc_contract_digest(
+    shot: dict | None,
+    frame_kind: str,
+    characters: list | None = None,
+    kf_index: int | None = None,
+) -> str:
+    """Compute a deterministic contract digest for (shot, frame_kind, kf_index)."""
+    if not isinstance(shot, dict):
+        return ""
+    import hashlib as _hashlib
+
+    base_desc = ""
+    if frame_kind == "first_frame":
+        base_desc = str(shot.get("ff_desc") or "").strip()
+    elif frame_kind == "last_frame":
+        base_desc = str(shot.get("lf_desc") or "").strip()
+    elif frame_kind == "keyframe" and kf_index is not None:
+        kfs = shot.get("keyframes") or []
+        if 0 <= kf_index < len(kfs) and isinstance(kfs[kf_index], dict):
+            base_desc = str(kfs[kf_index].get("desc") or "").strip()
+
+    entities_sig = []
+    try:
+        from shared.prompt_facts import project_frame_facts
+        proj = project_frame_facts(shot, frame_kind, characters, kf_index=kf_index)
+        for ent in (proj.get("entities") or []):
+            entities_sig.append({
+                "name": ent.get("name"),
+                "identity": ent.get("identity"),
+                "current": ent.get("current"),
+            })
+    except Exception:
+        entities_sig = []
+
+    canonical = json.dumps(
+        {
+            "v": QC_CONTRACT_VERSION,
+            "shot_index": shot.get("index"),
+            "frame_kind": frame_kind,
+            "kf_index": kf_index,
+            "base_desc": base_desc,
+            "entities": entities_sig,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return _hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def build_qc_frame_meta(
+    shot: dict | None,
+    frame_kind: str,
+    characters: list | None = None,
+    kf_index: int | None = None,
+) -> dict:
+    """Build canonical frame binding metadata stored in QC sidecars."""
+    shot_id = shot.get("index") if isinstance(shot, dict) else None
+    return {
+        "shot_id": shot_id,
+        "frame_kind": frame_kind,
+        "kf_index": kf_index,
+        "rule_version": QC_CONTRACT_VERSION,
+        "contract_digest": frame_qc_contract_digest(
+            shot, frame_kind, characters, kf_index=kf_index,
+        ),
+    }
+
+
+def _call_qc_state_compat(frame_path: str | Path, expected_frame: dict | None) -> dict:
+    try:
+        return qc_state(frame_path, expected_frame=expected_frame)
+    except TypeError:
+        return qc_state(frame_path)
+
+
+def qc_state(
+    frame_path: str | Path,
+    *,
+    expected_frame: dict | None = None,
+) -> dict:
+    """当前图片的 QC 状态（**按内容摘要 + 帧契约**判定结果是否属于这张图）."""
     image = frame_identity(frame_path)
     if not image["exists"]:
         return {"status": "qc_not_run", "reason": "image_missing",
@@ -514,18 +593,28 @@ def qc_state(frame_path: str | Path) -> dict:
     if status not in QC_STATUSES:
         return {"status": "qc_stale", "reason": "status_missing",
                 "image": image, "data": data}
+    if isinstance(expected_frame, dict) and expected_frame:
+        bound_frame = data.get("frame") if isinstance(data.get("frame"), dict) else {}
+        if not bound_frame:
+            return {"status": "qc_stale", "reason": "frame_contract_unbound",
+                    "image": image, "data": data}
+        for key in ("shot_id", "frame_kind", "kf_index", "rule_version", "contract_digest"):
+            if key not in expected_frame:
+                continue
+            exp_val = expected_frame.get(key)
+            if exp_val is None and key != "kf_index":
+                continue
+            if bound_frame.get(key) != exp_val:
+                return {"status": "qc_stale", "reason": f"frame_{key}_mismatch",
+                        "image": image, "data": data}
     return {"status": status, "reason": "", "image": image, "data": data}
 
 
-def should_run_qc(frame_path: Path) -> bool:
-    """是否需要对该帧执行质检：总开关开启 + 结果未绑定到当前图片.
-
-    判据从「sidecar mtime 比图片新」改为**内容摘要**：相同 mtime 不同内容、
-    换图不换名、旧 sidecar 缺摘要，都必须重检。
-    """
+def should_run_qc(frame_path: Path, *, expected_frame: dict | None = None) -> bool:
+    """是否需要对该帧执行质检：总开关开启 + 结果未绑定到当前图片与契约."""
     if not QC_ENABLED:
         return False
-    state = qc_state(frame_path)
+    state = _call_qc_state_compat(frame_path, expected_frame)
     return state["status"] not in _SETTLED
 
 
@@ -854,15 +943,11 @@ def _expected_persons(shot: dict, frame_kind: str, characters: list | None, kf_i
     # （prompt 名单 2 人、QC 期望 0）——只有「条目存在且全员 off_screen」才
     # 是可信 0；空桶/缺桶按 prompt 同口径回退 char_layout。
     if isinstance(shot.get("frame_layouts"), dict):
-        from shared.frame_spec import get_frame_spec, is_on_screen
+        from shared.prompt_facts import project_frame_facts
         try:
-            spec_entries = [e for e in get_frame_spec(
-                shot, frame_kind, kf_index=kf_index) if isinstance(e, dict)]
-            if spec_entries:
-                return sum(
-                    1 for e in spec_entries
-                    if is_on_screen(e) and str(e.get("name", "")).strip()
-                )
+            proj = project_frame_facts(shot, frame_kind, characters, kf_index=kf_index)
+            if proj.get("spec_source") == "frame_layouts" and proj.get("spec_present"):
+                return len(proj.get("entities") or [])
             names = [
                 str(it.get("name", "")).strip()
                 for it in (shot.get("char_layout") or [])
@@ -1829,7 +1914,12 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
       比对，仅记 unstable_flips（不改 severity，仅审计）
     详见 references/qc-reliability-calibration.md。
     """
-    if not should_run_qc(frame_path):
+    _expected_frame = build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index) if isinstance(shot, dict) else None
+    try:
+        _run_qc = should_run_qc(frame_path, expected_frame=_expected_frame)
+    except TypeError:
+        _run_qc = should_run_qc(frame_path)
+    if not _run_qc:
         return QcResult(has_hallucination=False, issues=[], ok=True, raw_result="", error="skipped")
     provider = qc_provider()
     if provider == "off":

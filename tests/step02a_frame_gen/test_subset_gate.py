@@ -11,7 +11,6 @@ step02a 成品门随即拒绝执行。
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -36,14 +35,28 @@ def _png(path: Path):
     Image.new("RGB", (8, 8), (0, 0, 0)).save(path)
 
 
-def _write_frames(work_dir: Path, idx: int, with_kf: bool = False):
+def _write_frames(work_dir: Path, idx: int, with_kf: bool = False, script=None):
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
     from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
     d = work_dir / "shots" / str(idx)
     d.mkdir(parents=True, exist_ok=True)
-    for name in (FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME):
+    shot = {"index": idx, "keyframes": [{"desc": "k0"}]}
+    if isinstance(script, dict):
+        shot = next((s for s in (script.get("shots") or []) if s.get("index") == idx), shot)
+    for name, kind in ((FIRST_FRAME_FILENAME, "first_frame"), (LAST_FRAME_FILENAME, "last_frame")):
         _png(d / name)
+        write_sidecar(
+            d / name,
+            QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+            frame_meta=build_qc_frame_meta(shot, kind, []),
+        )
     if with_kf:
         _png(d / "keyframe_0.png")
+        write_sidecar(
+            d / "keyframe_0.png",
+            QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+            frame_meta=build_qc_frame_meta(shot, "keyframe", [], kf_index=0),
+        )
 
 
 def test_subset_run_passes_with_only_requested_shot(tmp_path, monkeypatch):

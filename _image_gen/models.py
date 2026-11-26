@@ -38,6 +38,8 @@ class ImageGenerationRequest:
     enable_hallucination_detection: bool = True
     # 期望出现的物体列表（用于检测多余物体）
     expected_objects: Optional[list[str]] = None
+    # S04: internal pre-POST verification contract (never serialized as provider JSON)
+    frame_contract: Optional[dict] = None
 
     def __post_init__(self):
         # 向后兼容：单张 reference_image_path 自动并入列表

@@ -141,11 +141,17 @@ def test_collect_frame_paths_first_only_accepts_missing_last(tmp_path):
 
 def test_product_acceptance_first_only_passes_without_last(tmp_path, monkeypatch):
     import step02a_frame_gen.image_prompt_quality as q
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
     monkeypatch.setattr(q, "chapter_dir", lambda *a, **k: tmp_path)
     shot_dir = tmp_path / "shots" / "1"
     shot_dir.mkdir(parents=True)
-    _png(shot_dir / "first_frame.png")
+    ff = _png(shot_dir / "first_frame.png")
     script = {"shots": [{"index": 1, "ff_desc": "a", "lf_desc": "b", "keyframes": []}]}
+    write_sidecar(
+        Path(ff),
+        QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+        frame_meta=build_qc_frame_meta(script["shots"][0], "first_frame", []),
+    )
     ok = q.write_image_product_quality(script, tmp_path, media_policy="first_only")
     assert ok["status"] == "PASS"
     blocked = q.write_image_product_quality(script, tmp_path, media_policy="first_last")

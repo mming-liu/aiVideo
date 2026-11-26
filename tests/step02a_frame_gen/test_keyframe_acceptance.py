@@ -90,16 +90,31 @@ def test_acceptance_blocks_when_a_keyframe_index_is_missing(tmp_path, monkeypatc
 
 def test_acceptance_passes_when_all_indices_present(tmp_path, monkeypatch):
     import step02a_frame_gen.image_prompt_quality as q
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
 
     work = tmp_path / "vimax_working"
     d = work / "shots" / "3"
-    _png(d / "first_frame.png")
-    _png(d / "last_frame.png")
+    script = _script(4)
+    shot = script["shots"][0]
+    for fname, kind, kf_i in (("first_frame.png", "first_frame", None),
+                              ("last_frame.png", "last_frame", None)):
+        _png(d / fname)
+        write_sidecar(
+            d / fname,
+            QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+            frame_meta=build_qc_frame_meta(shot, kind, []),
+        )
     for i in range(4):
-        _png(d / ("keyframe_%d.png" % i))
+        kp = d / ("keyframe_%d.png" % i)
+        _png(kp)
+        write_sidecar(
+            kp,
+            QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
+            frame_meta=build_qc_frame_meta(shot, "keyframe", [], kf_index=i),
+        )
     _png(d / "keyframe_0_doodle.png")          # 中间产物不影响判定
     monkeypatch.setattr(q, "chapter_dir", lambda: tmp_path)
     monkeypatch.setattr(q, "_keyframes_consumed_by_video", lambda: True)
-    payload = q.write_image_product_quality(_script(4), work)
+    payload = q.write_image_product_quality(script, work)
     assert payload["status"] == "PASS"
     assert payload["missing"] == []

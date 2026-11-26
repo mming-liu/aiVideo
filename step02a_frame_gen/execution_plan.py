@@ -144,15 +144,35 @@ def _unit_voice_units(script: dict, index: int) -> list[dict]:
 
 def _image_model() -> str:
     try:
-        from _image_gen.config import ImageGenCfg
-        provider = str(getattr(ImageGenCfg, "PROVIDER", "") or "unknown")
-        model = ""
-        for attr in ("AGNES_IMAGE_MODEL", "VOLCENGINE_IMAGE_MODEL",
-                     "MINIMAX_IMAGE_MODEL"):
-            value = getattr(ImageGenCfg, attr, "")
-            if value:
-                model = str(value)
-                break
+        from shared import config as _cfg
+        from shared.model_alias import canonical_image_model_id
+
+        provider = str(getattr(_cfg, "IMAGE_PROVIDER", "") or "unknown").strip() or "unknown"
+        model_attr = {
+            "volcengine": "VOLCENGINE_T2I_MODEL",
+            "bailian": "BAILIAN_T2I_MODEL",
+            "agent_plan": "AGENT_PLAN_T2I_MODEL",
+            "agnes": "AGNES_IMAGE_MODEL",
+            "minimax": "MINIMAX_T2I_MODEL",
+        }.get(provider, "")
+        raw_model = str(getattr(_cfg, model_attr, "") or "").strip() if model_attr else ""
+        if not raw_model:
+            for attr in ("VOLCENGINE_T2I_MODEL", "BAILIAN_T2I_MODEL",
+                         "AGENT_PLAN_T2I_MODEL", "AGNES_IMAGE_MODEL",
+                         "MINIMAX_T2I_MODEL"):
+                v = str(getattr(_cfg, attr, "") or "").strip()
+                if v:
+                    raw_model = v
+                    break
+        if not raw_model:
+            from _image_gen.config import ImageGenCfg
+            for attr in ("VOLCENGINE_T2I_MODEL", "AGNES_IMAGE_MODEL",
+                         "VOLCENGINE_IMAGE_MODEL", "MINIMAX_IMAGE_MODEL"):
+                v = str(getattr(ImageGenCfg, attr, "") or "").strip()
+                if v:
+                    raw_model = v
+                    break
+        model = canonical_image_model_id(raw_model) if raw_model else "unknown"
         return f"{provider}:{model or 'unknown'}"
     except Exception:
         return "unknown:unknown"
@@ -171,34 +191,43 @@ def _frame_kinds(frames: set[str] | None) -> list[str]:
     return out or ["ff"]
 
 
-def _frame_prompt(unit: dict, characters: list[dict], kind: str) -> tuple[str, str | None]:
+def _frame_prompt(
+    unit: dict, characters: list[dict], kind: str, kf_index: int | None = None,
+) -> tuple[str, str | None]:
     try:
         from shared.vimax_bridge import compose_frame_prompt
-        frame_kind = "last_frame" if kind == "lf" else "first_frame"
-        return compose_frame_prompt(unit, characters, frame_kind), None
+        frame_kind = (
+            "last_frame" if kind == "lf"
+            else "keyframe" if kind == "kf"
+            else "first_frame"
+        )
+        return compose_frame_prompt(unit, characters, frame_kind, kf_index=kf_index), None
     except Exception as exc:  # noqa: BLE001 - 单帧失败不拖垮整份计划
         return "", str(exc)[:500]
 
 
-def _frame_refs(unit: dict, characters: list[dict], kind: str) -> list[dict]:
-    """画面计划里的参考图清单（**只读**：不拼图、不写报告）.
-
-    2026-11-14 Step D：此前调用 `_collect_frame_refs_for_shot`（内部走
-    `_compose_frame_refs_by_category` → `fit_refs` 非 dry-run），构建计划时
-    会把 `ref_compose_*.json`/参考表写进正式 shots 目录——`--plan-only` 的
-    "零写入"因此不成立。这里改为同一 buckets + `fit_refs(dry_run=True)`：
-    只预测路径，路径与生成链同源，但不落盘。
-    """
+def _frame_refs(
+    unit: dict, characters: list[dict], kind: str, kf_index: int | None = None,
+) -> list[dict]:
+    """画面计划里的参考图清单（**只读**：不拼图、不写报告）."""
+    from shared.paths import FIRST_FRAME_FILENAME
     from shared.vimax_bridge import _collect_frame_refs_for_shot, shot_work_dir
     from shared.ref_compose import active_image_ref_limit, fit_refs
 
+    for_frame = "尾帧" if kind == "lf" else "关键帧" if kind == "kf" else "首帧"
     data = _collect_frame_refs_for_shot(
         unit, characters, limit=12,
-        for_frame="尾帧" if kind == "lf" else "首帧", return_buckets=True)
-    tag = "lf" if kind == "lf" else "ff"
-    paths = fit_refs(data["buckets"], active_image_ref_limit(),
-                     shot_work_dir(unit.get("index", 0)), tag,
-                     omissions=data.get("omissions"), dry_run=True)
+        for_frame=for_frame, return_buckets=True, kf_index=kf_index,
+    )
+    shot_dir = shot_work_dir(unit.get("index", 0))
+    buckets = list(data["buckets"])
+    if kind == "lf":
+        buckets = [("frame", [str(shot_dir / FIRST_FRAME_FILENAME)])] + buckets
+    tag = "lf" if kind == "lf" else f"kf{kf_index}" if kind == "kf" and kf_index is not None else "ff"
+    paths = fit_refs(
+        buckets, active_image_ref_limit(), shot_dir, tag,
+        omissions=data.get("omissions"), dry_run=True, allow_planned_frames=True,
+    )
     return _ref_entries(list(paths or []))
 
 
@@ -219,15 +248,9 @@ def _ref_entries(paths: list) -> list[dict]:
             role = "keyframe"
         elif "portrait" in name or "characters_bank" in str(path).lower():
             role = "design_reference"
-        # U7 收口（2026-11-15）：`ref_sheet_*` 是 fit_refs 在**真实生成期**按
-        # buckets 确定性拼出的派生参考表——计划（plan-only/视觉计划）构建于
-        # 生成之前，拼表必然不在盘上。把它当「素材未准备」判 blocked 是假阻断：
-        # 真实运行在消费前就会把它拼出来（shots/3、shots/4 的既有拼表正是上轮
-        # 实跑的产物）。标记 prepared=None + materialized_at_execution：
-        # 不进 unresolved，但要显式可见（不得静默消失）。
-        # 真实源资产（肖像/场景/道具 bank/帧图）仍按 is_file() 判定，缺失照样
-        # fail-closed 拒收。
         is_sheet = name.startswith("ref_sheet")
+        is_planned_frame = role in ("first_frame", "last_frame") and not path.is_file()
+        prepared: bool | None = None if (is_sheet or is_planned_frame) else path.is_file()
         entries.append({
             "role": role,
             "path": str(path),
@@ -235,8 +258,8 @@ def _ref_entries(paths: list) -> list[dict]:
                         else "连续性/构图参考" if role in ("first_frame", "last_frame")
                         else "参考"),
             "sha256": _sha256_file(path),
-            "prepared": (None if is_sheet else path.is_file()),
-            **({"materialized_at_execution": True} if is_sheet else {}),
+            "prepared": prepared,
+            **({"materialized_at_execution": True} if (is_sheet or is_planned_frame) else {}),
         })
     return entries
 
@@ -280,16 +303,46 @@ def _preflight_unit(unit: dict, characters: list[dict], frames: set[str] | None,
                                "message": f"参考图 {len(refs)} 张超过当前上限 {ref_limit}"})
         except Exception:
             pass
+    try:
+        from shared.prompt_facts import project_frame_facts
+        for kind in kinds:
+            if kind == "kf":
+                for kf_i in range(len(unit.get("keyframes") or [])):
+                    proj = project_frame_facts(unit, "keyframe", characters, kf_index=kf_i)
+                    if proj.get("spec_status") == "invalid":
+                        issues.append({
+                            "code": "frame_contract_invalid",
+                            "shot_index": idx,
+                            "frame": f"kf{kf_i}",
+                            "path": f"shots[{idx}].frame_layouts.kfs[{kf_i}]",
+                            "issues": proj.get("spec_issues") or [],
+                            "message": f"关键帧 {kf_i} 契约校验失败",
+                        })
+            else:
+                fk = "last_frame" if kind == "lf" else "first_frame"
+                proj = project_frame_facts(unit, fk, characters)
+                if proj.get("spec_status") == "invalid":
+                    issues.append({
+                        "code": "frame_contract_invalid",
+                        "shot_index": idx,
+                        "frame": kind,
+                        "path": f"shots[{idx}].frame_layouts.{kind}",
+                        "issues": proj.get("spec_issues") or [],
+                        "message": f"{kind} 帧契约校验失败",
+                    })
+    except Exception:
+        pass
     return issues
 
 
 def _frame_entry(unit: dict, characters: list[dict], kind: str, model: str,
-                 *, frame_label: str | None = None) -> dict:
+                 *, frame_label: str | None = None,
+                 kf_index: int | None = None) -> dict:
     idx = unit.get("index", 0)
     label = frame_label or kind
-    prompt, prompt_error = _frame_prompt(unit, characters, kind)
+    prompt, prompt_error = _frame_prompt(unit, characters, kind, kf_index=kf_index)
     try:
-        refs = _frame_refs(unit, characters, kind)
+        refs = _frame_refs(unit, characters, kind, kf_index=kf_index)
     except Exception as exc:  # noqa: BLE001
         refs = []
         prompt_error = prompt_error or str(exc)[:500]
@@ -430,20 +483,24 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
                                    if not str(k).startswith("_")}},
             "status": "blocked" if any(i.get("code") in {
                 "prompt_contradiction", "required_character_missing",
-                "reference_capacity"} for i in shot_issues) else "planned",
+                "reference_capacity", "frame_contract_invalid",
+            } for i in shot_issues) else "planned",
         }
         for kind in _frame_kinds(frames):
             if kind == "kf":
                 for i, kf in enumerate(unit.get("keyframes") or []):
-                    frame = _frame_entry(unit, chars, "ff", model, frame_label=f"kf{i}")
+                    frame = _frame_entry(
+                        unit, chars, "kf", model,
+                        frame_label=f"kf{i}", kf_index=i,
+                    )
                     frame.update({"moment": "key_moment",
                                   "responsibility": f"关键帧 {i}: {_text(kf.get('desc')) or '关键状态'}"})
                     entry["frames"].append(frame)
                     all_frames.append(frame)
                 continue
             frame = _frame_entry(unit, chars, kind, model)
-            if issues:
-                frame["status"] = entry["status"]
+            if shot_issues and entry["status"] == "blocked":
+                frame["status"] = "blocked"
             entry["frames"].append(frame)
             all_frames.append(frame)
         shot_entries.append(entry)
