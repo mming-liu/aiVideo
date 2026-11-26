@@ -1,7 +1,7 @@
 # S44 复核收口：P1/P2 修复、A 清理与同组对账
 
 **日期：** 2026-11-26
-**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`、`39038c0`、`55976cf`。
+**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`、`39038c0`、`55976cf`、`fa84b63`。
 **状态：** P1/P2 已修复；A 清理已执行；B 保留；两章候选未正式采纳，未生成媒体。
 
 ## 一、A 清理（已执行）
@@ -67,7 +67,7 @@
 
 ## 四、S40 同组逐用例对账
 
-在干净 worktree 中，对 `a4f56da`（基线）与 `39038c0`（最终交付）运行同一组：
+在干净 worktree 中，对 `a4f56da`（基线）与 `fa84b63`（最终交付）运行同一组：
 
 - `tests/step01_script_gen/test_step01_commit.py`
 - `tests/step02a_frame_gen/test_execution_plan.py`
@@ -76,7 +76,7 @@
 
 结果：基线 **78 passed**，最终交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。Step03 计划缓存/策略入口测试：`test_plan_cache.py + test_tts_units_and_cli.py` 共 **20 passed**；其中 `_audio_context()` 用 4 条旁白缓存验证了策略读到 `narration_tts_required=True`。
 
-主工作树全量（`55976cf`）：`tests/step01_script_gen tests/shared` **6333 passed / 295 skipped / 4 xfailed**（188s）。Step03 计划缓存/策略/CLI 共 20 passed。
+主工作树全量（`fa84b63`）：`tests/step01_script_gen tests/shared` **6335 passed / 295 skipped / 4 xfailed**（185s）。Step03 全量 58 passed。
 
 干净检出全量的两个既有环境问题仍保留：
 
@@ -91,7 +91,32 @@
 - 第二章无正式旧图。
 - 首轮需要：第一章 28 张、第二章 28 张，共 **56 张帧图**；参考资产槽位 15+11=26，复用待核。
 
-## 六、采纳收据
+## 六、第三次复核：缓存发布、分轨清理、报告校验
+
+### 1. 计划缓存纳入提交事务
+
+- `commit.py` 在 `PublishTransaction` 内、写 commit manifest **之前**写 v2 缓存；写失败随事务回滚并 BLOCK。
+- `shared/publish_txn.py:PUBLISH_FILES` 加入 `chapter_outline.cache.json`；新建缓存回滚删除，旧缓存回滚恢复（`tests/shared/test_publish_txn_plan_cache.py` 2 passed）。
+- `build_step01_commit_manifest()` 增加 `plan_cache_required` 与缓存 `sha1/bytes`；`verify_step01_commit_manifest()` 校验存在性与摘要。两章候选的 `step01_commit.json` 已按同一清单刷新。
+- `load_plan_cache()` 缺文件不再返回 `{}`，明确 `PlanCacheError`。
+
+### 2. 分轨清理与声音准备
+
+- `step03_tts_audio/track_cleanup.py:expected_tracks()`、`run()` 新增 `plan` 参数；Step03 主流程传入 `_audio_context()` 的有效计划。
+- `shared/voice_preparation.py:build_voice_preparation()` 新增 `plan` 参数；Step03 两处调用传入同一计划。
+- 测试：4 条旁白生成后 `expected_tracks()` 期望 4 条，`plan_cleanup()` 的 `dirty` 为 0，4 个文件保留；无计划时复现 4 条 `orphan_track` 反例。
+
+### 3. 声音报告复用 v2 校验
+
+`tools/voice_unit_report.py:load_report_plan()` 现在调用 `load_plan_cache()`，与 Step03 共用章号/revision/摘要校验；错章、旧 revision、摘要损坏均拒收。测试 2 条。
+
+### 结果
+
+- Step03 全量：**58 passed**。
+- 全量 `tests/step01_script_gen tests/shared`：**6335 passed / 295 skipped / 4 xfailed**。
+- 基线 `a4f56da` vs `fa84b63` 同组 4 文件：**78 / 78**，用例集合与状态差异 0。
+
+## 七、采纳收据
 
 `adoption_plan.json` 已补：
 
@@ -102,15 +127,16 @@
 
 正式替换仍未执行。
 
-## 七、提交
+## 八、提交
 
 - `179dcad` fix(step01/tts): bind identity evidence, strict identity types, and plan-backed voice report
 - `0512325` fix(step03): load candidate plan cache for speech units
 - `bee6395` test(step03): cover candidate plan cache loading
 - `39038c0` fix(step03): bind plan cache identity and share one effective plan
 - `55976cf` fix(step01): write bound plan cache on commit
+- `fa84b63` fix(step01/step03): publish plan cache in transaction and share it with all audio consumers
 
-## 八、未完成/边界
+## 九、未完成/边界
 
 - B 外部 worktree `.pytest_tmp` 未清理。
 - 正式采纳、图片/视频/TTS 未执行。
