@@ -1,7 +1,7 @@
 # S44 复核收口：P1/P2 修复、A 清理与同组对账
 
 **日期：** 2026-11-26
-**基线：** `82a98c0`；本包修复提交 `179dcad`。
+**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`。
 **状态：** P1/P2 已修复；A 清理已执行；B 保留；两章候选未正式采纳，未生成媒体。
 
 ## 一、A 清理（已执行）
@@ -64,14 +64,14 @@
 
 ## 四、S40 同组逐用例对账
 
-在干净 worktree 中，对 `a4f56da`（基线）与 `179dcad`（交付）运行同一组：
+在干净 worktree 中，对 `a4f56da`（基线）与 `bee6395`（最终交付）运行同一组：
 
 - `tests/step01_script_gen/test_step01_commit.py`
 - `tests/step02a_frame_gen/test_execution_plan.py`
 - `tests/step02a_frame_gen/test_frame_protection.py`
 - `tests/step03_tts_audio/test_tts_units_and_cli.py`
 
-结果：基线 **78 passed**，交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。
+结果：基线 **78 passed**，最终交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。Step03 计划缓存另加 2 条测试，`test_plan_cache.py + test_tts_units_and_cli.py` 共 13 passed。
 
 主工作树全量（P2 后）：`tests/step01_script_gen tests/shared` **6333 passed / 295 skipped / 4 xfailed**（192s）。Step03 受影响的 11 条测试通过。
 
@@ -102,6 +102,8 @@
 ## 七、提交
 
 - `179dcad` fix(step01/tts): bind identity evidence, strict identity types, and plan-backed voice report
+- `0512325` fix(step03): load candidate plan cache for speech units
+- `bee6395` test(step03): cover candidate plan cache loading
 
 ## 八、未完成/边界
 
