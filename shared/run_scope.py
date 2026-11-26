@@ -202,26 +202,30 @@ def ensure_script_identity(script: dict, *, expected_book_name: str | None = Non
     if issues:
         return issues
 
-    current_book = str(script.get("book_name") or "").strip()
-    if not current_book:
-        script["book_name"] = expected_book
-    elif current_book != expected_book:
-        issues.append({"code": "identity_book_conflict", "path": "book_name",
-                       "message": f"稿件 book_name={current_book!r} 与生效 scope={expected_book!r} 冲突"})
+    raw_book = script.get("book_name")
+    if raw_book is not None and not isinstance(raw_book, str):
+        issues.append({"code": "identity_book_invalid", "path": "book_name",
+                       "message": f"稿件 book_name 必须是字符串，收到 {type(raw_book).__name__}"})
+    else:
+        current_book = str(raw_book or "").strip()
+        if not current_book:
+            script["book_name"] = expected_book
+        elif current_book != expected_book:
+            issues.append({"code": "identity_book_conflict", "path": "book_name",
+                           "message": f"稿件 book_name={current_book!r} 与生效 scope={expected_book!r} 冲突"})
 
     raw = script.get("chapter_index")
     if raw is None or raw == "":
         script["chapter_index"] = expected_chap
-    else:
-        try:
-            current_chap = int(raw)
-        except (TypeError, ValueError):
-            issues.append({"code": "identity_chapter_invalid", "path": "chapter_index",
-                           "message": f"稿件 chapter_index 必须是 >=1 的整数，收到 {raw!r}"})
-        else:
-            if current_chap != expected_chap:
-                issues.append({"code": "identity_chapter_conflict", "path": "chapter_index",
-                               "message": f"稿件 chapter_index={current_chap} 与生效 scope={expected_chap} 冲突"})
+    elif isinstance(raw, bool) or not isinstance(raw, int):
+        issues.append({"code": "identity_chapter_invalid", "path": "chapter_index",
+                       "message": f"稿件 chapter_index 必须是 >=1 的整数，收到 {raw!r}"})
+    elif raw < 1:
+        issues.append({"code": "identity_chapter_invalid", "path": "chapter_index",
+                       "message": f"稿件 chapter_index 必须 >=1，收到 {raw!r}"})
+    elif raw != expected_chap:
+        issues.append({"code": "identity_chapter_conflict", "path": "chapter_index",
+                       "message": f"稿件 chapter_index={raw} 与生效 scope={expected_chap} 冲突"})
     return issues
 
 

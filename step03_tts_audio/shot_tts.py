@@ -478,14 +478,15 @@ def narration_subset_entries(plan: dict, shots: list, only_indices=None) -> list
 def build_speech_units(script: dict, *, scope: dict | None = None,
                        script_revision: str = "", registry=None,
                        provider_name: str = "", only_indices=None,
-                       full_shots: list | None = None) -> list:
+                       full_shots: list | None = None,
+                       plan: dict | None = None) -> list:
     """整章 → `SpeechUnit` 列表（对白 + 旁白）——`plan` / `--plan-only` 与生成共用.
 
     只做**规划**：不实例化 provider、不调用模型（能力用登记表读数）。
     """
     from step01_script_gen.plan_feasibility import (broadcast_narration_entries,
                                                     layout_voice_entries, voice_units)
-    plan = script.get("chapter_outline")
+    plan = plan if isinstance(plan, dict) and plan else script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
     hook = script.get("hook") if isinstance(script.get("hook"), dict) else None

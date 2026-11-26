@@ -23,7 +23,7 @@ from shared.run_scope import current_scope_identity
 
 
 def build_report(script: dict, *, plan_dir: Path | None = None,
-                 audio_mode: str | None = None) -> dict:
+                 audio_mode: str | None = None, plan: dict | None = None) -> dict:
     from shared.audible_speech import missing_audible_speech_units
     from step01_script_gen.plan_feasibility import layout_voice_entries, voice_units
     from step03_tts_audio.shot_tts import (
@@ -37,8 +37,9 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
     file_revision = str(script.get("script_revision") or "")
     revision = computed_revision
     units = build_speech_units(script, scope=current_scope_identity(),
-                               script_revision=revision)
-    vrecs = voice_units(script.get("chapter_outline"), script.get("shots"))
+                               script_revision=revision, plan=plan)
+    vrecs = voice_units(plan if isinstance(plan, dict) and plan
+                        else script.get("chapter_outline"), script.get("shots"))
     bindings = {(r.get("kind"), r.get("index")): r for r in vrecs}
     win, _ = _compute_voice_windows(script, script.get("shots") or [])
     tracks, layout_problems = layout_voice_entries(vrecs, win)
@@ -172,25 +173,37 @@ def main() -> int:
     import tempfile
     from tts.voice_registry import get_registry, reset_registry_cache
     _prev_registry = os.environ.get("TTS_VOICE_REGISTRY_PATH")
-    _tmp_dir = None
-    if not _prev_registry:
-        _tmp_dir = Path(tempfile.mkdtemp(prefix="voice_report_registry_"))
-        _src = Path(get_registry().registry_path)
-        _dst = _tmp_dir / "voice_registry.json"
-        if _src.is_file():
-            shutil.copyfile(_src, _dst)
-        os.environ["TTS_VOICE_REGISTRY_PATH"] = str(_dst)
-        reset_registry_cache()
+    # 无条件是复制件：即使调用方显式把 env 指向正式注册表，报告也不能写它。
+    _tmp_dir = Path(tempfile.mkdtemp(prefix="voice_report_registry_"))
+    _src = (Path(_prev_registry) if _prev_registry
+            else Path(get_registry().registry_path))
+    _dst = _tmp_dir / "voice_registry.json"
+    if _src.is_file():
+        shutil.copyfile(_src, _dst)
+    os.environ["TTS_VOICE_REGISTRY_PATH"] = str(_dst)
+    reset_registry_cache()
+    plan = None
+    if args.plan_dir:
+        _plan_path = Path(args.plan_dir)
+        if _plan_path.is_dir():
+            _plan_path = _plan_path / "chapter_outline.cache.json"
+        if _plan_path.is_file():
+            _data = json.loads(_plan_path.read_text(encoding="utf-8"))
+            plan = (_data.get("outline") if isinstance(_data, dict) and "outline" in _data
+                    else _data)
+    elif (ch / "chapter_outline.cache.json").is_file():
+        _data = json.loads((ch / "chapter_outline.cache.json").read_text(encoding="utf-8"))
+        plan = (_data.get("outline") if isinstance(_data, dict) and "outline" in _data
+                else _data)
     try:
         report = build_report(script, plan_dir=Path(args.plan_dir) if args.plan_dir else None,
-                              audio_mode=args.audio_mode)
+                              audio_mode=args.audio_mode, plan=plan)
     finally:
-        if _tmp_dir is not None:
-            if _prev_registry is None:
-                os.environ.pop("TTS_VOICE_REGISTRY_PATH", None)
-            else:
-                os.environ["TTS_VOICE_REGISTRY_PATH"] = _prev_registry
-            reset_registry_cache()
+        if _prev_registry is None:
+            os.environ.pop("TTS_VOICE_REGISTRY_PATH", None)
+        else:
+            os.environ["TTS_VOICE_REGISTRY_PATH"] = _prev_registry
+        reset_registry_cache()
     out = Path(args.out_json)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

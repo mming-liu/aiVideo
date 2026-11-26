@@ -943,12 +943,27 @@ def build_identity_refresh(before_script: dict, after_script: dict, *,
     before = json.loads(json.dumps(before_script, ensure_ascii=False))
     after = json.loads(json.dumps(after_script, ensure_ascii=False))
     scope_book = str((scope or {}).get("book_name") or "").strip()
-    try:
-        scope_chapter = int((scope or {}).get("chapter"))
-    except (TypeError, ValueError):
-        raise QualityGateError("identity refresh 的 scope.chapter 非法") from None
+    raw_scope_chapter = (scope or {}).get("chapter")
+    if isinstance(raw_scope_chapter, bool) or not isinstance(raw_scope_chapter, int):
+        raise QualityGateError("identity refresh 的 scope.chapter 必须是整数")
+    scope_chapter = raw_scope_chapter
     if not scope_book or scope_chapter < 1:
         raise QualityGateError("identity refresh 的 scope 不完整")
+
+    # 只允许**补缺失**，不能把已有身份改成另一个值。
+    before_book = before.get("book_name")
+    before_chapter = before.get("chapter_index")
+    missing_book = before_book is None or (isinstance(before_book, str) and not before_book.strip())
+    missing_chapter = before_chapter is None or before_chapter == ""
+    if not missing_book and not missing_chapter:
+        raise QualityGateError("identity refresh 只允许补全缺失身份，不能改换已有身份")
+    if not missing_book:
+        if not isinstance(before_book, str) or before_book.strip() != scope_book:
+            raise QualityGateError("identity refresh 的已有 book_name 与 scope 不一致")
+    if not missing_chapter:
+        if isinstance(before_chapter, bool) or not isinstance(before_chapter, int) \
+                or before_chapter != scope_chapter:
+            raise QualityGateError("identity refresh 的已有 chapter_index 与 scope 不一致")
 
     differences = []
     for key in sorted(set(before) | set(after)):
@@ -957,15 +972,17 @@ def build_identity_refresh(before_script: dict, after_script: dict, *,
                 raise QualityGateError(
                     f"identity refresh 只允许身份字段变化，发现 {key} 变化")
             differences.append(key)
-    if "book_name" not in differences and "chapter_index" not in differences:
+    if not differences:
         raise QualityGateError("identity refresh 没有任何身份字段变化")
+    if not missing_book and after.get("book_name") != before_book:
+        raise QualityGateError("identity refresh 不能改换已有 book_name")
+    if not missing_chapter and after.get("chapter_index") != before_chapter:
+        raise QualityGateError("identity refresh 不能改换已有 chapter_index")
     if str(after.get("book_name") or "").strip() != scope_book:
         raise QualityGateError("identity refresh 后的 book_name 与 scope 不一致")
-    try:
-        after_chapter = int(after.get("chapter_index"))
-    except (TypeError, ValueError):
-        raise QualityGateError("identity refresh 后的 chapter_index 非法") from None
-    if after_chapter != scope_chapter:
+    after_chapter = after.get("chapter_index")
+    if isinstance(after_chapter, bool) or not isinstance(after_chapter, int) \
+            or after_chapter != scope_chapter:
         raise QualityGateError("identity refresh 后的 chapter_index 与 scope 不一致")
 
     audit_status = str((source_audit or {}).get("status") or "").lower()
@@ -975,12 +992,20 @@ def build_identity_refresh(before_script: dict, after_script: dict, *,
     if commit_status != "COMMITTED":
         raise QualityGateError("来源提交不是 COMMITTED，不能做身份刷新")
 
-    def _revision(script):
-        value = str(script.get("script_revision") or "")
-        return value or compute_script_revision(script)
+    # **重算**两稿 revision；不信任稿件自带的 script_revision。
+    before_rev = compute_script_revision(before)
+    after_rev = compute_script_revision(after)
+    audit_rev = str((source_audit or {}).get("input_revision")
+                    or (source_audit or {}).get("script_revision")
+                    or (source_audit or {}).get("revision") or "")
+    commit_rev = str((source_commit or {}).get("script_revision") or "")
+    if audit_rev != before_rev:
+        raise QualityGateError(
+            f"来源审计不绑定旧稿：audit={audit_rev or 'missing'} before={before_rev}")
+    if commit_rev != before_rev:
+        raise QualityGateError(
+            f"来源提交不绑定旧稿：commit={commit_rev or 'missing'} before={before_rev}")
 
-    before_rev = _revision(before)
-    after_rev = _revision(after)
     return {
         "schema": "step01.identity_refresh.v1",
         "identity_only": True,
@@ -990,9 +1015,9 @@ def build_identity_refresh(before_script: dict, after_script: dict, *,
         "after": {"script_revision": after_rev,
                    "sha256": hashlib.sha256(json.dumps(after, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()},
         "changed_fields": differences,
-        "audit": {"status": audit_status, "reused": True,
+        "audit": {"status": audit_status, "reused": True, "input_revision": audit_rev,
                    "note": "身份补全后复用来源审计，未对新 revision 重新执行审计"},
-        "commit": {"status": commit_status, "reused": True},
+        "commit": {"status": commit_status, "reused": True, "script_revision": commit_rev},
         "novel_text_digest": hashlib.sha256(
             str(novel_text or "").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")).hexdigest(),
     }
