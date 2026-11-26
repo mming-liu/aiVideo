@@ -2,6 +2,8 @@
 """S27/S30: deterministic visual-beat compaction (no model, no chapter data)."""
 from __future__ import annotations
 
+import pytest
+
 from tools.compact_plan_visual_beats import merge_visual_beats, speaker_map_for_view
 
 
@@ -45,6 +47,22 @@ def test_single_visual_beats_are_not_merged():
     candidate, mapping, meta = merge_visual_beats(_view(), group_size=3)
     assert mapping == {}
     assert meta["beats_after"] == meta["beats_before"] == 4
+
+
+def test_merge_keeps_all_event_bindings_in_order():
+    view = _view()
+    view["beats"][0]["event_uids"] = ["e1", "e2"]
+    view["beats"][1]["event_uids"] = ["e2", "e3"]
+    candidate, mapping, _meta = merge_visual_beats(view, group_size=2)
+    assert candidate["beats"][0]["event_uids"] == ["e1", "e2", "e3"]
+
+
+def test_merge_rejects_different_sources_instead_of_dropping_them():
+    view = _view()
+    view["beats"][0]["source"] = {"chapter": 1, "quote": "甲"}
+    view["beats"][1]["source"] = {"chapter": 1, "quote": "乙"}
+    with pytest.raises(ValueError, match="source_relation_not_mergeable"):
+        merge_visual_beats(view, group_size=2)
 
 
 def test_speaker_map_drops_orphan_plan_units():

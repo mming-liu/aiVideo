@@ -169,7 +169,8 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                            audit_model: "str | None" = None,
                            label: str = "落盘前",
                            source_revision: str = "",
-                           source_aliases: "dict | None" = None) -> tuple:
+                           source_aliases: "dict | None" = None,
+                           bind_identity: bool = False) -> tuple:
     """**唯一最终提交点**：三条入口（正常 / 缓存 / BEST-GUARD）都只走这里.
 
     `source_revision` / `source_aliases`：BEST-GUARD 选中的**历史快照自身**的
@@ -203,6 +204,26 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                      "repair_outcome": "",
                      "blocking": [], "reused_audit": False, "detail": ""}
     _mrt._metrics_inc("commit.attempts")
+
+    # S36：提交前硬门。身份缺失可由此刻生效 scope 补齐；已有值与 scope 冲突
+    # 必须拒收，不能用「补正确值」覆盖错章/错部。此检查在质量门与审计之前，
+    # 保证三份产物、revision 与执行绑定看到同一身份。
+    from shared.run_scope import ensure_script_identity
+    _identity_issues = (ensure_script_identity(script) if bind_identity else [])
+    if _identity_issues:
+        _identity_revision = ""
+        try:
+            _identity_revision = compute_script_revision(script)
+        except Exception:  # noqa: BLE001 - 诊断路径，不让哈希失败掩盖身份问题
+            pass
+        detail = "章节身份校验失败：%s" % "；".join(
+            str(item.get("message") or item.get("code")) for item in _identity_issues)
+        _mrt._logger.error(f"[COMMIT] x {detail}")
+        _write_blocked_manifest(_identity_revision, run_id=run_id, detail=detail,
+                                blocking=_identity_issues, audit_status="not_run")
+        summary["blocking"] = _identity_issues
+        summary["detail"] = detail
+        return script, summary
 
     # M2.3 / CP2（2026-11-16）：**候选已生成并 finalize**——阶段边界即落盘。
     # 之后任何阶段被预算/网络/上限拦下，都不必重新生成正文。

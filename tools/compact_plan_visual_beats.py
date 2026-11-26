@@ -56,16 +56,28 @@ def merge_visual_beats(view: dict, *, group_size: int = 2) -> tuple:
                     continue
                 first = chunk[0]
                 uid = str(first.get("uid"))
+                events = []
+                for _beat in chunk:
+                    for _event_uid in _beat.get("event_uids") or []:
+                        _text_uid = str(_event_uid)
+                        if _text_uid and _text_uid not in events:
+                            events.append(_text_uid)
+                _sources = [copy.deepcopy(_b.get("source") or {}) for _b in chunk]
+                _nonempty = [s for s in _sources if s]
+                if _nonempty and any(s != _nonempty[0] for s in _nonempty[1:]):
+                    raise ValueError(
+                        "source_relation_not_mergeable: 节拍来源不同，不得丢弃后续来源；"
+                        "请由生产者重新安排")
                 merged_beat = {
                     "uid": uid,
-                    "event_uids": list(first.get("event_uids") or []),
+                    "event_uids": events,
                     "text": "；".join(str(b.get("text") or "").strip("；") for b in chunk
                                       if str(b.get("text") or "").strip()),
                     "purpose": "；".join(str(b.get("purpose") or "").strip("；") for b in chunk
                                          if str(b.get("purpose") or "").strip()),
                     "evidence": "；".join(str(b.get("evidence") or "").strip("；") for b in chunk
                                           if str(b.get("evidence") or "").strip()),
-                    "source": copy.deepcopy(first.get("source") or {}),
+                    "source": copy.deepcopy(_nonempty[0]) if _nonempty else {},
                     "voice_ref": {"kind": "visual", "uid": uid},
                 }
                 for b in chunk:

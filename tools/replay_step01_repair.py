@@ -315,6 +315,13 @@ def _run_manifest(manifest: dict, *, dry_run: bool, max_sends_override: int | No
     chapter_dir.mkdir(parents=True, exist_ok=True)
 
     script = json.loads(Path(checked["script"]["path"]).read_text(encoding="utf-8-sig"))
+    from shared.run_scope import ensure_script_identity
+    _identity_issues = ensure_script_identity(
+        script, expected_book_name=checked["scope"]["book_name"],
+        expected_chapter=int(checked["scope"]["chapter"]))
+    if _identity_issues:
+        raise SystemExit("[ABORT] 章节身份不合法：%s" % "；".join(
+            str(x.get("message") or x.get("code")) for x in _identity_issues))
     plan = json.loads(Path(checked["plan"]["path"]).read_text(encoding="utf-8-sig"))
     # C03：隔离根写入**既有格式**的计划缓存——提交点的恢复清单据此冻结计划身份
     (chapter_dir / "chapter_outline.cache.json").write_text(

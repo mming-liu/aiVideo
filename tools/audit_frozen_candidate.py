@@ -27,7 +27,6 @@ import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
 
 EXIT_COMMITTED = 0
 EXIT_REFUSED = 2
@@ -839,7 +838,8 @@ def main(argv=None) -> int:
     from _text_gen.send_guard import bind_send_guard
     try:
         with bind_send_guard(guard):
-            _script, summary = m._commit_step01_outputs(candidate, novel_text, plan=plan)
+            _script, summary = m._commit_step01_outputs(
+                candidate, novel_text, plan=plan, bind_identity=False)
     except Exception as exc:                                       # noqa: BLE001
         # 提交函数自身抛错：不清授权、不重发；已有证据照常收集。
         summary = {"status": "ERROR", "detail": "%s: %s" % (type(exc).__name__, exc)}

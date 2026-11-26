@@ -180,6 +180,51 @@ def apply_scope(chapter: Any = None,
 SCOPE_IDENTITY_KEYS = ("chapter", "book_index", "book_name")
 
 
+def ensure_script_identity(script: dict, *, expected_book_name: str | None = None,
+                           expected_chapter: int | None = None) -> list[dict]:
+    """把生效 scope 绑定到稿件；缺失补齐，已有冲突拒绝.
+
+    返回结构化问题列表（空 = 通过）。只改 `book_name`/`chapter_index` 两个身份
+    字段，不碰镜头、声音或计划。调用方必须在最终质量门/审计/提交之前调用。
+    """
+    from shared.paths import book_name as _book_name, chapter_index as _chapter
+
+    expected_book = (str(expected_book_name).strip() if expected_book_name is not None
+                     else str(_book_name()).strip())
+    expected_chap = int(expected_chapter if expected_chapter is not None else _chapter())
+    issues: list[dict] = []
+    if not expected_book:
+        issues.append({"code": "identity_scope_book_blank", "path": "scope.book_name",
+                       "message": "生效 scope 的 book_name 为空，无法绑定稿件身份"})
+    if expected_chap < 1:
+        issues.append({"code": "identity_scope_chapter_invalid", "path": "scope.chapter",
+                       "message": "生效 scope 的 chapter 必须是 >=1 的整数"})
+    if issues:
+        return issues
+
+    current_book = str(script.get("book_name") or "").strip()
+    if not current_book:
+        script["book_name"] = expected_book
+    elif current_book != expected_book:
+        issues.append({"code": "identity_book_conflict", "path": "book_name",
+                       "message": f"稿件 book_name={current_book!r} 与生效 scope={expected_book!r} 冲突"})
+
+    raw = script.get("chapter_index")
+    if raw is None or raw == "":
+        script["chapter_index"] = expected_chap
+    else:
+        try:
+            current_chap = int(raw)
+        except (TypeError, ValueError):
+            issues.append({"code": "identity_chapter_invalid", "path": "chapter_index",
+                           "message": f"稿件 chapter_index 必须是 >=1 的整数，收到 {raw!r}"})
+        else:
+            if current_chap != expected_chap:
+                issues.append({"code": "identity_chapter_conflict", "path": "chapter_index",
+                               "message": f"稿件 chapter_index={current_chap} 与生效 scope={expected_chap} 冲突"})
+    return issues
+
+
 def scope_identity(scope: Any) -> dict:
     """取 scope 的身份子集.
 

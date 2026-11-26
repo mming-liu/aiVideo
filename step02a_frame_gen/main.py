@@ -25,7 +25,7 @@ import json
 import os
 
 from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
-from shared.paths import script_file, chapter_dir, vimax_working_dir
+from shared.paths import chapter_dir
 from shared.tee_logger import get_logger
 from shared.vimax_bridge import build_working_dir
 from shared.shot_selector import parse_shot_selector, parse_frame_selector
@@ -397,7 +397,6 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
     （U7 收口：防覆写护栏保证哈希失配/--force 不重画锁保原图）。参考图超
     模型上限时不落盘参考表，保守退回文件存在性判断。
     """
-    import json
     from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
     from shared.assets_bank import PropAssetsBank, SceneAssetsBank
     from shared.character_bank import CharacterBank
@@ -571,6 +570,32 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
     }
 
 
+def _plan_only_log_isolated(func):
+    """plan-only 全程使用临时日志根；异常/SystemExit 也恢复原上下文."""
+    import functools
+    import sys
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if "--plan-only" in sys.argv:
+            import os
+            from shared.log_utils import isolated_log_context
+            previous_step01 = os.environ.get("STEP01_LOG_PATH")
+            with isolated_log_context() as log_dir:
+                os.environ["STEP01_LOG_PATH"] = str(Path(log_dir) / "step01.log")
+                try:
+                    return func(*args, **kwargs)
+                finally:
+                    if previous_step01 is None:
+                        os.environ.pop("STEP01_LOG_PATH", None)
+                    else:
+                        os.environ["STEP01_LOG_PATH"] = previous_step01
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+@_plan_only_log_isolated
 def main():
     import argparse
     import json
@@ -610,17 +635,8 @@ def main():
     # 运行范围必须在 script_file()/chapter_dir() 之前生效（本入口的章级路径全部惰性解析）
     scope = apply_scope(args.chapter, args.book, args.book_name)
 
-    # 2026-11-14 Step D：plan-only 对章目录必须零写入。`_bridge_log` 走
-    # `resolve_log_file`，未设上下文时会往章目录追加 `step02.log`。在任何
-    # 质量门/哈希计算之前把日志根钉到临时目录，结束恢复进程级上下文。
-    _plan_log_ctx = None
-    if args.plan_only:
-        import tempfile
-        from shared import log_utils as _log_utils
-        if _log_utils.current_log_dir() is None:
-            _plan_log_ctx = tempfile.mkdtemp(prefix="step02a_plan_logs_")
-            _log_utils.set_log_context(_plan_log_ctx)
-
+    # plan-only 的日志隔离由 `_plan_only_log_isolated` 从进入 `main()` 起覆盖：
+    # 不在这里按 `is None` 条件设置，避免继承到正式目录的旧上下文。
     only_indices = parse_shot_selector(args.shots)
 
     # 帧选择解析：--all-frames=全部帧；--frames=精确选择；均未给=默认 Mode A/B
@@ -691,26 +707,19 @@ def main():
         raise
 
     if args.plan_only:
-        try:
-            with open(script_path, "r", encoding="utf-8") as _sf_plan:
-                _script_plan = json.load(_sf_plan)
-            _report = _plan_only_report(_script_plan, work_dir, only_indices, frames,
-                                        scope=scope)
-            print(json.dumps(_report, ensure_ascii=False, indent=2))
-            if args.plan_out:
-                from step02a_frame_gen.execution_plan import write_visual_plan
-                _target = write_visual_plan(_report["visual_plan"], Path(args.plan_out))
-                logger.info(f"[PLAN] 候选画面计划已写出: {_target}")
-            if (_report.get("prompt_preflight") or {}).get("status") == "blocked" \
-                    or _report.get("visual_plan_status") == "blocked":
-                raise SystemExit(2)
-            return
-        finally:
-            if _plan_log_ctx is not None:
-                from shared import log_utils as _log_utils
-                _log_utils.set_log_context(None)
-                # 目录不在这里删：tee_logger 仍持有 step02.log 句柄（Windows
-                # 无法 unlink）；它是 %TEMP% 下的一个小目录，进程退出后可清理。
+        with open(script_path, "r", encoding="utf-8") as _sf_plan:
+            _script_plan = json.load(_sf_plan)
+        _report = _plan_only_report(_script_plan, work_dir, only_indices, frames,
+                                    scope=scope)
+        print(json.dumps(_report, ensure_ascii=False, indent=2))
+        if args.plan_out:
+            from step02a_frame_gen.execution_plan import write_visual_plan
+            _target = write_visual_plan(_report["visual_plan"], Path(args.plan_out))
+            logger.info(f"[PLAN] 候选画面计划已写出: {_target}")
+        if (_report.get("prompt_preflight") or {}).get("status") == "blocked" \
+                or _report.get("visual_plan_status") == "blocked":
+            raise SystemExit(2)
+        return
 
     logger.info(f"[INFO] step02a_frame_gen start")
     logger.info(f"  script: {script_path}")

@@ -18,7 +18,6 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 # 正式产物的**文件名与清单单源在 `shared/paths.py`**（复核 2026-10-07 四轮 P1）：
 # 保护集合、提交、核对都按同一份名字取路径，不允许各处自行拼字面量。
@@ -927,6 +926,78 @@ def require_gate(report_path: Path, script: dict, *, stage: str,
     return report
 
 
+_IDENTITY_REFRESH_ALLOWED = {"book_name", "chapter_index", "script_revision"}
+
+
+def build_identity_refresh(before_script: dict, after_script: dict, *,
+                           source_audit: dict, source_commit: dict,
+                           scope: dict, novel_text: str = "") -> dict:
+    """构造**只包含身份补全**的刷新记录；任何镜头/声音/计划变化都拒收.
+
+    它不重新执行审计，只证明：before -> after 仅补 `book_name` / `chapter_index`
+    及派生 `script_revision`，其余内容完全一致；来源审计与提交记录本身有效。
+    调用方不得把返回值描述成“对新 revision 重新审计过”。
+    """
+    if not isinstance(before_script, dict) or not isinstance(after_script, dict):
+        raise QualityGateError("identity refresh 需要两份脚本对象")
+    before = json.loads(json.dumps(before_script, ensure_ascii=False))
+    after = json.loads(json.dumps(after_script, ensure_ascii=False))
+    scope_book = str((scope or {}).get("book_name") or "").strip()
+    try:
+        scope_chapter = int((scope or {}).get("chapter"))
+    except (TypeError, ValueError):
+        raise QualityGateError("identity refresh 的 scope.chapter 非法") from None
+    if not scope_book or scope_chapter < 1:
+        raise QualityGateError("identity refresh 的 scope 不完整")
+
+    differences = []
+    for key in sorted(set(before) | set(after)):
+        if before.get(key) != after.get(key):
+            if key not in _IDENTITY_REFRESH_ALLOWED:
+                raise QualityGateError(
+                    f"identity refresh 只允许身份字段变化，发现 {key} 变化")
+            differences.append(key)
+    if "book_name" not in differences and "chapter_index" not in differences:
+        raise QualityGateError("identity refresh 没有任何身份字段变化")
+    if str(after.get("book_name") or "").strip() != scope_book:
+        raise QualityGateError("identity refresh 后的 book_name 与 scope 不一致")
+    try:
+        after_chapter = int(after.get("chapter_index"))
+    except (TypeError, ValueError):
+        raise QualityGateError("identity refresh 后的 chapter_index 非法") from None
+    if after_chapter != scope_chapter:
+        raise QualityGateError("identity refresh 后的 chapter_index 与 scope 不一致")
+
+    audit_status = str((source_audit or {}).get("status") or "").lower()
+    if audit_status not in {"ok", "pass", "passed"}:
+        raise QualityGateError("来源审计不是通过状态，不能做身份刷新")
+    commit_status = str((source_commit or {}).get("status") or "").upper()
+    if commit_status != "COMMITTED":
+        raise QualityGateError("来源提交不是 COMMITTED，不能做身份刷新")
+
+    def _revision(script):
+        value = str(script.get("script_revision") or "")
+        return value or compute_script_revision(script)
+
+    before_rev = _revision(before)
+    after_rev = _revision(after)
+    return {
+        "schema": "step01.identity_refresh.v1",
+        "identity_only": True,
+        "scope": {"book_name": scope_book, "chapter": scope_chapter},
+        "before": {"script_revision": before_rev,
+                    "sha256": hashlib.sha256(json.dumps(before, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()},
+        "after": {"script_revision": after_rev,
+                   "sha256": hashlib.sha256(json.dumps(after, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()},
+        "changed_fields": differences,
+        "audit": {"status": audit_status, "reused": True,
+                   "note": "身份补全后复用来源审计，未对新 revision 重新执行审计"},
+        "commit": {"status": commit_status, "reused": True},
+        "novel_text_digest": hashlib.sha256(
+            str(novel_text or "").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")).hexdigest(),
+    }
+
+
 __all__ = [
     "STEP01_ARTIFACT_FILES",
     "STEP01_COMMIT_FILENAME",
@@ -958,4 +1029,5 @@ __all__ = [
     "require_gate",
     "require_semantic_gate",
     "verify_report_outputs",
+    "build_identity_refresh",
 ]

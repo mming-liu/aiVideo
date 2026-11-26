@@ -307,7 +307,7 @@ def main() -> None:
         # 规划模式进脚本缓存身份：轻量模式不得命中 legacy 产出的脚本缓存（反之亦然）；
         # 默认 legacy 时指纹逐字不变。
         from step01_script_gen.lightweight_plan import (
-            PLAN_MODE_LEGACY as _PM_LEGACY, PLAN_MODE_LIGHTWEIGHT as _PM_LW,
+            PLAN_MODE_LEGACY as _PM_LEGACY,
             plan_mode_setting as _plan_mode)
         _pm_now = _plan_mode()
         _script_rule_version = _mrt.RULE_VERSION
@@ -380,7 +380,7 @@ def main() -> None:
                           "forbidden_lines": _cached_forbidden,
                           "producer_model": None},
                 audit_model=_mrg._candidate_model_for_audit(),
-                label="缓存命中提交")
+                label="缓存命中提交", bind_identity=True)
             # C1：**两处提交返回走同一个投影**——提交 BLOCK 必须落到运行终局，
             # 缓存路径此前只打了一行 console，metrics/timing 仍报 ok。
             _mrt._project_commit_outcome(_commit_summary)
@@ -1169,7 +1169,8 @@ def main() -> None:
             label="落盘前提交",
             # v6.129：选稿边界记录的快照自身 revision（见 `_cross_run_best_guard`）
             source_revision=str(_bg_meta.get("selected_revision") or ""),
-            source_aliases=dict(_bg_meta.get("selected_revision_aliases") or {}))
+            source_aliases=dict(_bg_meta.get("selected_revision_aliases") or {}),
+            bind_identity=True)
         # C1：提交结果 → 运行终局（**与缓存命中路径同一投影**）
         _mrt._project_commit_outcome(_commit_summary)
         # C5 修复（08-11）：fps 一致性校验（finalize 之后 timeline 已存在）
