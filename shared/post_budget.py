@@ -318,17 +318,38 @@ def _event(event_name: str, kind: str, request_id: str | None, **fields) -> None
         _note_degraded("shared/post_budget.py:_event", _degrade_exc)
 
 
-def acquire(kind: str, amount: int = 1, request_id: str | None = None) -> int:
+def acquire(
+    kind: str,
+    amount: int = 1,
+    request_id: str | None = None,
+    *,
+    operation_id: str = "",
+    model_id: str = "",
+    provider: str = "",
+    attempt_seq: int | None = None,
+) -> int:
     """发送前原子扣减；超限/熔断抛 PostBudgetExhausted；返回已用次数.
 
     request_id 用于把「这次扣减」与后续响应/图片/QC 事件关联；不传时由调用方
     上下文（request_events.begin_request）提供，没有就留空——不编造身份。
+    F7：即使未启用预算账本，也独立写入 request_sent 尝试事件（budget_enabled=False）。
     """
     amount = max(1, int(amount))
     path, limit = _config(kind)
+    meta_fields: dict = {}
+    if operation_id:
+        meta_fields["operation_id"] = str(operation_id)
+    if model_id:
+        meta_fields["model_id"] = str(model_id)
+    if provider:
+        meta_fields["provider"] = str(provider)
+    if attempt_seq is not None:
+        meta_fields["attempt_seq"] = int(attempt_seq)
     if path is None:
         if _QUOTA.get(kind):
             raise PostBudgetExhausted("额度已熔断（%s）：%s" % (kind, _QUOTA[kind]))
+        _event("request_sent", kind, request_id,
+               amount=amount, used=0, limit=0, budget_enabled=False, **meta_fields)
         return 0
     with _LOCK, _file_lock(path):
         data = _read(path, kind, limit)
@@ -348,7 +369,7 @@ def acquire(kind: str, amount: int = 1, request_id: str | None = None) -> int:
         data.pop("quota_exhausted", None)
         _write(path, data)
         _event("request_sent", kind, request_id,
-               amount=amount, used=used, limit=effective)
+               amount=amount, used=used, limit=effective, budget_enabled=True, **meta_fields)
         return used
 
 
@@ -470,13 +491,23 @@ _OUTCOME_EVENTS = {
 }
 
 
-def record(kind: str, outcome: str, amount: int = 1,
-           request_id: str | None = None) -> dict:
+def record(
+    kind: str,
+    outcome: str,
+    amount: int = 1,
+    request_id: str | None = None,
+    *,
+    operation_id: str = "",
+    model_id: str = "",
+    provider: str = "",
+    attempt_seq: int | None = None,
+    status_code: int | None = None,
+) -> dict:
     """回写**已发送请求**的结果分类；返回最新账本视图.
 
     `used` 口径不变（acquire 已 +1）；这里把对应数量的 `pending` 结清并计入
     互斥分类。调用方必须只在请求真正有终局结果后调用（成功/额度拒绝/传输失败），
-    不得用猜测的结果回写。未启用账本时返回 `{}`。
+    不得用猜测的结果回写。未启用账本时返回 `{}`，但仍独立写入结果事件。
     """
     outcome = str(outcome or "")
     if outcome not in OUTCOMES:
@@ -484,7 +515,20 @@ def record(kind: str, outcome: str, amount: int = 1,
                          % (outcome, ", ".join(OUTCOMES)))
     amount = max(1, int(amount))
     path, limit = _config(kind)
+    meta_fields: dict = {}
+    if operation_id:
+        meta_fields["operation_id"] = str(operation_id)
+    if model_id:
+        meta_fields["model_id"] = str(model_id)
+    if provider:
+        meta_fields["provider"] = str(provider)
+    if attempt_seq is not None:
+        meta_fields["attempt_seq"] = int(attempt_seq)
+    if status_code is not None:
+        meta_fields["status_code"] = int(status_code)
     if path is None:
+        _event(_OUTCOME_EVENTS.get(outcome, "response_received"), kind, request_id,
+               outcome=outcome, amount=amount, budget_enabled=False, **meta_fields)
         return {}
     with _LOCK, _file_lock(path):
         data = _read(path, kind, limit)
@@ -500,7 +544,7 @@ def record(kind: str, outcome: str, amount: int = 1,
         _write(path, data)
         _event(_OUTCOME_EVENTS.get(outcome, "response_received"), kind, request_id,
                outcome=outcome, amount=amount,
-               used=data["used"], pending=data["pending"])
+               used=data["used"], pending=data["pending"], budget_enabled=True, **meta_fields)
         data["path"] = str(path)
         return data
 

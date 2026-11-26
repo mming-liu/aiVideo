@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from shared.style_prefix import asset_style_prefix
 from vimax.interfaces import CharacterInScene, ImageOutput
 
@@ -62,11 +64,13 @@ class CharacterPortraitsGenerator:
         character: CharacterInScene,
         style: str = "",
         save_path: str | None = None,
+        style_reference_path: str | None = None,
     ) -> ImageOutput:
         """生成基础全景图 — 锁定核心特征（外观+质感+光影）
 
         这是角色资产的第一步，生成的图将作为后续侧面/背面照的参考源。
         save_path: 肖像直接落盘路径（否则走 provider 默认帧路径，会污染 hook 首帧）
+        style_reference_path: 可选纯画风参考图（如无人物 style_anchor.png），仅传递画风线条与配色，不复制环境背景
         """
         identity = character.identifier_in_scene
         static = (character.static_features or "").strip()
@@ -80,11 +84,24 @@ class CharacterPortraitsGenerator:
             deg=DEGREE,
         )
 
-        image_output = await self.image_generator.generate_single_image(
-            prompt=prompt,
-            ratio="9:16",
-            save_path=save_path,
-        )
+        ref_paths: list[str] | None = None
+        if style_reference_path and Path(str(style_reference_path)).is_file():
+            ref_paths = [str(style_reference_path)]
+            prompt = (
+                f"{prompt} Use the reference image ONLY for 2D anime linework, cel shading, "
+                "color palette and artistic style; DO NOT copy its background, landscape, props or "
+                "composition — isolate the single character on a clean pure solid white background."
+            )
+
+        gen_kwargs = {
+            "prompt": prompt,
+            "ratio": "9:16",
+            "save_path": save_path,
+        }
+        if ref_paths:
+            gen_kwargs["reference_image_paths"] = ref_paths
+
+        image_output = await self.image_generator.generate_single_image(**gen_kwargs)
         return image_output
 
     async def generate_side_portrait(

@@ -34,7 +34,7 @@ def _frame(path: Path, color=(10, 20, 30)):
 
 
 def _fixture(tmp_path, monkeypatch):
-    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_frame_request_snapshot, write_sidecar
 
     ch = tmp_path / "chapter_001"
     work = ch / "vimax_working"
@@ -50,18 +50,26 @@ def _fixture(tmp_path, monkeypatch):
         (d / "first_frame_qc_log.json").write_text(
             json.dumps([{"ts": "2026-11-18 00:00:00", "has_hallucination": False}]),
             encoding="utf-8")
+        write_frame_request_snapshot(
+            d / "first_frame.png", shot=shot, frame_kind="first_frame",
+            prompt=shot.get("ff_desc", ""), refs=[],
+        )
         write_sidecar(
             d / "first_frame.png",
             QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-            frame_meta=build_qc_frame_meta(shot, "first_frame", []),
+            frame_meta=build_qc_frame_meta(shot, "first_frame", [], frame_path=d / "first_frame.png"),
         )
     (d1 / "last_frame_qc_log.json").write_text(
         json.dumps([{"ts": "2026-11-18 00:00:00", "has_hallucination": False}]),
         encoding="utf-8")
+    write_frame_request_snapshot(
+        d1 / "last_frame.png", shot=script["shots"][0], frame_kind="last_frame",
+        prompt=script["shots"][0].get("lf_desc", ""), refs=[],
+    )
     write_sidecar(
         d1 / "last_frame.png",
         QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-        frame_meta=build_qc_frame_meta(script["shots"][0], "last_frame", []),
+        frame_meta=build_qc_frame_meta(script["shots"][0], "last_frame", [], frame_path=d1 / "last_frame.png"),
     )
     (d1 / ".lock_frame_first_frame").write_text("", encoding="utf-8")
     (d1 / ".lock_frame_last_frame").write_text("", encoding="utf-8")

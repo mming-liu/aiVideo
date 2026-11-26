@@ -21,7 +21,6 @@ import copy
 import json
 import os
 import shutil
-import re
 from pathlib import Path
 from datetime import datetime
 
@@ -443,31 +442,91 @@ class StyleBank:
 
     # -- 修改 ----------------------------------------------------------------
 
-    def lock(self, anchor_image_path: str, chapter_num: int) -> None:
-        """锁定风格锚点：复制首帧到 style_bank/ + 写 JSON.
-
-        anchor_image_path: Ch1 Shot1 first_frame.png 的路径
-        chapter_num: 用来生成锚点的章节号（通常为 1）
-        """
+    def lock(
+        self,
+        anchor_image_path: str,
+        chapter_num: int,
+        *,
+        anchor_kind: str = "environment",
+        allow_characters: bool = False,
+        expected_persons: int | None = None,
+    ) -> bool:
+        """锁定风格锚点：校验无人物纯画风锚并写为规范 PNG 到 style_bank/ + 写 JSON."""
         src = Path(anchor_image_path)
         if not src.exists():
             print(f"[bank] 风格锚点源文件不存在: {anchor_image_path}")
-            return
+            return False
+
+        # F3: validate readability & reject character-containing anchor unless explicitly overridden
+        try:
+            from PIL import Image as _PILImage
+            with _PILImage.open(src) as _im:
+                _im.verify()
+            with _PILImage.open(src) as _im2:
+                _im2.load()
+                src_format = str(_im2.format or "").upper()
+                img_size = tuple(_im2.size)
+        except Exception as exc:
+            print(f"[bank] 风格锚点图片损坏或不可读 ({src}): {exc}")
+            return False
+
+        if expected_persons is not None and int(expected_persons) > 0 and not allow_characters:
+            print(
+                f"[bank] 拒绝将含人物图像({expected_persons}人)锁为画风锚点: {src}；"
+                "请使用纯空镜/纯环境 2D 漫剧标准帧，避免串人/串景"
+            )
+            return False
+
+        sidecar_candidate = src.with_name(f"{src.stem}_hallucination.json")
+        if sidecar_candidate.is_file() and not allow_characters:
+            try:
+                sc_data = json.loads(sidecar_candidate.read_text(encoding="utf-8"))
+                pc = sc_data.get("person_count")
+                if isinstance(pc, int) and pc > 0:
+                    print(
+                        f"[bank] 拒绝将含 {pc} 名人物的帧锁为画风锚点 ({src})；"
+                        "请改用无人物纯环境 2D 漫剧标准帧"
+                    )
+                    return False
+            except Exception:
+                pass
 
         self._dir.mkdir(parents=True, exist_ok=True)
         dst = self._dir / "style_anchor.png"
+        tmp_dst = self._dir / "style_anchor.png.tmp"
         try:
-            shutil.copy2(str(src), str(dst))
-            print(f"[bank] 风格锚点已锁定: {dst}")
+            if src_format == "PNG":
+                shutil.copy2(str(src), str(tmp_dst))
+            else:
+                from PIL import Image as _PILImage
+                with _PILImage.open(src) as _conv:
+                    _conv.convert("RGB").save(str(tmp_dst), format="PNG")
+            os.replace(tmp_dst, dst)
+            print(f"[bank] 风格锚点已锁定: {dst} ({anchor_kind}, {img_size[0]}x{img_size[1]})")
         except OSError as e:
+            try:
+                tmp_dst.unlink(missing_ok=True)
+            except OSError:
+                pass
             print(f"[bank] 复制风格锚点失败: {e}")
-            return
+            return False
+
+        import hashlib as _hl
+        try:
+            anchor_sha = _hl.sha256(dst.read_bytes()).hexdigest()
+        except OSError:
+            anchor_sha = ""
 
         self._data["style_anchor_chapter"] = chapter_num
         self._data["style_anchor_image"] = str(dst.resolve())
+        self._data["anchor_kind"] = str(anchor_kind or "environment")
+        self._data["allow_characters"] = bool(allow_characters)
+        self._data["source_path"] = str(src.resolve())
+        self._data["anchor_sha256"] = anchor_sha
         self._data["is_locked"] = True
         self._data["created_at"] = datetime.now().isoformat()
         self.save()
+        return True
 
 
 # ---------------------------------------------------------------------------

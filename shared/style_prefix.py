@@ -1484,30 +1484,36 @@ def _age_label(value) -> str:
     return _AGE_LABEL_ZH.get(raw.lower(), raw)
 
 
-_ADMIN_LOCATION_PREFIX_RE = re.compile(
-    r"^[\u4e00-\u9fff]{1,6}(?:镇|村|城|州|府|县|郡|乡|关)"
+_PROPER_PREFIX_RE = re.compile(
+    r"^(?!古|老|新|荒|破|废|小|大|山|水|江|海|地|太|星|空)[\u4e00-\u9fff]{1,4}(?:镇|村|州|县|郡|乡)"
 )
 _MANSION_LOCATION_PREFIX_RE = re.compile(
-    r"^[\u4e00-\u9fff]{1,3}(?:府|家)(?=(?:别庄|大院|宅院|府邸|庄园))"
+    r"^(?!古|老|新|荒|大|小)[\u4e00-\u9fff]{1,2}府(?=(?:别庄|大院|宅院|府邸|庄园))"
 )
 
 
 def visual_location_hint(location: str, shot: dict | None = None) -> str:
-    """将专有地名转为纯视觉环境特征描述，避免扩散模型把地名当成画面题字/水印渲染."""
+    """将明确可分离的专名前缀转为视觉环境描述；无结构化依据时完整保留原环境描述."""
+    if isinstance(shot, dict):
+        for k in ("visual_location", "environment_desc", "setting_visual"):
+            v = str(shot.get(k) or "").strip()
+            if v:
+                return v
     loc = str(location or "").strip()
     if not loc:
         return ""
-    # 先剥除行政区划/专有宅邸前缀（如「云河镇水湾」→「水湾」、「杨府别庄」→「别庄」），
-    # 保留通用地貌/建筑名词（如「作坊」「茶室」「酒家」「堤岸」）。
-    stripped = _ADMIN_LOCATION_PREFIX_RE.sub("", loc).strip()
+    if isinstance(shot, dict):
+        proper = str(shot.get("location_proper_name") or shot.get("proper_name") or "").strip()
+        scene_env = str(shot.get("scene") or "").strip()
+        if proper and scene_env and scene_env != proper:
+            return scene_env
+    # 仅在明确表现为「<专名行政/宅邸前缀> + <≥2字独立环境词>」时剥除专名前缀；
+    # 无此类分离依据时，完整保留原始环境语义（不将地下城/太空城/古城城墙改写为偏置词）。
+    stripped = _PROPER_PREFIX_RE.sub("", loc).strip()
     stripped = _MANSION_LOCATION_PREFIX_RE.sub("", stripped).strip()
-    if stripped and len(stripped) >= 2:
+    if stripped and stripped != loc and len(stripped) >= 2 and not stripped.startswith(("墙", "门", "楼", "街")):
         return stripped
-    # 整词本身是行政专名且剥空时，尝试从 shot 自身描述提取地貌后缀，否则退回通用词。
-    for suffix in ("水湾", "荷塘", "河畔", "堤岸", "码头", "酒家", "客栈", "宅院", "别庄", "街道", "山林", "船舱"):
-        if suffix in loc:
-            return suffix
-    return "古风实景环境"
+    return loc
 
 
 def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
@@ -1525,6 +1531,19 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
           现改为从 characters + 镜头文本动态推导：性别约束取角色属性，
           出场名单取镜头文本中实际出现的角色名。
     """
+    _frame_kind_early = {"首帧": "first_frame", "尾帧": "last_frame", "关键帧": "keyframe"}.get(
+        frame_type, "first_frame"
+    )
+    _text_spec = None
+    try:
+        from shared.prompt_facts import extract_frame_text_spec, render_frame_text_constraint
+        _text_spec = extract_frame_text_spec(shot, _frame_kind_early, kf_index=kf_index)
+        _text_constraint = render_frame_text_constraint(_text_spec)
+    except Exception:
+        _text_constraint = (
+            "纯视觉画面呈现，禁止在天空、水面、背景或角落添加任何额外地名标题、"
+            "书法大字、字幕、水印或无关题字。"
+        )
     strict_constraints = (
         "【强制】严格按以下画面描述生成。"
         "画面中只允许出现描述明确提到的角色，不添加额外人物。"
@@ -1533,7 +1552,7 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         "画面必须是完整连贯的单幅场景环境，"
         "禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；"
         "参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面；"
-        "纯视觉画面呈现，画面任意区域无任何文字、地名标题、字幕、牌匾题字或水印。"
+        + _text_constraint
     )
     if frame_type == "首帧":
         strict_constraints += (
@@ -1554,9 +1573,17 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         location = shot.get("location", "") or shot.get("scene", "")
         if location:
             visual_loc = visual_location_hint(location, shot)
+            _allowed_carriers = {
+                str(a.get("carrier") or "")
+                for a in ((_text_spec or {}).get("allowed_texts") or [])
+            }
+            if any(c in ("牌匾", "匾额", "招牌") for c in _allowed_carriers):
+                _extra_text_tail = "严格遵守该环境特征，禁止额外地名标题或无关题字。"
+            else:
+                _extra_text_tail = "严格遵守该环境特征，不额外渲染地名牌匾或标题文字。"
             strict_constraints += (
                 f"【场景环境】保持与{visual_loc}一致的自然与建筑空间特征，"
-                "严格遵守该环境特征，不渲染地名牌匾或标题文字。"
+                + _extra_text_tail
             )
 
     # 根据镜头实际内容动态生成角色约束（不再硬编码刺客/第一章角色名）

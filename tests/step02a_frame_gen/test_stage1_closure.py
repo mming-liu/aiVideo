@@ -66,7 +66,7 @@ def test_p1_2_qc_prompt_and_expected_persons_support_keyframes_and_aliases():
 
 
 def test_p1_4_acceptance_tracks_locked_human_approved_and_admitted(tmp_path, monkeypatch):
-    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_frame_request_snapshot, write_sidecar
     from step02a_frame_gen import image_prompt_quality as ipq
 
     work = tmp_path / "working"
@@ -76,8 +76,9 @@ def test_p1_4_acceptance_tracks_locked_human_approved_and_admitted(tmp_path, mon
     shot = script["shots"][0]
     ff = d / "first_frame.png"
     _noisy_img().save(ff)
+    write_frame_request_snapshot(ff, shot=shot, frame_kind="first_frame", prompt="a", refs=[])
     write_sidecar(ff, QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-                  frame_meta=build_qc_frame_meta(shot, "first_frame", []))
+                  frame_meta=build_qc_frame_meta(shot, "first_frame", [], frame_path=ff))
     monkeypatch.setattr(ipq, "chapter_dir", lambda: tmp_path)
 
     rep_unlocked = ipq.build_image_product_quality(script, work, media_policy="first_only")

@@ -107,6 +107,18 @@ def collect_image_prompt_quality(script: dict, *, write: bool = True) -> dict:
                             p.update({"category": "image_final_prompt_offscreen_entity",
                                       "shot": idx, "field": f"{field}_full", "frame": kind})
                             warnings.append(p)
+                    for adv in (proj.get("spec_advisories") or []):
+                        if isinstance(adv, dict):
+                            warnings.append({
+                                "category": str(adv.get("code") or "unverified_relation"),
+                                "severity": "advisory",
+                                "blocking": False,
+                                "shot": idx,
+                                "field": f"{field}_full",
+                                "frame": kind,
+                                "entity": adv.get("entity"),
+                                "detail": adv.get("message") or adv.get("token") or "",
+                            })
                 except Exception as _degrade_exc:
                     from shared.degrade import note_degraded as _note_degraded
                     _note_degraded("step02a_frame_gen/image_prompt_quality.py:collect_image_prompt_quality", _degrade_exc)
@@ -213,12 +225,20 @@ def build_image_product_quality(script: dict, work_dir: Path, *,
     def _check_frame_qc(
         shot_obj: dict, frame_path: Path, frame_kind: str, kf_index: int | None = None,
     ) -> dict:
-        meta = build_qc_frame_meta(shot_obj, frame_kind, characters, kf_index=kf_index)
-        st = qc_state(frame_path, expected_frame=meta)
+        meta = build_qc_frame_meta(
+            shot_obj, frame_kind, characters, kf_index=kf_index, frame_path=frame_path,
+        )
+        st = qc_state(frame_path, expected_frame=meta, require_request_snapshot=True)
+        status_val = str(st.get("status") or "qc_not_run")
+        reason_val = str(st.get("reason") or "")
         return {
-            "status": str(st.get("status") or "qc_not_run"),
-            "reason": str(st.get("reason") or ""),
+            "status": status_val,
+            "reason": reason_val,
             "sha256": str((st.get("image") or {}).get("sha256") or ""),
+            "request_verified": bool(meta.get("request_digest")) and status_val not in (
+                "qc_incomplete", "qc_not_run", "qc_stale"
+            ),
+            "verdict_detail": str((st.get("data") or {}).get("verdict_detail") or ""),
             "frame": meta,
         }
 

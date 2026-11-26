@@ -40,6 +40,8 @@ class ImageGenerationRequest:
     expected_objects: Optional[list[str]] = None
     # S04: internal pre-POST verification contract (never serialized as provider JSON)
     frame_contract: Optional[dict] = None
+    # F7: unique operation id correlating HTTP attempts/fallbacks for one generation call
+    operation_id: Optional[str] = None
 
     def __post_init__(self):
         # 向后兼容：单张 reference_image_path 自动并入列表
@@ -66,3 +68,5 @@ class ImageGenerationResult:
     # 与 success=False 配合使用：success=False + soft_skip=True = 已知安全跳过；
     # success=False + soft_skip=False = 真实失败（重试/告警）。
     soft_skip: bool = False
+    # F7/F1: resolved execution metadata (actual model hit, operation_id, effective refs/prompt)
+    request_meta: Optional[dict] = None

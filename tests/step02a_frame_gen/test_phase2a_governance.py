@@ -73,7 +73,8 @@ def test_g1b_location_deliteralized_and_no_text_constraint():
     }
     lf_prompt = compose_frame_prompt(shot, chars, "last_frame")
     assert "清溪镇" not in lf_prompt
-    assert "无任何文字" in lf_prompt
+    assert "额外地名标题" in lf_prompt
+    assert "画面任意区域无任何文字" not in lf_prompt
     assert_no_contradictions(lf_prompt, "b4-replay")
 
 

@@ -199,6 +199,8 @@ class ImageGeneratorAiVideoAdapter:
             else:
                 ref_sha256s.append(None)
 
+        from shared import request_events as _req_ev
+        operation_id = str(kwargs.get("operation_id") or _req_ev.new_request_id())
         contract = {
             "prompt_sha256": hashlib.sha256(full_prompt.encode("utf-8")).hexdigest(),
             "ref_paths": list(final_refs),
@@ -209,6 +211,7 @@ class ImageGeneratorAiVideoAdapter:
             "ratio": kwargs.get("ratio", "9:16"),
             "shot_index": shot_index,
             "frame_desc": frame_desc,
+            "operation_id": operation_id,
             "identity_reference": kwargs.get("identity_reference") or ("verified" if final_refs else "unverified"),
         }
 
@@ -225,6 +228,7 @@ class ImageGeneratorAiVideoAdapter:
             enable_hallucination_detection=self._enable_hallucination_lock,
             expected_objects=kwargs.get("expected_objects"),
             frame_contract=contract,
+            operation_id=operation_id,
         )
 
     async def generate_single_image(
@@ -258,18 +262,31 @@ class ImageGeneratorAiVideoAdapter:
                 asyncio.to_thread(self._svc.generate, req),
                 timeout=_IMAGE_GEN_TIMEOUT,
             )
+        req_meta = dict(getattr(result, "request_meta", None) or {})
+        if not req_meta:
+            contract = req.frame_contract if isinstance(req.frame_contract, dict) else {}
+            req_meta = {
+                "operation_id": str(getattr(req, "operation_id", None) or contract.get("operation_id") or ""),
+                "provider": str(getattr(getattr(self, "_svc", None), "provider_name", "") or ""),
+                "model_id": "",
+                "effective_refs": list(contract.get("ref_paths") or req.reference_image_paths or []),
+                "effective_prompt": str(req.prompt or ""),
+                "attempt_count": 1,
+                "request_ids": [],
+            }
+        self.last_request_meta = req_meta
         if not result.success or not result.save_path:
-            # 2026-08-29：区分"内容安全软跳过"与"真实失败"。
-            # 软跳过（如火山 OutputImageSensitiveContentDetected 全模型失败）属于
-            # prompt 端无法代码层修复的合规问题，标记日志后让上游 caller（_gen_first_frame_async
-            # 等）继续走 except Exception → return None 的现有软跳过路径，**不阻塞**后续 shot/帧。
-            # 真实失败（5xx/解析/限速等）继续 raise，由 max_retries 循环决定是否重试。
             if result.soft_skip:
                 raise RuntimeError(f"[SOFT-SKIP] 图像因内容安全策略跳过: {result.error}")
             raise RuntimeError(f"图像生成失败: {result.error}")
         img = Image.open(result.save_path)
         img.load()
-        return ImageOutput(fmt="pil", ext="png", data=img)
+        out = ImageOutput(fmt="pil", ext="png", data=img)
+        try:
+            object.__setattr__(out, "request_meta", req_meta)
+        except Exception:
+            pass
+        return out
 
 
 def _canvas_ratio(size: str) -> str:

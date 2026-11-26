@@ -22,14 +22,26 @@ def _png(path: Path, color=(80, 120, 180)) -> Path:
 
 
 def _write_qc(frame_path: Path, shot: dict, frame_kind: str, characters=None, *,
-              has_hallucination: bool = False, ok: bool = True, kf_index: int | None = None):
-    from shared.image_qc import QcIssue, QcResult, build_qc_frame_meta, write_sidecar
+              has_hallucination: bool = False, ok: bool = True, kf_index: int | None = None,
+              write_request: bool = True):
+    from shared.image_qc import (
+        QcIssue, QcResult, build_qc_frame_meta, write_frame_request_snapshot, write_sidecar,
+    )
 
+    if write_request:
+        write_frame_request_snapshot(
+            frame_path, shot=shot, frame_kind=frame_kind,
+            prompt=str(shot.get("ff_desc") or shot.get("lf_desc") or "test"),
+            refs=[], kf_index=kf_index,
+        )
     issues = ([QcIssue(category="extra_person", description="人数不符", severity="critical")]
               if has_hallucination else [])
     res = QcResult(has_hallucination=has_hallucination, issues=issues, ok=ok, raw_result="",
                    error="" if ok else "qc_error")
-    meta = build_qc_frame_meta(shot, frame_kind, characters or [], kf_index=kf_index)
+    meta = build_qc_frame_meta(
+        shot, frame_kind, characters or [], kf_index=kf_index,
+        frame_path=(frame_path if write_request else None),
+    )
     write_sidecar(frame_path, res, frame_meta=meta)
 
 

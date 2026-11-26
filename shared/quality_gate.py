@@ -974,7 +974,7 @@ def require_gate(report_path: Path, script: dict, *, stage: str,
             f"report={report.get('report_type') or 'missing'} expected={required_report_type}"
         )
     if stage == "step02a" and report.get("report_type") == "product_acceptance":
-        _validate_step02a_qc_binding(report, verify_outputs=verify_outputs)
+        _validate_step02a_qc_binding(report, script=script, verify_outputs=verify_outputs)
     if verify_outputs:
         _out_errors = verify_report_outputs(report)
         if _out_errors:
@@ -984,8 +984,13 @@ def require_gate(report_path: Path, script: dict, *, stage: str,
     return report
 
 
-def _validate_step02a_qc_binding(report: dict, *, verify_outputs: bool = False) -> None:
-    """Enforce S05 digest/contract-bound QC admission on Step02a acceptance reports."""
+def _validate_step02a_qc_binding(
+    report: dict,
+    *,
+    script: dict | None = None,
+    verify_outputs: bool = False,
+) -> None:
+    """Enforce S05/F1 triple-tuple bound QC admission on Step02a acceptance reports."""
     if report.get("schema_version") != "step02a.product_acceptance/2":
         raise QualityGateError(
             "step02a quality gate is legacy/unbound (missing schema_version="
@@ -996,7 +1001,17 @@ def _validate_step02a_qc_binding(report: dict, *, verify_outputs: bool = False) 
     reqs = scope.get("requirements") or {}
     is_per_shot_req = any(str(k).lstrip("-").isdigit() for k in reqs) if isinstance(reqs, dict) else False
 
-    from shared.image_qc import qc_state
+    from shared.image_qc import build_qc_frame_meta, qc_state
+
+    units_by_id: dict[str, dict] = {}
+    characters: list = []
+    if isinstance(script, dict):
+        characters = list(script.get("characters") or [])
+        if isinstance(script.get("hook"), dict):
+            units_by_id[str(script["hook"].get("index", 0))] = script["hook"]
+        for u in (script.get("shots") or []):
+            if isinstance(u, dict) and u.get("index") is not None:
+                units_by_id[str(u["index"])] = u
 
     for shot_id, row in outputs.items():
         if not isinstance(row, dict):
@@ -1006,6 +1021,7 @@ def _validate_step02a_qc_binding(report: dict, *, verify_outputs: bool = False) 
             raise QualityGateError(f"step02a shot {shot_id} missing qc_states binding")
         shot_req = reqs.get(str(shot_id), {}) if is_per_shot_req else (reqs if isinstance(reqs, dict) else {})
         needed_frames = list(shot_req.get("frames") or (["ff"] if row.get("ff") else []))
+        shot_obj = units_by_id.get(str(shot_id))
         for fk in needed_frames:
             if fk not in ("ff", "lf"):
                 continue
@@ -1020,10 +1036,17 @@ def _validate_step02a_qc_binding(report: dict, *, verify_outputs: bool = False) 
                 fpath = Path(str((file_info or {}).get("path") or "")) if isinstance(file_info, dict) else None
                 if not fpath or not fpath.is_file():
                     raise QualityGateError(f"step02a shot {shot_id} {fk} output missing: {fpath}")
-                disk_qc = qc_state(fpath, expected_frame=slot_qc.get("frame"))
+                long_kind = "first_frame" if fk == "ff" else "last_frame"
+                expected_frame = (
+                    build_qc_frame_meta(shot_obj, long_kind, characters, frame_path=fpath)
+                    if isinstance(shot_obj, dict) else slot_qc.get("frame")
+                )
+                disk_qc = qc_state(
+                    fpath, expected_frame=expected_frame, require_request_snapshot=True,
+                )
                 if disk_qc.get("status") != "qc_passed":
                     raise QualityGateError(
-                        f"step02a shot {shot_id} {fk} on-disk QC stale/rejected "
+                        f"step02a shot {shot_id} {fk} on-disk QC stale/rejected/incomplete "
                         f"(status={disk_qc.get('status')}, reason={disk_qc.get('reason')})"
                     )
         if shot_req.get("keyframes") and isinstance(row.get("keyframes"), dict):
@@ -1038,10 +1061,21 @@ def _validate_step02a_qc_binding(report: dict, *, verify_outputs: bool = False) 
                     kf_path = Path(str((kinfo or {}).get("path") or "")) if isinstance(kinfo, dict) else None
                     if not kf_path or not kf_path.is_file():
                         raise QualityGateError(f"step02a shot {shot_id} {kname} missing")
-                    disk_qc = qc_state(kf_path, expected_frame=k_qc.get("frame"))
+                    try:
+                        kf_i = int(kf_path.stem.split("_")[1])
+                    except (IndexError, ValueError):
+                        kf_i = None
+                    expected_frame = (
+                        build_qc_frame_meta(shot_obj, "keyframe", characters, kf_index=kf_i, frame_path=kf_path)
+                        if isinstance(shot_obj, dict) else k_qc.get("frame")
+                    )
+                    disk_qc = qc_state(
+                        kf_path, expected_frame=expected_frame, require_request_snapshot=True,
+                    )
                     if disk_qc.get("status") != "qc_passed":
                         raise QualityGateError(
-                            f"step02a shot {shot_id} {kname} on-disk QC {disk_qc.get('status')}"
+                            f"step02a shot {shot_id} {kname} on-disk QC {disk_qc.get('status')} "
+                            f"({disk_qc.get('reason')})"
                         )
 
 

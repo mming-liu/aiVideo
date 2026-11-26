@@ -57,6 +57,9 @@ __all__ = [
     # image_qc 门控 / 尺寸锚
     "_threat_visible_in",
     "_inject_object_size_anchor",
+    # F5 统一只读肖像资产解析
+    "PORTRAIT_VIEW_ROLES",
+    "resolve_character_portrait_assets",
     # prompt_builder / subject_state / asset_gen
     "_extract_prop_layout",
     "_char_aliases",
@@ -423,7 +426,13 @@ async def _gen_frames_for_camera_group(
             async with style_lock:
                 if chapter_idx == 1 and not style_bank.is_locked() \
                         and cam_idx == min(cam_groups.keys()):
-                    style_bank.lock(ff_result, chapter_idx)
+                    _anchor_empty = is_empty_scene(shot, characters_data)
+                    style_bank.lock(
+                        ff_result, chapter_idx,
+                        anchor_kind=("empty_scene" if _anchor_empty else "character_scene"),
+                        allow_characters=not _anchor_empty,
+                        expected_persons=0 if _anchor_empty else None,
+                    )
                     style_bank.save()
 
         # -- 尾帧+关键帧 后台并行（不等它们完成，下一镜首帧立即开始） --
@@ -681,15 +690,33 @@ async def _generate_missing_portraits(
         portrait_dir.mkdir(parents=True, exist_ok=True)
 
         # === 基础图优先策略 ===
-        # Step 1: 生成基础全景图（front = base），锁定核心特征
+        # Step 1: 生成基础全景图（front = base），锁定核心特征并传入无人物画风参考锚点
         base_path = portrait_dir / "base.png"
         if not base_path.exists():
-            _bridge_log(f"  [bank] 生成 {identifier} 基础全景图 ...")
+            style_ref = _resolve_style_anchor_path()
+            if style_ref:
+                _sa_sc = Path(style_ref).with_name(f"{Path(style_ref).stem}_hallucination.json")
+                if _sa_sc.is_file():
+                    try:
+                        _sc_data = json.loads(_sa_sc.read_text(encoding="utf-8"))
+                        if isinstance(_sc_data.get("person_count"), int) and _sc_data["person_count"] > 0:
+                            _bridge_log(
+                                f"  [bank] 警告：画风锚点 {style_ref} 含 {_sc_data['person_count']} 名人物，"
+                                "建议改用纯空镜画风锚点"
+                            )
+                    except Exception:
+                        pass
+            _bridge_log(
+                f"  [bank] 生成 {identifier} 基础全景图"
+                + (f"（画风参考={Path(style_ref).name}）" if style_ref else "")
+                + " ..."
+            )
             try:
                 img_out = await portrait_gen.generate_base_portrait(
                     char_in_scene,
                     style="",
                     save_path=str(base_path),
+                    style_reference_path=style_ref,
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(base_path))
@@ -1013,7 +1040,9 @@ async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
         # 绝不给新图写有效 PASS。
         pre = frame_identity(frame_path)
         pre_digest = pre.get("sha256") or None
-        frame_meta = build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index)
+        frame_meta = build_qc_frame_meta(
+            shot, frame_kind, characters, kf_index=kf_index, frame_path=frame_path,
+        )
         result = await asyncio.to_thread(
             maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene, prompt,
             kf_index,
@@ -1743,7 +1772,8 @@ def _resolve_style_anchor_path() -> str | None:
 def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
                                  limit: int = 5, for_frame: str = "首帧",
                                  return_buckets: bool = False,
-                                 kf_index: int | None = None):
+                                 kf_index: int | None = None,
+                                 apply_head_crop: bool | None = None):
     """为 step02a 首帧/尾帧/关键帧图生图收集参考图（场景 → 角色 → 道具）.
 
     for_frame: "首帧"/"尾帧"/"关键帧"；当 for_frame=="关键帧" 且传入 kf_index 时，
@@ -1804,15 +1834,21 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
             shot.get("motion_desc", "") or shot.get("prompt", ""),
         ]))
     _roster = None
+    _closeup = False
     if for_frame == "首帧":
         _roster = _frame_spec_roster(shot, "ff")
+        _closeup = _frame_spec_closeup(shot, "ff")
     elif for_frame == "尾帧":
         _roster = _frame_spec_roster(shot, "lf")
+        _closeup = _frame_spec_closeup(shot, "lf")
     elif for_frame == "关键帧" and kf_index is not None:
         _roster = _frame_spec_roster(shot, "keyframe", kf_index)
+        _closeup = _frame_spec_closeup(shot, "keyframe", kf_index)
+    _do_crop = (not return_buckets) if apply_head_crop is None else bool(apply_head_crop)
     portrait_details = _collect_portrait_refs_for_shot(
         shot, characters, limit=max(2, limit - 1), frame_desc=frame_desc,
-        roster=_roster, return_details=True,
+        roster=_roster, return_details=True, closeup=_closeup,
+        apply_head_crop=_do_crop,
     )
     if isinstance(portrait_details, dict):
         portrait_refs = list(portrait_details.get("refs") or [])
@@ -1989,17 +2025,367 @@ def _frame_spec_roster(shot: dict, frame_kind: str,
     return spec_roster_or_none(shot, frame_kind, kf_index)
 
 
+PORTRAIT_VIEW_ROLES = {
+    "front": "primary_full_body",
+    "base": "primary_full_body",
+    "side": "side_full_body",
+    "back": "back_full_body",
+    "face": "closeup_identity",
+}
+_UNAPPROVED_PORTRAIT_STATUSES = frozenset({
+    "unapproved", "rejected", "pending", "draft", "stale", "failed",
+    "qc_rejected", "qc_call_failed",
+})
+
+
+def _norm_portrait_char_name(name: str) -> str:
+    from shared.character_bank import normalize_identifier
+    return normalize_identifier(str(name or "").strip())
+
+
+def _is_image_file_readable_readonly(path: Path) -> bool:
+    try:
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        from PIL import Image as _PILImage
+        with _PILImage.open(path) as im:
+            im.load()
+        return True
+    except Exception:
+        return False
+
+
+def _portrait_identity_ok(
+    char_id: str,
+    aliases: list[str],
+    entry: dict | None,
+    img_path: Path,
+    bank_dir: Path | None,
+) -> bool:
+    norm_id = _norm_portrait_char_name(char_id)
+    allowed_norms = {_norm_portrait_char_name(a) for a in ([char_id] + list(aliases or [])) if a}
+
+    if isinstance(entry, dict):
+        for k in ("character_id", "identifier", "owner", "subject"):
+            val = str(entry.get(k) or "").strip()
+            if val and _norm_portrait_char_name(val) not in allowed_norms:
+                return False
+
+    # Check if asset sits under a conflicting character directory in characters_bank
+    try:
+        resolved_img = img_path.resolve()
+        if bank_dir is not None:
+            resolved_bank = Path(bank_dir).resolve()
+            try:
+                rel = resolved_img.relative_to(resolved_bank)
+                if len(rel.parts) >= 2:
+                    folder_owner = _norm_portrait_char_name(rel.parts[0])
+                    if folder_owner and folder_owner not in allowed_norms:
+                        return False
+            except ValueError:
+                pass
+    except OSError:
+        pass
+
+    # Check optional adjacent metadata sidecar (<stem>.json or meta.json)
+    for meta_candidate in (img_path.with_suffix(".json"), img_path.parent / "meta.json"):
+        if meta_candidate.is_file():
+            try:
+                md = json.loads(meta_candidate.read_text(encoding="utf-8"))
+                if isinstance(md, dict):
+                    for k in ("character_id", "identifier", "owner", "subject"):
+                        val = str(md.get(k) or "").strip()
+                        if val and _norm_portrait_char_name(val) not in allowed_norms:
+                            return False
+            except Exception:
+                pass
+    return bool(norm_id)
+
+
+def _portrait_approved_ok(entry: dict | None, bank_entry: dict | None, img_path: Path) -> bool:
+    for rec in (entry, bank_entry):
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("approved") is False:
+            return False
+        st = str(rec.get("status") or "").strip().lower()
+        if st in _UNAPPROVED_PORTRAIT_STATUSES:
+            return False
+    qc_sc = img_path.with_name(f"{img_path.stem}_hallucination.json")
+    if qc_sc.is_file():
+        try:
+            sc_data = json.loads(qc_sc.read_text(encoding="utf-8"))
+            if str(sc_data.get("status") or "").strip().lower() in ("qc_rejected", "qc_call_failed"):
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _load_portrait_stores_readonly() -> tuple[dict, object | None, Path | None]:
+    reg: dict = {}
+    bank = None
+    bank_dir: Path | None = None
+    try:
+        from shared.paths import characters_bank_dir, vimax_working_dir
+        bank_dir = characters_bank_dir()
+        registry_path = vimax_working_dir() / "character_portraits_registry.json"
+        if registry_path.is_file():
+            try:
+                loaded = json.loads(registry_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    reg = loaded
+            except Exception:
+                reg = {}
+    except Exception:
+        pass
+    try:
+        from shared.character_bank import CharacterBank
+        bank = CharacterBank()
+        bank.load()
+        if not reg:
+            reg = bank.get_all_portraits_as_registry() or {}
+    except Exception:
+        bank = None
+    return reg, bank, bank_dir
+
+
+def resolve_character_portrait_assets(
+    role: str,
+    *,
+    characters: list | None = None,
+    reg: dict | None = None,
+    bank=None,
+    bank_dir: Path | None = None,
+    view_pref: str = "front",
+    closeup: bool = False,
+    allow_face_fallback: bool = False,
+) -> dict:
+    """Pure, side-effect-free, read-only portrait resolver shared by Gate & Collector.
+
+    Never creates directories, crops images, stitches sheets, or mutates disk state.
+    Returns:
+        {character_id, resolved_views, selected_view, selected_path,
+         readable, approved, identity_match, missing_reason}
+    """
+    raw_role = str(role or "").strip()
+    if not raw_role:
+        return {
+            "character_id": "",
+            "resolved_views": {},
+            "selected_view": "",
+            "selected_path": "",
+            "readable": False,
+            "approved": False,
+            "identity_match": False,
+            "missing_reason": "portrait_not_registered",
+        }
+
+    if reg is None and bank is None and bank_dir is None:
+        reg, bank, bank_dir = _load_portrait_stores_readonly()
+    elif bank_dir is None:
+        try:
+            from shared.paths import characters_bank_dir
+            bank_dir = characters_bank_dir()
+        except Exception:
+            bank_dir = None
+
+    reg_dict = reg if isinstance(reg, dict) else {}
+
+    # Resolve canonical character_id from explicit characters list / registry keys
+    known_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for c in (characters or []):
+        if isinstance(c, dict):
+            cid = str(c.get("identifier") or c.get("name") or "").strip()
+            if cid and cid not in seen_ids:
+                seen_ids.add(cid)
+                known_ids.append(cid)
+    for k in reg_dict:
+        ks = str(k or "").strip()
+        if ks and ks not in seen_ids:
+            seen_ids.add(ks)
+            known_ids.append(ks)
+
+    alias_holders: dict[str, list[str]] = {}
+    for cid in known_ids:
+        for a in _char_aliases(cid, characters):
+            alias_holders.setdefault(a, [])
+            if cid not in alias_holders[a]:
+                alias_holders[a].append(cid)
+
+    if raw_role in seen_ids:
+        char_id = raw_role
+    else:
+        holders = alias_holders.get(raw_role) or []
+        if len(holders) > 1:
+            return {
+                "character_id": raw_role,
+                "resolved_views": {},
+                "selected_view": "",
+                "selected_path": "",
+                "readable": False,
+                "approved": False,
+                "identity_match": False,
+                "missing_reason": "ambiguous_character_alias",
+            }
+        char_id = holders[0] if len(holders) == 1 else _norm_portrait_char_name(raw_role)
+
+    aliases = _char_aliases(char_id, characters)
+    bank_entry = bank.get_character(char_id) if bank is not None and hasattr(bank, "get_character") else None
+
+    # Gather view metadata entries from registry first, or bank_dir if unregistered in reg
+    views_raw = reg_dict.get(char_id)
+    if views_raw is None:
+        norm_cid = _norm_portrait_char_name(char_id)
+        for rk, rv in reg_dict.items():
+            if _norm_portrait_char_name(str(rk or "")) == norm_cid:
+                views_raw = rv
+                break
+    if views_raw is None and isinstance(bank_entry, dict) and isinstance(bank_entry.get("portraits"), dict):
+        views_raw = bank_entry.get("portraits")
+
+    view_entries: dict[str, dict] = {}
+    if isinstance(views_raw, dict):
+        for vk in ("front", "base", "side", "back", "face"):
+            ev = views_raw.get(vk)
+            if isinstance(ev, dict) and str(ev.get("path") or "").strip():
+                view_entries[vk] = dict(ev)
+            elif isinstance(ev, str) and ev.strip():
+                view_entries[vk] = {"path": ev.strip()}
+    if not view_entries and bank_dir is not None:
+        cdir = Path(bank_dir) / char_id
+        if cdir.is_dir():
+            for vk in ("front", "base", "side", "back", "face"):
+                cand = cdir / f"{vk}.png"
+                if cand.is_file():
+                    view_entries[vk] = {"path": str(cand)}
+
+    if not view_entries:
+        return {
+            "character_id": char_id,
+            "resolved_views": {},
+            "selected_view": "",
+            "selected_path": "",
+            "readable": False,
+            "approved": False,
+            "identity_match": False,
+            "missing_reason": "portrait_not_registered",
+        }
+
+    # Explicitly enforce view contract priority
+    if closeup:
+        order = ["face", "front", "base", "side", "back"]
+    elif view_pref in ("side", "back"):
+        order = [view_pref, "front", "base", "side", "back"]
+    elif allow_face_fallback:
+        order = ["front", "base", "side", "back", "face"]
+    else:
+        order = ["front", "base", "side", "back"]
+
+    # Deduplicate priority order preserving order
+    ordered_views: list[str] = []
+    for vk in order:
+        if vk not in ordered_views:
+            ordered_views.append(vk)
+
+    resolved_views: dict[str, str] = {}
+    for vk, ev in view_entries.items():
+        p = Path(str(ev.get("path") or ""))
+        if p.is_file():
+            resolved_views[vk] = str(p)
+
+    # Whole-character bank disapproval blocks immediately
+    if isinstance(bank_entry, dict) and (
+        bank_entry.get("approved") is False
+        or str(bank_entry.get("status") or "").strip().lower() in _UNAPPROVED_PORTRAIT_STATUSES
+    ):
+        return {
+            "character_id": char_id,
+            "resolved_views": resolved_views,
+            "selected_view": "",
+            "selected_path": "",
+            "readable": any(_is_image_file_readable_readonly(Path(p)) for p in resolved_views.values()),
+            "approved": False,
+            "identity_match": True,
+            "missing_reason": "portrait_unapproved",
+        }
+
+    saw_missing = False
+    saw_unreadable = False
+    saw_identity_mismatch = False
+    saw_unapproved = False
+
+    for vk in ordered_views:
+        ev = view_entries.get(vk)
+        if not ev:
+            continue
+        p = Path(str(ev.get("path") or ""))
+        if not p.is_file():
+            saw_missing = True
+            continue
+        if not _portrait_identity_ok(char_id, aliases, ev, p, bank_dir):
+            saw_identity_mismatch = True
+            continue
+        if not _portrait_approved_ok(ev, bank_entry, p):
+            saw_unapproved = True
+            continue
+        if not _is_image_file_readable_readonly(p):
+            saw_unreadable = True
+            continue
+        return {
+            "character_id": char_id,
+            "resolved_views": resolved_views,
+            "selected_view": vk,
+            "selected_path": str(p),
+            "readable": True,
+            "approved": True,
+            "identity_match": True,
+            "missing_reason": "",
+        }
+
+    # Check if only face exists while non-closeup primary view was required
+    only_face_present = (
+        "face" in view_entries
+        and not any(k in view_entries for k in ("front", "base", "side", "back"))
+        and "face" not in ordered_views
+    )
+    if saw_identity_mismatch:
+        reason = "portrait_identity_mismatch"
+    elif saw_unapproved:
+        reason = "portrait_unapproved"
+    elif saw_unreadable:
+        reason = "portrait_unreadable"
+    elif only_face_present:
+        reason = "portrait_role_insufficient"
+    elif saw_missing or not resolved_views:
+        reason = "portrait_file_missing"
+    else:
+        reason = "portrait_file_missing"
+
+    return {
+        "character_id": char_id,
+        "resolved_views": resolved_views,
+        "selected_view": "",
+        "selected_path": "",
+        "readable": False if saw_unreadable else bool(resolved_views),
+        "approved": not saw_unapproved,
+        "identity_match": not saw_identity_mismatch,
+        "missing_reason": reason,
+    }
+
+
 def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                                     limit: int = 3,
                                     frame_desc: str | None = None,
                                     roster: set[str] | None = None,
-                                    return_details: bool = False):
-    """从 character_portraits_registry.json 为本镜头出镜角色收集肖像参考图.
+                                    return_details: bool = False,
+                                    closeup: bool = False,
+                                    apply_head_crop: bool = True):
+    """为本镜头出镜角色收集肖像参考图（与 pre-shot 门禁共享 resolve_character_portrait_assets）.
 
-    S04：当 roster 非 None（来自 frame_layouts.on_screen）时，按结构化名册与唯一
-    别名直接匹配肖像，不再被正文措辞（「公子」「姑娘」替代实名）拦截；若已注册
-    角色在 registry 中的立绘文件缺失，显式记入 missing 而非静默丢弃。
-    无任何肖像库记录（not reg）时允许返回 empty + identity_reference="unverified"。
+    S04/F5：当 roster 非 None 时，按结构化名册与唯一别名解析，统一消费只读
+    resolve_character_portrait_assets() 完成视图角色、可读性、身份与审批检查。
     """
     def _pack(refs_out: list[str], *, omissions=None, missing=None,
               identity_reference: str = "verified"):
@@ -2013,18 +2399,8 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
         return refs_out
 
     try:
-        from shared.paths import vimax_working_dir
-        registry_path = vimax_working_dir() / "character_portraits_registry.json"
-        if not registry_path.exists():
-            from shared.character_bank import CharacterBank
-            bank = CharacterBank()
-            bank.load()
-            reg = bank.get_all_portraits_as_registry()
-        else:
-            import json as _json
-            with open(registry_path, "r", encoding="utf-8") as f:
-                reg = _json.load(f)
-        if not isinstance(reg, dict) or not reg:
+        reg, bank, bank_dir = _load_portrait_stores_readonly()
+        if not reg and (bank_dir is None or not Path(bank_dir).is_dir() or not any(Path(bank_dir).iterdir())):
             return _pack([], identity_reference="unverified")
 
         if roster is not None and len(roster) == 0:
@@ -2069,7 +2445,7 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
             if ident and ident not in seen:
                 seen.add(ident)
                 char_names.append(ident)
-        for ident in reg:
+        for ident in (reg or {}):
             if ident not in seen:
                 seen.add(ident)
                 char_names.append(ident)
@@ -2078,7 +2454,6 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
             char_names.remove(action_subject)
             char_names.insert(0, action_subject)
 
-        # Build roster-name -> matching characters map to catch ambiguous aliases
         alias_holders: dict[str, list[str]] = {}
         for ident in char_names:
             for a in _char_aliases(ident, characters):
@@ -2092,7 +2467,6 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
         if roster is not None:
             for rname in sorted(roster):
                 holders = alias_holders.get(rname) or []
-                # Exact identifier match is never ambiguous; shared non-exact alias is.
                 if rname not in holders and len(holders) > 1:
                     missing.append({
                         "entity": rname,
@@ -2117,34 +2491,37 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                         and _threat_visible_in(frame_desc, characters) is not True:
                     omissions.append({"kind": "chars", "entity": ident, "reason": "threat_not_visible"})
                     continue
-            views = reg.get(ident)
-            if not isinstance(views, dict):
-                missing.append({"entity": ident, "reason": "portrait_not_registered"})
-                continue
-            picked = None
+
             _ident_view = subject_view if ident == action_subject else view_pref
-            for view in [_ident_view or "front", "front", "side", "back"]:
-                p = views.get(view, {})
-                path = p.get("path", "") if isinstance(p, dict) else ""
-                if path and Path(path).exists():
-                    picked = path
-                    break
+            resolved = resolve_character_portrait_assets(
+                ident,
+                characters=characters,
+                reg=reg,
+                bank=bank,
+                bank_dir=bank_dir,
+                view_pref=_ident_view or "front",
+                closeup=closeup,
+            )
+            picked = str(resolved.get("selected_path") or "")
             if not picked:
-                missing.append({"entity": ident, "reason": "portrait_file_missing"})
+                missing.append({
+                    "entity": ident,
+                    "reason": str(resolved.get("missing_reason") or "portrait_file_missing"),
+                })
                 continue
             if picked and ident in _THREAT_IDS:
                 _nw = Path(picked).parent / f"{Path(picked).stem}_no_weapon.png"
-                if _nw.exists():
+                if _nw.exists() and _is_image_file_readable_readonly(_nw):
                     picked = str(_nw)
                     _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: {ident} 使用无武器版立绘 {_nw.name}")
-            if picked:
+            if picked and apply_head_crop:
                 picked = _head_portrait_path(picked)
             if picked and picked not in refs:
                 if len(refs) >= limit:
                     omissions.append({"kind": "chars", "entity": ident, "reason": "portrait_limit"})
                     continue
                 refs.append(picked)
-                _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧/尾帧参考图=角色 {ident} {view_pref}肖像")
+                _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧/尾帧参考图=角色 {ident} {resolved.get('selected_view') or view_pref}肖像")
         id_state = "verified" if refs else ("missing" if missing else "unverified")
         return _pack(refs, omissions=omissions, missing=missing, identity_reference=id_state)
     except Exception as e:
@@ -3301,11 +3678,11 @@ def _char_inert_in_shot(ident: str, scan_text: str, characters: list | None) -> 
     return False
 
 
-def _dedupe_char_anchor_guard(additions: list[str]) -> list[str]:
-    """Ensure the shared human head/face guard appears at most once across all character anchors in a frame."""
+def _dedupe_char_anchor_guard(additions: list[str]) -> tuple[list[str], str]:
+    """Strip duplicated head/face guard from character strings and return standalone frame-level sentence."""
     guard = str(_NO_ANIMAL_FEATURES_GUARD or "")
     if not guard or not additions:
-        return additions
+        return additions, ""
     seen_guard = False
     cleaned: list[str] = []
     for item in additions:
@@ -3314,9 +3691,9 @@ def _dedupe_char_anchor_guard(additions: list[str]) -> list[str]:
             cleaned.append(item.replace(guard, ""))
         else:
             cleaned.append(item)
-    if seen_guard and cleaned:
-        cleaned[-1] = f"{cleaned[-1]}{guard}"
-    return cleaned
+    if not seen_guard:
+        return cleaned, ""
+    return cleaned, f"全员{guard}。"
 
 
 def _inject_character_costume(desc: str, characters: list | None,
@@ -3408,10 +3785,13 @@ def _inject_character_costume(desc: str, characters: list | None,
                 continue
             additions.append(combined)
         if additions:
-            additions = _dedupe_char_anchor_guard(additions)
-            # v6.50：desc 尾部句号 + 本处固定 "。" → 双句号（矛盾门会拦），
-            # 先剥再拼
-            return f"{desc.rstrip('。')}。{('，'.join(additions))}"
+            additions, guard_sentence = _dedupe_char_anchor_guard(additions)
+            # v6.50：desc 尾部句号 + 本处固定 "。" → 双句号（矛盾门会拦），先剥再拼；
+            # F6：共享头面守卫作为独立帧级全局句子放在角色列表之外，不粘在最后一个角色末尾。
+            out = f"{desc.rstrip('。')}。{('，'.join(additions))}"
+            if guard_sentence:
+                out = f"{out.rstrip('。')}。{guard_sentence}"
+            return out
         return desc
     except Exception:
         return desc
@@ -3695,8 +4075,11 @@ def _inject_frame_spec(
                 continue
             additions.append(combined)
         if additions:
-            additions = _dedupe_char_anchor_guard(additions)
-            return f"{desc.rstrip('。')}。{('，'.join(additions))}"
+            additions, guard_sentence = _dedupe_char_anchor_guard(additions)
+            out = f"{desc.rstrip('。')}。{('，'.join(additions))}"
+            if guard_sentence:
+                out = f"{out.rstrip('。')}。{guard_sentence}"
+            return out
         return desc
     except Exception:
         return desc
@@ -3896,7 +4279,13 @@ async def _accept_doodle_refinement(refined, target, shot, frame_kind, character
                       or shot.get("ff_desc_final") or shot.get("lf_desc_final") or "")
         else:
             prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final") or ""
-    from shared.image_qc import build_qc_frame_meta, sidecar_path, write_sidecar
+    from shared.image_qc import (
+        build_qc_frame_meta,
+        request_snapshot_path,
+        sidecar_path,
+        write_frame_request_snapshot,
+        write_sidecar,
+    )
     from uuid import uuid4
     import shutil
     target = Path(target)
@@ -3914,11 +4303,24 @@ async def _accept_doodle_refinement(refined, target, shot, frame_kind, character
         return False
     backup = target.with_name("." + target.name + "." + uuid4().hex + ".bak")
     sidecar = sidecar_path(target)
+    req_file = request_snapshot_path(target)
     old_sidecar = sidecar.read_bytes() if sidecar.exists() else None
-    frame_meta = build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index)
+    old_req = req_file.read_bytes() if req_file.exists() else None
     shutil.copy2(target, backup)
     try:
         candidate.replace(target)
+        write_frame_request_snapshot(
+            target,
+            shot=shot,
+            frame_kind=frame_kind,
+            prompt=prompt + "；不得保留红框、标注线或编辑标记",
+            refs=[str(target)],
+            kf_index=kf_index,
+            model_id=_adapter_resolved_model_id(None),
+        )
+        frame_meta = build_qc_frame_meta(
+            shot, frame_kind, characters, kf_index=kf_index, frame_path=target,
+        )
         write_sidecar(target, result, frame_meta=frame_meta)
     except Exception:
         backup.replace(target)
@@ -3926,6 +4328,10 @@ async def _accept_doodle_refinement(refined, target, shot, frame_kind, character
             sidecar.unlink(missing_ok=True)
         else:
             sidecar.write_bytes(old_sidecar)
+        if old_req is None:
+            req_file.unlink(missing_ok=True)
+        else:
+            req_file.write_bytes(old_req)
         raise
     finally:
         backup.unlink(missing_ok=True)
@@ -4113,10 +4519,12 @@ FAILURE_REQUEST_CONFLICT = "request_conflict"
 FAILURE_MISSING_ASSET = "missing_asset"
 FAILURE_QC_DISPUTE = "qc_dispute"
 FAILURE_STOCHASTIC_MISS = "stochastic_miss"
+FAILURE_INFRA_UNAVAILABLE = "infra_unavailable"
 _NON_RETRYABLE_FAILURES = (
     FAILURE_REQUEST_CONFLICT,
     FAILURE_MISSING_ASSET,
     FAILURE_QC_DISPUTE,
+    FAILURE_INFRA_UNAVAILABLE,
 )
 
 
@@ -4156,6 +4564,116 @@ def _classify_generation_failure(
     return "none"
 
 
+PROMPT_TEMPLATE_VERSION = "step02a.prompt/v2"
+
+
+def _configured_image_provider_model() -> tuple[str, str]:
+    try:
+        from shared import config as _cfg
+        from shared.model_alias import canonical_image_model_id
+        provider = str(getattr(_cfg, "IMAGE_PROVIDER", "") or "")
+        model_attr = {
+            "volcengine": "VOLCENGINE_T2I_MODEL",
+            "bailian": "BAILIAN_T2I_MODEL",
+            "agent_plan": "AGENT_PLAN_T2I_MODEL",
+            "agnes": "AGNES_IMAGE_MODEL",
+            "minimax": "MINIMAX_T2I_MODEL",
+        }.get(provider, "")
+        raw_model = str(getattr(_cfg, model_attr, "") or "") if model_attr else ""
+        model_id = canonical_image_model_id(raw_model) if raw_model else ""
+        return provider, model_id
+    except Exception:
+        return "", ""
+
+
+def _adapter_resolved_model_id(image_adapter, img_out=None) -> str:
+    meta = getattr(img_out, "request_meta", None) if img_out is not None else None
+    if isinstance(meta, dict) and str(meta.get("model_id") or "").strip():
+        return str(meta["model_id"]).strip()
+    meta2 = getattr(image_adapter, "last_request_meta", None) if image_adapter is not None else None
+    if isinstance(meta2, dict) and str(meta2.get("model_id") or "").strip():
+        return str(meta2["model_id"]).strip()
+    _, fallback = _configured_image_provider_model()
+    return fallback
+
+
+def _shot_complexity_label(
+    shot: dict | None,
+    characters: list | None,
+    frame_kind: str,
+    kf_index: int | None = None,
+) -> str:
+    if not isinstance(shot, dict):
+        return "unknown"
+    try:
+        from shared.prompt_facts import project_frame_facts
+        proj = project_frame_facts(shot, frame_kind, characters, kf_index=kf_index)
+        ents = proj.get("entities") or []
+        if is_empty_scene(shot, characters or []) or (proj.get("spec_present") and len(ents) == 0):
+            return "empty_scene"
+        if len(ents) == 1:
+            return "single_person"
+        if len(ents) == 2:
+            return "two_person"
+        if len(ents) >= 3:
+            return "multi_person"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _persist_frame_request_snapshot(
+    frame_path: Path,
+    *,
+    shot: dict,
+    frame_kind: str,
+    prompt_text: str,
+    refs: list | None,
+    image_adapter=None,
+    img_out=None,
+    operation_id: str = "",
+    kf_index: int | None = None,
+) -> dict:
+    """Write `<frame_stem>_request.json` and return resolved request & artifact identity."""
+    from shared.image_qc import frame_identity, write_frame_request_snapshot
+    req_meta = (
+        getattr(img_out, "request_meta", None)
+        or (getattr(image_adapter, "last_request_meta", None) if image_adapter is not None else None)
+    )
+    if not isinstance(req_meta, dict):
+        req_meta = {}
+    eff_prompt = str(req_meta.get("effective_prompt") or prompt_text or "")
+    eff_refs = list(req_meta.get("effective_refs") or refs or [])
+    provider, default_model = _configured_image_provider_model()
+    resolved_provider = str(req_meta.get("provider") or provider or "")
+    resolved_model = str(req_meta.get("model_id") or default_model or "")
+    resolved_op = str(req_meta.get("operation_id") or operation_id or "")
+    snap_path = write_frame_request_snapshot(
+        frame_path,
+        shot=shot,
+        frame_kind=frame_kind,
+        prompt=eff_prompt,
+        refs=eff_refs,
+        kf_index=kf_index,
+        model_id=resolved_model,
+        provider=resolved_provider,
+        operation_id=resolved_op,
+    )
+    img_id = frame_identity(frame_path)
+    try:
+        snap_data = json.loads(snap_path.read_text(encoding="utf-8"))
+    except Exception:
+        snap_data = {}
+    return {
+        "operation_id": resolved_op,
+        "provider": resolved_provider,
+        "model_id": resolved_model,
+        "request_digest": str(snap_data.get("request_digest") or ""),
+        "prompt_sha256": str(snap_data.get("prompt_sha256") or ""),
+        "image_sha256": str(img_id.get("sha256") or ""),
+    }
+
+
 def _resolve_ledger_qc_verdict(
     frame_path: str | Path,
     shot: dict,
@@ -4171,7 +4689,9 @@ def _resolve_ledger_qc_verdict(
         return FAILURE_QC_DISPUTE, "qc_call_failed", str(getattr(qc_last, "error", ""))
     try:
         from shared.image_qc import build_qc_frame_meta, qc_state
-        meta = build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index)
+        meta = build_qc_frame_meta(
+            shot, frame_kind, characters, kf_index=kf_index, frame_path=frame_path,
+        )
         state = qc_state(Path(frame_path), expected_frame=meta)
         status = str(state.get("status") or "")
         verdict_detail = str((state.get("data") or {}).get("verdict_detail") or "")
@@ -4195,55 +4715,78 @@ def _emit_stage4_ledger(
     frame_role: str,
     attempt_idx: int,
     *,
+    kf_index: int | None = None,
     prompt_text: str = "",
     refs: list[str] | None = None,
     action_type: str = "generate",
     defect_class: str = "none",
     qc_verdict: str = "",
     detail: str = "",
+    operation_id: str = "",
+    model_id: str = "",
+    request_digest: str = "",
+    image_sha256: str = "",
+    shot_complexity: str = "",
+    characters: list | None = None,
 ) -> None:
     """Emit a Stage 4 decision ledger record into step02_events.jsonl (fail-soft)."""
     import hashlib as _hl
+    import re as _re
     try:
-        from shared import config as _cfg
-        from shared.model_alias import canonical_image_model_id
         from shared.ref_compose import ref_identity
         from shared.request_events import emit_decision_ledger
         from shared.run_scope import current_scope_identity
 
-        provider = str(getattr(_cfg, "IMAGE_PROVIDER", "") or "")
-        model_attr = {
-            "volcengine": "VOLCENGINE_T2I_MODEL",
-            "bailian": "BAILIAN_T2I_MODEL",
-            "agent_plan": "AGENT_PLAN_T2I_MODEL",
-            "agnes": "AGNES_IMAGE_MODEL",
-            "minimax": "MINIMAX_T2I_MODEL",
-        }.get(provider, "")
-        raw_model = str(getattr(_cfg, model_attr, "") or "") if model_attr else ""
-        model_id = canonical_image_model_id(raw_model) if raw_model else ""
+        eff_kfi = kf_index
+        if eff_kfi is None:
+            _km = _re.match(r"^keyframe_(\d+)$", str(frame_role or "").strip())
+            if _km:
+                eff_kfi = int(_km.group(1))
+        cfg_provider, cfg_model = _configured_image_provider_model()
+        eff_model_id = str(model_id or cfg_model or "")
         scope = current_scope_identity()
         chapter_scope = f"part_{int(scope.get('part') or 1):02d}/chapter_{int(scope.get('chapter') or 1):03d}"
-        prompt_ver = (
+        work_id = str(scope.get("book_name") or (shot.get("book_name") if isinstance(shot, dict) else "") or "")
+        script_rev = str((shot.get("_script_revision") if isinstance(shot, dict) else "") or "")
+        req_digest = str(request_digest or (
             f"sha256:{_hl.sha256(prompt_text.encode('utf-8')).hexdigest()[:16]}"
             if prompt_text else ""
-        )
+        ))
+        eff_complexity = str(shot_complexity or "")
+        if not eff_complexity and isinstance(shot, dict):
+            fk_long = (
+                "last_frame" if frame_role == "last_frame"
+                else ("keyframe" if str(frame_role).startswith("keyframe") else "first_frame")
+            )
+            eff_complexity = _shot_complexity_label(shot, characters, fk_long, kf_index=eff_kfi)
         ref_ids = []
         for rp in (refs or []):
             ident = ref_identity(rp)
             ref_ids.append(f"{ident.get('kind') or 'ref'}:{ident.get('entity') or Path(rp).name}")
         emit_decision_ledger(
+            work_id=work_id,
             chapter_scope=chapter_scope,
+            script_revision=script_rev,
             shot_index=shot.get("index") if isinstance(shot, dict) else None,
             frame_role=frame_role,
-            provider=provider,
-            model_id=model_id,
-            prompt_version=prompt_ver,
+            kf_index=eff_kfi,
+            shot_complexity=eff_complexity or "unknown",
+            provider=cfg_provider,
+            model_id=eff_model_id,
+            prompt_template_version=PROMPT_TEMPLATE_VERSION,
+            request_digest=req_digest,
+            prompt_version=PROMPT_TEMPLATE_VERSION,
             ref_strategy="multi_ref_contract" if refs else "text_only",
             ref_identities=ref_ids,
             attempt_index=attempt_idx,
+            operation_id=operation_id,
+            image_sha256=image_sha256,
             action_type=action_type,
             defect_class=defect_class,
             qc_verdict=qc_verdict,
+            human_usability="unknown",
+            non_target_damage=None,
+            estimated_cost_cny=None,
             detail=detail,
         )
     except Exception:
@@ -4428,8 +4971,12 @@ async def _gen_first_frame_async(
                     return str(ff_path)
 
         logger.verbose(f"  [FRAME] 生成首帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
+        from shared.request_events import new_request_id
+        _op_id = new_request_id()
         attempt_variation = _ATTEMPT_VARIATIONS[attempt % len(_ATTEMPT_VARIATIONS)]
-        attempt_kwargs = dict(gen_kwargs, prompt=ff_desc_full + attempt_variation)
+        attempt_prompt = ff_desc_full + attempt_variation
+        attempt_kwargs = dict(gen_kwargs, prompt=attempt_prompt, operation_id=_op_id)
+        img_out = None
         try:
             img_out = await image_adapter.generate_single_image(**attempt_kwargs)
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
@@ -4441,8 +4988,11 @@ async def _gen_first_frame_async(
             shot["_last_failure_class"] = fail_cls
             _emit_stage4_ledger(
                 shot, "first_frame", attempt + 1,
-                prompt_text=ff_desc_full, refs=refs,
+                prompt_text=attempt_prompt, refs=refs,
                 action_type="generate", defect_class=fail_cls, detail=str(e),
+                operation_id=_op_id,
+                model_id=_adapter_resolved_model_id(image_adapter, img_out),
+                characters=characters,
             )
             _bridge_log(f"  [FRAME] 首帧 shot_{idx} 生成异常 ({fail_cls}): {e}")
             if fail_cls in _NON_RETRYABLE_FAILURES:
@@ -4452,7 +5002,33 @@ async def _gen_first_frame_async(
             return None
 
         if _validate_frame(str(ff_path)):
+            try:
+                _snap_info = _persist_frame_request_snapshot(
+                    ff_path,
+                    shot=shot,
+                    frame_kind="first_frame",
+                    prompt_text=attempt_prompt,
+                    refs=refs,
+                    image_adapter=image_adapter,
+                    img_out=img_out,
+                    operation_id=_op_id,
+                )
+            except Exception as _snap_exc:
+                shot["_last_failure_class"] = FAILURE_INFRA_UNAVAILABLE
+                ff_hash_path.unlink(missing_ok=True)
+                _emit_stage4_ledger(
+                    shot, "first_frame", attempt + 1,
+                    prompt_text=attempt_prompt, refs=refs,
+                    action_type="generate", defect_class=FAILURE_INFRA_UNAVAILABLE,
+                    qc_verdict="snapshot_write_failed", detail=str(_snap_exc),
+                    operation_id=_op_id,
+                    model_id=_adapter_resolved_model_id(image_adapter, img_out),
+                    characters=characters,
+                )
+                _bridge_log(f"  [SNAPSHOT] shot_{idx} 首帧请求快照写入失败，阻断 QC 放行: {_snap_exc}")
+                return None
             ff_hash_path.write_text(current_hash, encoding="utf-8")
+            _cx = _shot_complexity_label(shot, characters, "first_frame")
             qc_critical = await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene,
                                                  variation=attempt_variation)
             _qc_last = shot.get("_qc_last")
@@ -4464,9 +5040,14 @@ async def _gen_first_frame_async(
                 shot["_last_failure_class"] = FAILURE_QC_DISPUTE
                 _emit_stage4_ledger(
                     shot, "first_frame", attempt + 1,
-                    prompt_text=ff_desc_full, refs=refs,
+                    prompt_text=attempt_prompt, refs=refs,
                     action_type="generate", defect_class=FAILURE_QC_DISPUTE,
                     qc_verdict="qc_call_failed", detail=_qc_detail,
+                    operation_id=_snap_info["operation_id"],
+                    model_id=_snap_info["model_id"],
+                    request_digest=_snap_info["request_digest"],
+                    image_sha256=_snap_info["image_sha256"],
+                    shot_complexity=_cx,
                 )
                 _bridge_log(f"  [QC-DISPUTE] shot_{idx} 首帧 QC 调用异常，保留图片停止重抽（0 额外 POST）")
                 return str(ff_path)
@@ -4474,9 +5055,14 @@ async def _gen_first_frame_async(
                 shot["_last_failure_class"] = FAILURE_STOCHASTIC_MISS
                 _emit_stage4_ledger(
                     shot, "first_frame", attempt + 1,
-                    prompt_text=ff_desc_full, refs=refs,
+                    prompt_text=attempt_prompt, refs=refs,
                     action_type="generate", defect_class=FAILURE_STOCHASTIC_MISS,
                     qc_verdict=_qc_verdict, detail=_qc_detail,
+                    operation_id=_snap_info["operation_id"],
+                    model_id=_snap_info["model_id"],
+                    request_digest=_snap_info["request_digest"],
+                    image_sha256=_snap_info["image_sha256"],
+                    shot_complexity=_cx,
                 )
                 if await _try_qc_repair(image_adapter, shot, str(ff_path), "first_frame",
                                         characters, empty_scene, idx):
@@ -4484,11 +5070,17 @@ async def _gen_first_frame_async(
                         ff_path, shot, "first_frame", characters,
                         qc_critical=False, qc_last=shot.get("_qc_last"),
                     )
+                    from shared.image_qc import frame_identity as _fi
                     _emit_stage4_ledger(
                         shot, "first_frame", attempt + 1,
-                        prompt_text=ff_desc_full, refs=refs,
+                        prompt_text=attempt_prompt, refs=refs,
                         action_type="local_edit", defect_class="none",
                         qc_verdict=_rep_v, detail=_rep_d,
+                        operation_id=_snap_info["operation_id"],
+                        model_id=_adapter_resolved_model_id(image_adapter),
+                        request_digest=_snap_info["request_digest"],
+                        image_sha256=str(_fi(ff_path).get("sha256") or ""),
+                        shot_complexity=_cx,
                     )
                 elif attempt < max_retries:
                     if not _del_frame_unless_protected(
@@ -4504,9 +5096,14 @@ async def _gen_first_frame_async(
                 shot["_last_failure_class"] = _df_cls
                 _emit_stage4_ledger(
                     shot, "first_frame", attempt + 1,
-                    prompt_text=ff_desc_full, refs=refs,
+                    prompt_text=attempt_prompt, refs=refs,
                     action_type="generate", defect_class=_df_cls,
                     qc_verdict=_qc_verdict, detail=_qc_detail,
+                    operation_id=_snap_info["operation_id"],
+                    model_id=_snap_info["model_id"],
+                    request_digest=_snap_info["request_digest"],
+                    image_sha256=_snap_info["image_sha256"],
+                    shot_complexity=_cx,
                 )
             # v6.30：doodle 区域编辑 fallback — 精确空间约束 prompt 调不到位时
             # 走 i2i + 红框二修；QC critical 之后才做（不在已知坏帧上浪费 i2i）。
@@ -4700,15 +5297,20 @@ async def _gen_last_frame_async(
                         return str(lf_path)
 
         logger.verbose(f"  [FRAME] 生成尾帧 shot_{idx} {f'(重试 {attempt}/{max_retries})' if attempt > 0 else ''}...")
+        from shared.request_events import new_request_id
+        _op_id = new_request_id()
         attempt_variation = _ATTEMPT_VARIATIONS[attempt % len(_ATTEMPT_VARIATIONS)]
+        attempt_prompt = lf_desc_full + attempt_variation
+        img_out = None
         try:
             img_out = await image_adapter.generate_single_image(
-                prompt=lf_desc_full + attempt_variation,
+                prompt=attempt_prompt,
                 reference_image_paths=refs,
                 shot_index=idx,
                 frame_desc="尾帧",
                 lock_prompt=image_lock_prompt(layout_lock=False),
                 force_multi_ref=True,
+                operation_id=_op_id,
             )
             if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                 img_out.data.save(str(lf_path))
@@ -4719,8 +5321,11 @@ async def _gen_last_frame_async(
             shot["_last_failure_class"] = fail_cls
             _emit_stage4_ledger(
                 shot, "last_frame", attempt + 1,
-                prompt_text=lf_desc_full, refs=refs,
+                prompt_text=attempt_prompt, refs=refs,
                 action_type="generate", defect_class=fail_cls, detail=str(e),
+                operation_id=_op_id,
+                model_id=_adapter_resolved_model_id(image_adapter, img_out),
+                characters=characters,
             )
             _bridge_log(f"  [FRAME] 尾帧 shot_{idx} 生成异常 ({fail_cls}): {e}")
             if fail_cls in _NON_RETRYABLE_FAILURES:
@@ -4730,7 +5335,33 @@ async def _gen_last_frame_async(
             return None
 
         if _validate_frame(str(lf_path)):
+            try:
+                _snap_info = _persist_frame_request_snapshot(
+                    lf_path,
+                    shot=shot,
+                    frame_kind="last_frame",
+                    prompt_text=attempt_prompt,
+                    refs=refs,
+                    image_adapter=image_adapter,
+                    img_out=img_out,
+                    operation_id=_op_id,
+                )
+            except Exception as _snap_exc:
+                shot["_last_failure_class"] = FAILURE_INFRA_UNAVAILABLE
+                lf_hash_path.unlink(missing_ok=True)
+                _emit_stage4_ledger(
+                    shot, "last_frame", attempt + 1,
+                    prompt_text=attempt_prompt, refs=refs,
+                    action_type="generate", defect_class=FAILURE_INFRA_UNAVAILABLE,
+                    qc_verdict="snapshot_write_failed", detail=str(_snap_exc),
+                    operation_id=_op_id,
+                    model_id=_adapter_resolved_model_id(image_adapter, img_out),
+                    characters=characters,
+                )
+                _bridge_log(f"  [SNAPSHOT] shot_{idx} 尾帧请求快照写入失败，阻断 QC 放行: {_snap_exc}")
+                return None
             lf_hash_path.write_text(current_hash, encoding="utf-8")
+            _cx = _shot_complexity_label(shot, characters, "last_frame")
             qc_critical = await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene,
                                                  variation=attempt_variation)
             _qc_last = shot.get("_qc_last")
@@ -4742,9 +5373,14 @@ async def _gen_last_frame_async(
                 shot["_last_failure_class"] = FAILURE_QC_DISPUTE
                 _emit_stage4_ledger(
                     shot, "last_frame", attempt + 1,
-                    prompt_text=lf_desc_full, refs=refs,
+                    prompt_text=attempt_prompt, refs=refs,
                     action_type="generate", defect_class=FAILURE_QC_DISPUTE,
                     qc_verdict="qc_call_failed", detail=_qc_detail,
+                    operation_id=_snap_info["operation_id"],
+                    model_id=_snap_info["model_id"],
+                    request_digest=_snap_info["request_digest"],
+                    image_sha256=_snap_info["image_sha256"],
+                    shot_complexity=_cx,
                 )
                 _bridge_log(f"  [QC-DISPUTE] shot_{idx} 尾帧 QC 调用异常，保留图片停止重抽（0 额外 POST）")
                 return str(lf_path)
@@ -4752,9 +5388,14 @@ async def _gen_last_frame_async(
                 shot["_last_failure_class"] = FAILURE_STOCHASTIC_MISS
                 _emit_stage4_ledger(
                     shot, "last_frame", attempt + 1,
-                    prompt_text=lf_desc_full, refs=refs,
+                    prompt_text=attempt_prompt, refs=refs,
                     action_type="generate", defect_class=FAILURE_STOCHASTIC_MISS,
                     qc_verdict=_qc_verdict, detail=_qc_detail,
+                    operation_id=_snap_info["operation_id"],
+                    model_id=_snap_info["model_id"],
+                    request_digest=_snap_info["request_digest"],
+                    image_sha256=_snap_info["image_sha256"],
+                    shot_complexity=_cx,
                 )
                 if await _try_qc_repair(image_adapter, shot, str(lf_path), "last_frame",
                                         characters, empty_scene, idx):
@@ -4762,11 +5403,17 @@ async def _gen_last_frame_async(
                         lf_path, shot, "last_frame", characters,
                         qc_critical=False, qc_last=shot.get("_qc_last"),
                     )
+                    from shared.image_qc import frame_identity as _fi
                     _emit_stage4_ledger(
                         shot, "last_frame", attempt + 1,
-                        prompt_text=lf_desc_full, refs=refs,
+                        prompt_text=attempt_prompt, refs=refs,
                         action_type="local_edit", defect_class="none",
                         qc_verdict=_rep_v, detail=_rep_d,
+                        operation_id=_snap_info["operation_id"],
+                        model_id=_adapter_resolved_model_id(image_adapter),
+                        request_digest=_snap_info["request_digest"],
+                        image_sha256=str(_fi(lf_path).get("sha256") or ""),
+                        shot_complexity=_cx,
                     )
                     return str(lf_path)
                 elif attempt < max_retries:
@@ -4782,9 +5429,14 @@ async def _gen_last_frame_async(
             shot["_last_failure_class"] = _df_cls
             _emit_stage4_ledger(
                 shot, "last_frame", attempt + 1,
-                prompt_text=lf_desc_full, refs=refs,
+                prompt_text=attempt_prompt, refs=refs,
                 action_type="generate", defect_class=_df_cls,
                 qc_verdict=_qc_verdict, detail=_qc_detail,
+                operation_id=_snap_info["operation_id"],
+                model_id=_snap_info["model_id"],
+                request_digest=_snap_info["request_digest"],
+                image_sha256=_snap_info["image_sha256"],
+                shot_complexity=_cx,
             )
             return str(lf_path)
         if attempt < max_retries:
@@ -5108,6 +5760,7 @@ async def _gen_keyframes_async(
                 shot["_last_failure_class"] = FAILURE_REQUEST_CONFLICT
                 _emit_stage4_ledger(
                     shot, f"keyframe_{i}", 0,
+                    kf_index=i,
                     prompt_text=kf_desc_full, refs=refs,
                     action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
                     qc_verdict="not_run", detail=str(_kf_preflight["issues"][:2]),
@@ -5121,21 +5774,27 @@ async def _gen_keyframes_async(
                 shot["_last_failure_class"] = FAILURE_REQUEST_CONFLICT
                 _emit_stage4_ledger(
                     shot, f"keyframe_{i}", 0,
+                    kf_index=i,
                     prompt_text=kf_desc_full, refs=refs,
                     action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
                     qc_verdict="not_run", detail=str(_kf_pc_err),
                 )
                 break
 
+            from shared.request_events import new_request_id
+            _op_id = new_request_id()
+            attempt_variation = _ATTEMPT_VARIATIONS[attempt % len(_ATTEMPT_VARIATIONS)]
+            attempt_prompt = kf_desc_full + attempt_variation
+            img_out = None
             try:
-                attempt_variation = _ATTEMPT_VARIATIONS[attempt % len(_ATTEMPT_VARIATIONS)]
                 img_out = await image_adapter.generate_single_image(
-                    prompt=kf_desc_full + attempt_variation,
+                    prompt=attempt_prompt,
                     reference_image_paths=refs,
                     shot_index=idx,
                     frame_desc=f"关键帧{i}(t={time_ratio:.1f})",
                     lock_prompt=image_lock_prompt(layout_lock=False),
                     force_multi_ref=True,
+                    operation_id=_op_id,
                 )
                 if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
                     img_out.data.save(str(kf_path))
@@ -5146,8 +5805,12 @@ async def _gen_keyframes_async(
                 shot["_last_failure_class"] = fail_cls
                 _emit_stage4_ledger(
                     shot, f"keyframe_{i}", attempt + 1,
-                    prompt_text=kf_desc_full, refs=refs,
+                    kf_index=i,
+                    prompt_text=attempt_prompt, refs=refs,
                     action_type="generate", defect_class=fail_cls, detail=str(e),
+                    operation_id=_op_id,
+                    model_id=_adapter_resolved_model_id(image_adapter, img_out),
+                    characters=characters,
                 )
                 _kf_logger.verbose(f"  [KEYFRAME] shot_{idx} keyframe_{i} 生成异常 ({fail_cls}): {e}")
                 if fail_cls in _NON_RETRYABLE_FAILURES:
@@ -5157,7 +5820,35 @@ async def _gen_keyframes_async(
                 break
 
             if _validate_frame(str(kf_path)):
+                try:
+                    _snap_info = _persist_frame_request_snapshot(
+                        kf_path,
+                        shot=shot,
+                        frame_kind="keyframe",
+                        prompt_text=attempt_prompt,
+                        refs=refs,
+                        image_adapter=image_adapter,
+                        img_out=img_out,
+                        operation_id=_op_id,
+                        kf_index=i,
+                    )
+                except Exception as _snap_exc:
+                    shot["_last_failure_class"] = FAILURE_INFRA_UNAVAILABLE
+                    kf_hash_path.unlink(missing_ok=True)
+                    _emit_stage4_ledger(
+                        shot, f"keyframe_{i}", attempt + 1,
+                        kf_index=i,
+                        prompt_text=attempt_prompt, refs=refs,
+                        action_type="generate", defect_class=FAILURE_INFRA_UNAVAILABLE,
+                        qc_verdict="snapshot_write_failed", detail=str(_snap_exc),
+                        operation_id=_op_id,
+                        model_id=_adapter_resolved_model_id(image_adapter, img_out),
+                        characters=characters,
+                    )
+                    _kf_logger.verbose(f"  [SNAPSHOT] shot_{idx} keyframe_{i} 请求快照写入失败，阻断 QC 放行: {_snap_exc}")
+                    break
                 shot[f"kf_{i}_desc_final"] = kf_desc_full
+                _cx = _shot_complexity_label(shot, characters, "keyframe", kf_index=i)
                 qc_critical = await _maybe_qc_frame(
                     shot, str(kf_path), "keyframe", characters,
                     empty_scene, prompt=kf_desc_full,
@@ -5172,9 +5863,15 @@ async def _gen_keyframes_async(
                     shot["_last_failure_class"] = FAILURE_QC_DISPUTE
                     _emit_stage4_ledger(
                         shot, f"keyframe_{i}", attempt + 1,
-                        prompt_text=kf_desc_full, refs=refs,
+                        kf_index=i,
+                        prompt_text=attempt_prompt, refs=refs,
                         action_type="generate", defect_class=FAILURE_QC_DISPUTE,
                         qc_verdict="qc_call_failed", detail=_qc_detail,
+                        operation_id=_snap_info["operation_id"],
+                        model_id=_snap_info["model_id"],
+                        request_digest=_snap_info["request_digest"],
+                        image_sha256=_snap_info["image_sha256"],
+                        shot_complexity=_cx,
                     )
                     kf_paths.append(str(kf_path))
                     break
@@ -5182,9 +5879,15 @@ async def _gen_keyframes_async(
                     shot["_last_failure_class"] = FAILURE_STOCHASTIC_MISS
                     _emit_stage4_ledger(
                         shot, f"keyframe_{i}", attempt + 1,
-                        prompt_text=kf_desc_full, refs=refs,
+                        kf_index=i,
+                        prompt_text=attempt_prompt, refs=refs,
                         action_type="generate", defect_class=FAILURE_STOCHASTIC_MISS,
                         qc_verdict=_qc_verdict, detail=_qc_detail,
+                        operation_id=_snap_info["operation_id"],
+                        model_id=_snap_info["model_id"],
+                        request_digest=_snap_info["request_digest"],
+                        image_sha256=_snap_info["image_sha256"],
+                        shot_complexity=_cx,
                     )
                     if await _try_qc_repair(image_adapter, shot, str(kf_path), "keyframe",
                                             characters, empty_scene, idx, kf_index=i):
@@ -5192,11 +5895,18 @@ async def _gen_keyframes_async(
                             kf_path, shot, "keyframe", characters,
                             qc_critical=False, qc_last=shot.get("_qc_last"), kf_index=i,
                         )
+                        from shared.image_qc import frame_identity as _fi
                         _emit_stage4_ledger(
                             shot, f"keyframe_{i}", attempt + 1,
-                            prompt_text=kf_desc_full, refs=refs,
+                            kf_index=i,
+                            prompt_text=attempt_prompt, refs=refs,
                             action_type="local_edit", defect_class="none",
                             qc_verdict=_rep_v, detail=_rep_d,
+                            operation_id=_snap_info["operation_id"],
+                            model_id=_adapter_resolved_model_id(image_adapter),
+                            request_digest=_snap_info["request_digest"],
+                            image_sha256=str(_fi(kf_path).get("sha256") or ""),
+                            shot_complexity=_cx,
                         )
                         kf_paths.append(str(kf_path))
                         break
@@ -5214,9 +5924,15 @@ async def _gen_keyframes_async(
                 shot["_last_failure_class"] = _df_cls
                 _emit_stage4_ledger(
                     shot, f"keyframe_{i}", attempt + 1,
-                    prompt_text=kf_desc_full, refs=refs,
+                    kf_index=i,
+                    prompt_text=attempt_prompt, refs=refs,
                     action_type="generate", defect_class=_df_cls,
                     qc_verdict=_qc_verdict, detail=_qc_detail,
+                    operation_id=_snap_info["operation_id"],
+                    model_id=_snap_info["model_id"],
+                    request_digest=_snap_info["request_digest"],
+                    image_sha256=_snap_info["image_sha256"],
+                    shot_complexity=_cx,
                 )
                 # v6.30：doodle 区域编辑 fallback（关键帧同首帧——精确空间约束
                 # prompt 调不到位时走 i2i+红框二修）。失败保留原图（graceful degradation）。

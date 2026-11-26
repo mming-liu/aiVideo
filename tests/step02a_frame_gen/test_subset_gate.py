@@ -36,7 +36,7 @@ def _png(path: Path):
 
 
 def _write_frames(work_dir: Path, idx: int, with_kf: bool = False, script=None):
-    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_frame_request_snapshot, write_sidecar
     from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
     d = work_dir / "shots" / str(idx)
     d.mkdir(parents=True, exist_ok=True)
@@ -45,17 +45,19 @@ def _write_frames(work_dir: Path, idx: int, with_kf: bool = False, script=None):
         shot = next((s for s in (script.get("shots") or []) if s.get("index") == idx), shot)
     for name, kind in ((FIRST_FRAME_FILENAME, "first_frame"), (LAST_FRAME_FILENAME, "last_frame")):
         _png(d / name)
+        write_frame_request_snapshot(d / name, shot=shot, frame_kind=kind, prompt="p", refs=[])
         write_sidecar(
             d / name,
             QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-            frame_meta=build_qc_frame_meta(shot, kind, []),
+            frame_meta=build_qc_frame_meta(shot, kind, [], frame_path=d / name),
         )
     if with_kf:
         _png(d / "keyframe_0.png")
+        write_frame_request_snapshot(d / "keyframe_0.png", shot=shot, frame_kind="keyframe", prompt="k0", refs=[], kf_index=0)
         write_sidecar(
             d / "keyframe_0.png",
             QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-            frame_meta=build_qc_frame_meta(shot, "keyframe", [], kf_index=0),
+            frame_meta=build_qc_frame_meta(shot, "keyframe", [], kf_index=0, frame_path=d / "keyframe_0.png"),
         )
 
 

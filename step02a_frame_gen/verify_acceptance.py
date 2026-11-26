@@ -53,7 +53,8 @@ def _qc_passed(
     }.get(role)
     if filename is None:
         return True
-    st = qc_state(shot_dir / filename, expected_frame=expected_frame)
+    fpath = shot_dir / filename
+    st = qc_state(fpath, expected_frame=expected_frame, require_request_snapshot=True)
     return st.get("status") == "qc_passed"
 
 
@@ -92,7 +93,12 @@ def _verify_shot(
     for role in _roles:
         if not _is_locked(shot_dir, role):
             problems.append("shot %s %s not locked" % (idx, role))
-        exp = build_qc_frame_meta(shot, role, characters) if isinstance(shot, dict) else None
+        exp = (
+            build_qc_frame_meta(shot, role, characters, frame_path=shot_dir / (
+                "first_frame.png" if role == "first_frame" else "last_frame.png"
+            ))
+            if isinstance(shot, dict) else None
+        )
         if not _qc_passed(shot_dir, role, expected_frame=exp):
             problems.append("shot %s %s QC not passed" % (idx, role))
     return problems
@@ -335,7 +341,7 @@ def recheck_failed_qc(
         for fkind, kf_i, fpath in candidates:
             if not fpath.is_file():
                 continue
-            meta = build_qc_frame_meta(shot, fkind, chars, kf_index=kf_i)
+            meta = build_qc_frame_meta(shot, fkind, chars, kf_index=kf_i, frame_path=fpath)
             before = qc_state(fpath, expected_frame=meta)
             if str(before.get("status") or "") not in target_statuses:
                 counts["skipped"] += 1
@@ -381,6 +387,7 @@ def recheck_failed_qc(
             )
             _emit_stage4_ledger(
                 shot, role, 0,
+                kf_index=kf_i if fkind == "keyframe" else None,
                 action_type="qc_recheck",
                 defect_class=defect_cls,
                 qc_verdict=after_status,

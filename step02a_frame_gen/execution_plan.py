@@ -218,6 +218,7 @@ def _frame_refs(
     data = _collect_frame_refs_for_shot(
         unit, characters, limit=12,
         for_frame=for_frame, return_buckets=True, kf_index=kf_index,
+        apply_head_crop=False,
     )
     shot_dir = shot_work_dir(unit.get("index", 0))
     buckets = list(data["buckets"])
@@ -373,6 +374,24 @@ def _frame_entry(unit: dict, characters: list[dict], kind: str, model: str,
     if prompt_error:
         unresolved.append({"code": "frame_prompt_unavailable", "path": f"shots[{idx}].{kind}",
                            "message": prompt_error})
+    frame_advisories: list[dict] = []
+    try:
+        from shared.prompt_facts import project_frame_facts
+        _fk = {"ff": "first_frame", "lf": "last_frame", "kf": "keyframe"}[kind]
+        _proj = project_frame_facts(unit, _fk, characters, kf_index=kf_index)
+        for adv in (_proj.get("spec_advisories") or []):
+            if isinstance(adv, dict):
+                frame_advisories.append({
+                    "code": str(adv.get("code") or "unverified_relation"),
+                    "severity": "advisory",
+                    "blocking": False,
+                    "shot_index": idx,
+                    "frame": label,
+                    "entity": adv.get("entity"),
+                    "message": adv.get("message") or adv.get("token") or "",
+                })
+    except Exception:
+        pass
     return {
         "shot_index": idx,
         "frame": label,
@@ -388,6 +407,7 @@ def _frame_entry(unit: dict, characters: list[dict], kind: str, model: str,
         "visible_props": _visible_props(unit),
         "status": "blocked" if unresolved else "planned",
         "unresolved": unresolved,
+        "advisories": frame_advisories,
         "pending_materialization": pending_materialization,
     }
 
@@ -503,6 +523,9 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
                 frame["status"] = "blocked"
             entry["frames"].append(frame)
             all_frames.append(frame)
+        entry["advisories"] = [
+            adv for f in entry["frames"] for adv in (f.get("advisories") or [])
+        ]
         shot_entries.append(entry)
 
     # 2026-11-12（复核 P4）：只有**阻塞级**语义 finding 才把计划判成 blocked。
@@ -511,6 +534,9 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
     _semantic_blocking = [f for f in semantic
                           if str(f.get("severity") or "reject").strip().lower()
                           != "advisory"]
+    plan_advisories = [
+        adv for s in shot_entries for adv in (s.get("advisories") or [])
+    ]
     plan = {
         "schema": VISUAL_PLAN_SCHEMA,
         "stage": stage,
@@ -525,6 +551,7 @@ def build_visual_plan(script: dict, *, scope: dict, stage: str = VISUAL_PLAN_STA
             "binding": binding_issues,
             "semantic": semantic,
             "preflight": preflight,
+            "advisories": plan_advisories,
             "unresolved_gate": unresolved_gate_issues(binding),
         },
         "unresolved": unresolved,
@@ -893,9 +920,15 @@ def check_pre_shot_asset_gate(
     only_indices: set[int] | None = None,
     frames: set[str] | None = None,
 ) -> dict:
-    """G3 Pre-Shot Asset Gate: read-only check for style_anchor and named character portraits."""
+    """G3/F5 Pre-Shot Asset Gate: read-only check unified with portrait collector."""
     from shared.paths import style_bank_dir, vimax_working_dir, characters_bank_dir
-    from shared.vimax_bridge import _resolve_style_anchor_path, _units_for_indices
+    from shared.vimax_bridge import (
+        _frame_spec_closeup,
+        _resolve_style_anchor_path,
+        _units_for_indices,
+        resolve_character_portrait_assets,
+    )
+    from shared.character_bank import CharacterBank
     from shared.prompt_facts import project_frame_facts
 
     chars = list(script.get("characters") or []) if isinstance(script, dict) else []
@@ -909,21 +942,14 @@ def check_pre_shot_asset_gate(
     reg: dict = {}
     if reg_path.is_file():
         try:
-            reg = json.loads(reg_path.read_text(encoding="utf-8"))
+            loaded = json.loads(reg_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                reg = loaded
         except Exception:
             reg = {}
+    bank = CharacterBank()
+    bank.load()
     bank_dir = characters_bank_dir()
-
-    def _has_portrait(name: str) -> bool:
-        views = reg.get(name) if isinstance(reg, dict) else None
-        if isinstance(views, dict):
-            for v in ("front", "base", "side", "back", "face"):
-                entry = views.get(v)
-                p = entry.get("path", "") if isinstance(entry, dict) else ""
-                if p and Path(p).is_file():
-                    return True
-        cdir = bank_dir / name
-        return any((cdir / f"{v}.png").is_file() for v in ("base", "front", "side", "face"))
 
     all_shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
     idx_set = only_indices if only_indices is not None else {
@@ -932,7 +958,7 @@ def check_pre_shot_asset_gate(
     units = _units_for_indices(script, idx_set) if idx_set else []
     kinds = _frame_kinds(frames)
     missing_portraits: list[dict] = []
-    seen_missing: set[tuple[int, str]] = set()
+    seen_missing: set[tuple[int, str, str]] = set()
     for unit in units:
         s_idx = int(unit.get("index", 0))
         for k in kinds:
@@ -943,20 +969,32 @@ def check_pre_shot_asset_gate(
                 kf_indices = [None]
             for kf_i in kf_indices:
                 proj = project_frame_facts(unit, fk, chars, kf_index=kf_i)
+                closeup = _frame_spec_closeup(unit, "keyframe" if fk == "keyframe" else k, kf_i)
                 for ent in (proj.get("entities") or []):
                     nm = _text(ent.get("name"))
                     if not nm or nm in _GENERIC_CROWD_ROLES:
                         continue
                     if known_named and nm not in known_named:
                         continue
-                    if not _has_portrait(nm) and (s_idx, nm) not in seen_missing:
-                        seen_missing.add((s_idx, nm))
-                        missing_portraits.append({
-                            "shot_index": s_idx,
-                            "frame": k,
-                            "character": nm,
-                            "reason": "portrait_not_registered",
-                        })
+                    res = resolve_character_portrait_assets(
+                        nm,
+                        characters=chars,
+                        reg=reg,
+                        bank=bank,
+                        bank_dir=bank_dir,
+                        closeup=closeup,
+                    )
+                    if not res.get("selected_path") or res.get("missing_reason"):
+                        reason = str(res.get("missing_reason") or "portrait_not_registered")
+                        dedup_key = (s_idx, nm, reason)
+                        if dedup_key not in seen_missing:
+                            seen_missing.add(dedup_key)
+                            missing_portraits.append({
+                                "shot_index": s_idx,
+                                "frame": k,
+                                "character": nm,
+                                "reason": reason,
+                            })
 
     issues: list[dict] = []
     if not style_anchor:
@@ -970,9 +1008,10 @@ def check_pre_shot_asset_gate(
         issues.append({
             "code": "character_portrait_missing",
             "severity": "reject",
+            "reason": item["reason"],
             "path": f"shots[{item['shot_index']}].{item['frame']}",
             "character": item["character"],
-            "message": f"镜头 {item['shot_index']} 出镜角色「{item['character']}」尚未完成肖像建库/锁定",
+            "message": f"镜头 {item['shot_index']} 出镜角色「{item['character']}」肖像不可用（{item['reason']}）",
         })
     status = "blocked" if missing_portraits else "ok"
     return {

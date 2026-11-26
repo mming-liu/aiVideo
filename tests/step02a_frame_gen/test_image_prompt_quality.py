@@ -59,7 +59,7 @@ def test_image_quality_clean(monkeypatch,tmp_path):
 
 def test_image_product_acceptance_uses_root_keyframe_paths(monkeypatch, tmp_path):
     import step02a_frame_gen.image_prompt_quality as q
-    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_frame_request_snapshot, write_sidecar
 
     work = tmp_path / "working"
     shot_dir = work / "shots" / "1"
@@ -72,10 +72,11 @@ def test_image_product_acceptance_uses_root_keyframe_paths(monkeypatch, tmp_path
                               ("keyframe_0.png", "keyframe", 0)):
         fp = shot_dir / fname
         Image.new("RGB", (8, 8), "white").save(fp)
+        write_frame_request_snapshot(fp, shot=shot, frame_kind=kind, prompt="k", refs=[], kf_index=kf_i)
         write_sidecar(
             fp,
             QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-            frame_meta=build_qc_frame_meta(shot, kind, [], kf_index=kf_i),
+            frame_meta=build_qc_frame_meta(shot, kind, [], kf_index=kf_i, frame_path=fp),
         )
     monkeypatch.setattr(q, "chapter_dir", lambda: tmp_path)
     # 固定「当前视频模型消费关键帧」，避免断言随 .env 的 VIDEO_PROVIDER/型号漂移

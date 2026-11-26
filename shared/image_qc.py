@@ -16,6 +16,7 @@ sidecar 契约（与 step02_video_gen/submit_poll.py 的 _check_keyframe_halluci
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import time
@@ -164,31 +165,47 @@ def _active_style_head() -> str:
 
 def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
                     empty_scene: bool = False,
-                    kf_index: int | None = None) -> str:
+                    kf_index: int | None = None,
+                    *,
+                    frame_path: str | Path | None = None,
+                    request_snapshot: dict | None = None) -> str:
     """构建质检 prompt（中文，要求视觉模型只返回严格 JSON）.
 
     prompt 不含字面双引号或 $（PowerShell -File 参数引号安全），中文安全。
 
     v1.1：新增 prompt_semantics 类别——用「实际生成图片的最终 prompt」与图片
     内容比对，检测语义偏差（发色/朝向/手持物/姿势），而不只是生成畸形。
-    最终 prompt 来自 shot["ff_desc_final"]/["lf_desc_final"]（生成处挂载），
-    未挂载时回退到 shot["ff_desc"]/["lf_desc"]。
+    F1：优先读取落盘的 request_snapshot["prompt"]，确保重启可重建且不依赖内存字段。
+    F2：消费与生图同源的 frame_text_spec，区分允许的剧情文字与额外题字/水印。
     """
     # 场景 / 主体
     scene = shot.get("scene") or shot.get("location") or ""
     subject = shot.get("main_subject") or ""
-    # 实际生成图片的最终 prompt（生成处挂载），优先于原始 desc
-    desc = shot.get("ff_desc_final") or shot.get("ff_desc") or shot.get("lf_desc") or shot.get("motion_desc") or ""
+    snap = request_snapshot if isinstance(request_snapshot, dict) else (
+        read_frame_request_snapshot(frame_path) if frame_path else None
+    )
+    snap_prompt = str((snap or {}).get("prompt") or "").strip() if isinstance(snap, dict) else ""
+    # 实际生成图片的最终 prompt（落盘请求快照 > 运行时挂载 > 原始 desc）
+    desc = (
+        snap_prompt
+        or shot.get("ff_desc_final") or shot.get("ff_desc")
+        or shot.get("lf_desc") or shot.get("motion_desc") or ""
+    )
     if frame_kind == "last_frame":
-        desc = shot.get("lf_desc_final") or shot.get("lf_desc") or shot.get("ff_desc") or shot.get("motion_desc") or desc
+        desc = (
+            snap_prompt
+            or shot.get("lf_desc_final") or shot.get("lf_desc")
+            or shot.get("ff_desc") or shot.get("motion_desc") or desc
+        )
     elif frame_kind == "keyframe":
-        # 关键帧：用本帧实际最终 prompt 核对（kf_{i}_desc_final 由 _gen_keyframes_async 挂载）。
-        # 2026-11-08：此前固定取 kf_0，KF1/2 的 QC 语义核对会拿 KF0 的 prompt。
         _kf_final = (shot.get(f"kf_{kf_index}_desc_final")
                      if kf_index is not None else None)
-        desc = (_kf_final or shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
-                or shot.get("ff_desc_final") or shot.get("ff_desc")
-                or shot.get("lf_desc") or shot.get("motion_desc") or desc)
+        desc = (
+            snap_prompt
+            or _kf_final or shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
+            or shot.get("ff_desc_final") or shot.get("ff_desc")
+            or shot.get("lf_desc") or shot.get("motion_desc") or desc
+        )
     # 期望道具/关键词
     core_keywords = shot.get("core_keywords") or []
     if isinstance(core_keywords, list):
@@ -196,20 +213,61 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
     chars = _shot_characters(shot, characters, frame_kind=frame_kind,
                              kf_index=kf_index)
 
+    from shared.prompt_facts import extract_frame_text_spec
+    text_spec = extract_frame_text_spec(shot, frame_kind, kf_index=kf_index)
+    text_mode = str(text_spec.get("mode") or "conservative")
+    allowed_texts = [a for a in (text_spec.get("allowed_texts") or []) if isinstance(a, dict)]
+    if allowed_texts:
+        allowed_desc = "；".join(
+            f"{a.get('carrier') or '载体'}（{a.get('position') or '画面'}）：“{a.get('exact_text')}”"
+            for a in allowed_texts[:4]
+        )
+    elif text_mode == "forbid_all":
+        allowed_desc = "严禁任何文字"
+    else:
+        allowed_desc = "无指定剧情文字（自然场景自带标识不作额外强禁，严禁额外题字/字幕/水印）"
+
+    if text_mode == "explicit_diegetic" and allowed_texts:
+        text_rule_item = (
+            f"4. text_watermark 允许剧情载体上的指定文字（{allowed_desc}）；"
+            "仅当画面其它区域（尤其天空、水面、背景空白处、角落）出现额外的非剧情文字、书法标题、地名大字、乱码牌匾、字幕、水印或 logo 时判 critical"
+        )
+        text_json_rule = (
+            "category 只能从以上列表选；若出现剧情指定载体文字之外的任何额外文字/书法标题/地名大字/字幕/水印/logo，"
+            "has_unwanted_text 必须为 true 且附带 text_watermark critical 条目；剧情载体上合法文字不得误判为 text_watermark；has_hallucination 为 true 当且仅当存在至少一个 critical。"
+        )
+    elif text_mode == "forbid_all":
+        text_rule_item = (
+            "4. text_watermark 画面任意区域（含天空、水面、背景或角落）出现任何文字、书法标题、地名大字、牌匾乱码、水印或 logo"
+        )
+        text_json_rule = (
+            "category 只能从以上列表选；若画面出现任何文字/书法标题/地名大字/字幕/水印/logo，"
+            "has_unwanted_text 必须为 true 且附带 text_watermark critical 条目；has_hallucination 为 true 当且仅当存在至少一个 critical。"
+        )
+    else:
+        text_rule_item = (
+            "4. text_watermark 画面出现非场景自然物体的额外文字，尤其天空、水面、角落的书法标题、地名大字、字幕、水印或无关 logo"
+        )
+        text_json_rule = (
+            "category 只能从以上列表选；若画面出现任何非剧情需要的额外地名大字/天空或角落书法标题/字幕/水印/logo，"
+            "has_unwanted_text 必须为 true 且附带 text_watermark critical 条目；has_hallucination 为 true 当且仅当存在至少一个 critical。"
+        )
+
     lines = [
-        "你是专业图片质检员，检查这张古风分镜图的视觉问题。",
+        "你是专业图片质检员，检查这张分镜图的视觉问题。",
         "本镜预期内容：",
         f"场景：{_truncate(scene or '未指定', 80)}",
         f"主体：{_truncate(subject or '未指定', 80)}",
         f"应出现人物：{chars}",
         f"应出现道具或关键词：{_truncate(core_keywords or '无', 100)}",
+        f"剧情文字合同：{_truncate(allowed_desc, 160)}",
         f"画面描述：{_truncate(desc, 500)}",
         "",
         "检查以下问题类别，只看图里实际存在、明显的问题，不要吹毛求疵：",
         "1. face_consistency 人物五官/脸型异常、扭曲、模糊不清",
         "2. body_deformity 肢体畸形（多指/少指/扭曲/关节错位/比例失调）",
         "3. unexpected_object 多余物体、漂浮/穿透/半透明等违反物理逻辑的现象",
-        "4. text_watermark 画面任意区域（含天空、水面、背景或角落）出现任何非剧情要求的文字、书法标题、地名大字、牌匾乱码、水印或 logo",
+        text_rule_item,
         "5. subject_consistency 画面主体人物/场景/道具与预期明显不符",
     ]
     if not empty_scene:
@@ -293,7 +351,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         "",
         "只返回一个 JSON 对象，不要任何其他内容：",
         '{"has_hallucination":true或false,"has_unwanted_text":true或false,"issues":[{"category":"类别","description":"描述","severity":"critical或warning"}]}',
-        "category 只能从以上列表选；若画面出现任何非剧情要求的文字/书法标题/地名大字/水印/logo，has_unwanted_text 必须为 true 且附带 text_watermark critical 条目；has_hallucination 为 true 当且仅当存在至少一个 critical。",
+        text_json_rule,
     ])
     return "\n".join(lines)
 
@@ -455,8 +513,8 @@ def sidecar_path(frame_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 # QC 生命周期（U4）：结果必须绑定**实际检查过的那张图**
 # ---------------------------------------------------------------------------
-#: 统一状态。下游只认这五个值，has_hallucination 仅作兼容字段。
-QC_STATUSES = ("qc_passed", "qc_rejected", "qc_call_failed", "qc_not_run", "qc_stale")
+#: 统一状态。下游只认这六个值，has_hallucination 仅作兼容字段。
+QC_STATUSES = ("qc_passed", "qc_rejected", "qc_call_failed", "qc_not_run", "qc_stale", "qc_incomplete")
 
 #: 「结果有效且已终局」——不需要重跑。
 _SETTLED = ("qc_passed", "qc_rejected")
@@ -495,7 +553,244 @@ def read_sidecar(frame_path: str | Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-QC_CONTRACT_VERSION = 2
+QC_CONTRACT_VERSION = 3
+QC_PROMPT_VERSION = "2026-11-26.f1"
+REQUEST_SNAPSHOT_SCHEMA = 1
+
+
+def current_qc_rule_version() -> str:
+    """Canonical QC rule & prompt version governing admission validity."""
+    sem = os.getenv("QC_SEMANTICS_CRITICAL", "0").strip()
+    tol = os.getenv("QC_PERSON_TOLERANCE", "0").strip()
+    wc = "1" if QC_WRITE_CRITICAL else "0"
+    return f"c{QC_CONTRACT_VERSION}|p:{QC_PROMPT_VERSION}|sem:{sem}|tol:{tol}|wc:{wc}"
+
+
+def _canon_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def request_snapshot_path(frame_path: str | Path) -> Path:
+    """Generation request snapshot sidecar path: <frame_stem>_request.json."""
+    p = Path(frame_path)
+    return p.with_name(p.stem + "_request.json")
+
+
+def normalize_effective_refs(
+    refs: list | None = None,
+    ref_details: list[dict] | None = None,
+) -> list[dict]:
+    """Normalize effective reference assets preserving exact submission order."""
+    if isinstance(ref_details, list) and ref_details:
+        out: list[dict] = []
+        for entry in ref_details:
+            if not isinstance(entry, dict):
+                continue
+            rp = str(entry.get("path") or "").strip()
+            if not rp:
+                continue
+            sha = str(entry.get("sha256") or "").strip() or None
+            if sha is None and Path(rp).is_file():
+                sha = _sha256_file(Path(rp)) or None
+            out.append({
+                "path": rp,
+                "sha256": sha,
+                "kind": str(entry.get("kind") or "ref"),
+                "entity": str(entry.get("entity") or ""),
+            })
+        return out
+    out = []
+    for raw in (refs or []):
+        rp = str(raw or "").strip()
+        if not rp:
+            continue
+        sha = _sha256_file(Path(rp)) if Path(rp).is_file() else None
+        kind = "ref"
+        entity = ""
+        try:
+            from shared.ref_compose import ref_identity
+            ident = ref_identity(rp)
+            kind = str(ident.get("kind") or "ref")
+            entity = str(ident.get("entity") or "")
+        except Exception:
+            pass
+        out.append({
+            "path": rp,
+            "sha256": sha or None,
+            "kind": kind,
+            "entity": entity,
+        })
+    return out
+
+
+def compute_request_snapshot_digests(
+    shot_id,
+    frame_kind: str,
+    kf_index: int | None,
+    prompt: str,
+    effective_refs: list[dict],
+) -> dict[str, str]:
+    """Compute independent prompt_sha256, refs_digest, and request_digest."""
+    prompt_sha = hashlib.sha256(str(prompt or "").encode("utf-8")).hexdigest()
+    norm_refs = [
+        {
+            "path": str(r.get("path") or ""),
+            "sha256": str(r.get("sha256") or "") or None,
+            "kind": str(r.get("kind") or "ref"),
+            "entity": str(r.get("entity") or ""),
+        }
+        for r in (effective_refs or [])
+        if isinstance(r, dict)
+    ]
+    refs_digest = hashlib.sha256(_canon_json(norm_refs).encode("utf-8")).hexdigest()
+    req_digest = hashlib.sha256(_canon_json({
+        "schema": REQUEST_SNAPSHOT_SCHEMA,
+        "shot_id": shot_id,
+        "frame_kind": str(frame_kind or ""),
+        "kf_index": kf_index,
+        "prompt_sha256": prompt_sha,
+        "refs_digest": refs_digest,
+    }).encode("utf-8")).hexdigest()
+    return {
+        "prompt_sha256": prompt_sha,
+        "refs_digest": refs_digest,
+        "request_digest": req_digest,
+    }
+
+
+def write_frame_request_snapshot(
+    frame_path: str | Path,
+    *,
+    shot: dict | None,
+    frame_kind: str,
+    prompt: str,
+    refs: list | None = None,
+    kf_index: int | None = None,
+    model_id: str = "",
+    provider: str = "",
+    operation_id: str = "",
+    ref_details: list[dict] | None = None,
+    extra: dict | None = None,
+) -> Path:
+    """Persist actual generation request + effective references atomically beside the frame."""
+    p = Path(frame_path)
+    snap_path = request_snapshot_path(p)
+    shot_id = shot.get("index") if isinstance(shot, dict) else None
+    eff_refs = normalize_effective_refs(refs, ref_details=ref_details)
+    digests = compute_request_snapshot_digests(shot_id, frame_kind, kf_index, prompt, eff_refs)
+    payload = {
+        "schema_version": REQUEST_SNAPSHOT_SCHEMA,
+        "shot_id": shot_id,
+        "frame_kind": frame_kind,
+        "kf_index": kf_index,
+        "prompt": str(prompt or ""),
+        "effective_refs": eff_refs,
+        "prompt_sha256": digests["prompt_sha256"],
+        "refs_digest": digests["refs_digest"],
+        "request_digest": digests["request_digest"],
+        "model_id": str(model_id or ""),
+        "provider": str(provider or ""),
+        "operation_id": str(operation_id or ""),
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            payload.setdefault(k, v)
+    snap_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = snap_path.with_name(snap_path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as _f:
+            _f.write(json.dumps(payload, ensure_ascii=False, indent=2))
+        os.replace(tmp, snap_path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    return snap_path
+
+
+def read_frame_request_snapshot(frame_path: str | Path) -> dict | None:
+    try:
+        data = json.loads(request_snapshot_path(Path(frame_path)).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def verify_frame_request_snapshot(
+    frame_path: str | Path,
+    *,
+    shot_id=None,
+    frame_kind: str = "",
+    kf_index: int | None = None,
+    verify_refs: bool = True,
+) -> dict:
+    """Independently load and verify the on-disk request snapshot digest & integrity."""
+    snap_path = request_snapshot_path(Path(frame_path))
+    if not snap_path.is_file():
+        return {"ok": False, "reason": "request_snapshot_missing", "data": None}
+    try:
+        data = json.loads(snap_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"ok": False, "reason": "request_snapshot_corrupt", "data": None}
+    if not isinstance(data, dict):
+        return {"ok": False, "reason": "request_snapshot_corrupt", "data": None}
+    if "prompt" not in data or not isinstance(data.get("effective_refs"), list):
+        return {"ok": False, "reason": "request_snapshot_incomplete", "data": data}
+    if shot_id is not None and data.get("shot_id") != shot_id:
+        return {"ok": False, "reason": "request_snapshot_shot_mismatch", "data": data}
+    if frame_kind and str(data.get("frame_kind") or "") != frame_kind:
+        return {"ok": False, "reason": "request_snapshot_frame_mismatch", "data": data}
+    if frame_kind == "keyframe" and kf_index is not None and data.get("kf_index") != kf_index:
+        return {"ok": False, "reason": "request_snapshot_kf_mismatch", "data": data}
+
+    recomputed = compute_request_snapshot_digests(
+        data.get("shot_id"),
+        str(data.get("frame_kind") or ""),
+        data.get("kf_index"),
+        str(data.get("prompt") or ""),
+        data.get("effective_refs") or [],
+    )
+    if (
+        str(data.get("prompt_sha256") or "") != recomputed["prompt_sha256"]
+        or str(data.get("refs_digest") or "") != recomputed["refs_digest"]
+        or str(data.get("request_digest") or "") != recomputed["request_digest"]
+    ):
+        return {"ok": False, "reason": "request_snapshot_tampered", "data": data}
+    if verify_refs:
+        for ref_entry in (data.get("effective_refs") or []):
+            if not isinstance(ref_entry, dict):
+                continue
+            rp = str(ref_entry.get("path") or "").strip()
+            expected_ref_sha = str(ref_entry.get("sha256") or "").strip()
+            if not rp or not expected_ref_sha:
+                continue
+            ref_path = Path(rp)
+            if not ref_path.is_file():
+                return {
+                    "ok": False,
+                    "reason": "request_ref_missing",
+                    "ref_path": rp,
+                    "data": data,
+                }
+            actual_ref_sha = _sha256_file(ref_path)
+            if actual_ref_sha != expected_ref_sha:
+                return {
+                    "ok": False,
+                    "reason": "request_ref_changed",
+                    "ref_path": rp,
+                    "expected_sha256": expected_ref_sha,
+                    "actual_sha256": actual_ref_sha,
+                    "data": data,
+                }
+    return {
+        "ok": True,
+        "reason": "",
+        "data": data,
+        **recomputed,
+    }
 
 
 def frame_qc_contract_digest(
@@ -504,10 +799,9 @@ def frame_qc_contract_digest(
     characters: list | None = None,
     kf_index: int | None = None,
 ) -> str:
-    """Compute a deterministic contract digest for (shot, frame_kind, kf_index)."""
+    """Compute a deterministic content contract digest for (shot, frame_kind, kf_index)."""
     if not isinstance(shot, dict):
         return ""
-    import hashlib as _hashlib
 
     base_desc = ""
     if frame_kind == "first_frame":
@@ -519,18 +813,44 @@ def frame_qc_contract_digest(
         if 0 <= kf_index < len(kfs) and isinstance(kfs[kf_index], dict):
             base_desc = str(kfs[kf_index].get("desc") or "").strip()
 
+    raw_kws = shot.get("core_keywords") or []
+    if isinstance(raw_kws, list):
+        norm_kws = [str(k).strip() for k in raw_kws if str(k or "").strip()]
+    else:
+        norm_kws = [str(raw_kws).strip()] if str(raw_kws or "").strip() else []
+
     entities_sig = []
+    text_spec_sig: dict = {
+        "mode": "conservative",
+        "allowed_texts": [],
+        "unconstrained_carriers": [],
+    }
     try:
-        from shared.prompt_facts import project_frame_facts
+        from shared.prompt_facts import extract_frame_text_spec, project_frame_facts
         proj = project_frame_facts(shot, frame_kind, characters, kf_index=kf_index)
         for ent in (proj.get("entities") or []):
             entities_sig.append({
                 "name": ent.get("name"),
+                "character_id": ent.get("character_id"),
                 "identity": ent.get("identity"),
+                "dynamic_bank": ent.get("dynamic_bank"),
                 "current": ent.get("current"),
             })
+        ts = extract_frame_text_spec(shot, frame_kind, kf_index=kf_index)
+        text_spec_sig = {
+            "mode": str(ts.get("mode") or "conservative"),
+            "allowed_texts": list(ts.get("allowed_texts") or []),
+            "unconstrained_carriers": list(ts.get("unconstrained_carriers") or []),
+        }
     except Exception:
         entities_sig = []
+
+    empty_flag = False
+    try:
+        from shared.style_prefix import is_empty_scene
+        empty_flag = bool(is_empty_scene(shot, characters or []))
+    except Exception:
+        empty_flag = False
 
     canonical = json.dumps(
         {
@@ -538,13 +858,19 @@ def frame_qc_contract_digest(
             "shot_index": shot.get("index"),
             "frame_kind": frame_kind,
             "kf_index": kf_index,
+            "scene": str(shot.get("scene") or "").strip(),
+            "location": str(shot.get("location") or "").strip(),
+            "main_subject": str(shot.get("main_subject") or "").strip(),
+            "core_keywords": norm_kws,
+            "empty_scene": empty_flag,
+            "frame_text_spec": text_spec_sig,
             "base_desc": base_desc,
             "entities": entities_sig,
         },
         ensure_ascii=False,
         sort_keys=True,
     )
-    return _hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def build_qc_frame_meta(
@@ -552,18 +878,41 @@ def build_qc_frame_meta(
     frame_kind: str,
     characters: list | None = None,
     kf_index: int | None = None,
+    *,
+    frame_path: str | Path | None = None,
+    request_snapshot: dict | None = None,
 ) -> dict:
-    """Build canonical frame binding metadata stored in QC sidecars."""
+    """Build canonical triple-binding frame metadata stored in QC sidecars."""
     shot_id = shot.get("index") if isinstance(shot, dict) else None
-    return {
+    meta: dict = {
         "shot_id": shot_id,
         "frame_kind": frame_kind,
         "kf_index": kf_index,
         "rule_version": QC_CONTRACT_VERSION,
+        "qc_rule_version": current_qc_rule_version(),
         "contract_digest": frame_qc_contract_digest(
             shot, frame_kind, characters, kf_index=kf_index,
         ),
     }
+    if request_snapshot is not None:
+        if isinstance(request_snapshot, dict):
+            recomputed = compute_request_snapshot_digests(
+                shot_id, frame_kind, kf_index,
+                str(request_snapshot.get("prompt") or ""),
+                normalize_effective_refs(
+                    request_snapshot.get("effective_refs") or request_snapshot.get("refs") or []
+                ),
+            )
+            meta.update(recomputed)
+    elif frame_path is not None:
+        ver = verify_frame_request_snapshot(
+            frame_path, shot_id=shot_id, frame_kind=frame_kind, kf_index=kf_index,
+        )
+        if ver.get("ok"):
+            meta["request_digest"] = ver["request_digest"]
+            meta["prompt_sha256"] = ver["prompt_sha256"]
+            meta["refs_digest"] = ver["refs_digest"]
+    return meta
 
 
 def _call_qc_state_compat(frame_path: str | Path, expected_frame: dict | None) -> dict:
@@ -577,8 +926,9 @@ def qc_state(
     frame_path: str | Path,
     *,
     expected_frame: dict | None = None,
+    require_request_snapshot: bool = False,
 ) -> dict:
-    """当前图片的 QC 状态（**按内容摘要 + 帧契约**判定结果是否属于这张图）."""
+    """当前图片的 QC 状态（**三元组绑定**判定结果是否属于这张图、该合同与该生成请求）."""
     image = frame_identity(frame_path)
     if not image["exists"]:
         return {"status": "qc_not_run", "reason": "image_missing",
@@ -598,12 +948,16 @@ def qc_state(
     if status not in QC_STATUSES:
         return {"status": "qc_stale", "reason": "status_missing",
                 "image": image, "data": data}
+    verdict_detail = str(data.get("verdict_detail") or "")
+    if status == "qc_passed" and verdict_detail == "critical_reject":
+        return {"status": "qc_stale", "reason": "verdict_inconsistent",
+                "image": image, "data": data}
     if isinstance(expected_frame, dict) and expected_frame:
         bound_frame = data.get("frame") if isinstance(data.get("frame"), dict) else {}
         if not bound_frame:
             return {"status": "qc_stale", "reason": "frame_contract_unbound",
                     "image": image, "data": data}
-        for key in ("shot_id", "frame_kind", "kf_index", "rule_version", "contract_digest"):
+        for key in ("shot_id", "frame_kind", "kf_index", "rule_version", "qc_rule_version", "contract_digest"):
             if key not in expected_frame:
                 continue
             exp_val = expected_frame.get(key)
@@ -612,6 +966,37 @@ def qc_state(
             if bound_frame.get(key) != exp_val:
                 return {"status": "qc_stale", "reason": f"frame_{key}_mismatch",
                         "image": image, "data": data}
+    else:
+        bound_frame = data.get("frame") if isinstance(data.get("frame"), dict) else {}
+
+    need_req = bool(require_request_snapshot) or (
+        isinstance(expected_frame, dict) and bool(expected_frame.get("request_digest"))
+    )
+    if need_req and status != "qc_call_failed":
+        exp_sid = expected_frame.get("shot_id") if isinstance(expected_frame, dict) else bound_frame.get("shot_id")
+        exp_fk = str((expected_frame or bound_frame).get("frame_kind") or "")
+        exp_kfi = (expected_frame or bound_frame).get("kf_index")
+        snap_ver = verify_frame_request_snapshot(
+            frame_path, shot_id=exp_sid, frame_kind=exp_fk, kf_index=exp_kfi,
+        )
+        if not snap_ver.get("ok"):
+            snap_reason = str(snap_ver.get("reason") or "request_snapshot_missing")
+            snap_status = "qc_stale" if snap_reason == "request_ref_changed" else "qc_incomplete"
+            return {"status": snap_status, "reason": snap_reason,
+                    "image": image, "data": data}
+        for rkey in ("request_digest", "prompt_sha256", "refs_digest"):
+            bound_rval = str(bound_frame.get(rkey) or "")
+            if not bound_rval:
+                return {"status": "qc_incomplete", "reason": f"frame_{rkey}_unbound",
+                        "image": image, "data": data}
+            if bound_rval != str(snap_ver.get(rkey) or ""):
+                return {"status": "qc_stale", "reason": f"frame_{rkey}_mismatch",
+                        "image": image, "data": data}
+            if isinstance(expected_frame, dict) and expected_frame.get(rkey):
+                if str(expected_frame.get(rkey)) != bound_rval:
+                    return {"status": "qc_stale", "reason": f"expected_{rkey}_mismatch",
+                            "image": image, "data": data}
+
     return {"status": status, "reason": "", "image": image, "data": data}
 
 
@@ -709,8 +1094,16 @@ def write_sidecar(frame_path: Path, result: QcResult, *,
     }
     sc.parent.mkdir(parents=True, exist_ok=True)
     tmp = sc.with_name(sc.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, sc)
+    try:
+        with open(tmp, "w", encoding="utf-8") as _f:
+            _f.write(json.dumps(data, ensure_ascii=False, indent=2))
+        os.replace(tmp, sc)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
     _emit_qc_event(final_status, frame_path, image,
                    reason=reason or str(result.error or "")[:120],
                    issues=len(issues_data))
@@ -726,11 +1119,15 @@ def _semantic_qc(frame_path: str | Path, prompt: str | None, shot: dict | None,
                  kf_index: int | None) -> QcResult:
     """整体语义质检：画面 vs 实际生成 prompt。失败抛异常（由 maybe_qc_sync 记 ok=False）.
 
-    调用方传了实际生成 prompt 就用它；空串/纯空白视为未提供，按本帧 spec 重建
-    （P4：空 prompt 会让模型无物可比，clean 实为「没查」）。
+    调用方传了实际生成 prompt 就直接采用；未传时按本帧内容合同 + 磁盘请求快照重建。
     """
-    qc_prompt = prompt if (prompt and str(prompt).strip()) else build_qc_prompt(
-        shot or {}, frame_kind, characters, empty_scene, kf_index=kf_index)
+    if prompt and str(prompt).strip():
+        qc_prompt = str(prompt)
+    else:
+        qc_prompt = build_qc_prompt(
+            shot or {}, frame_kind, characters, empty_scene, kf_index=kf_index,
+            frame_path=frame_path,
+        )
     return parse_verdict(_opencode_vision_chat(frame_path, qc_prompt))
 
 
@@ -1902,6 +2299,37 @@ _UNWANTED_TEXT_QUESTION = {
 }
 
 
+def _build_text_watermark_question(text_spec: dict | None) -> dict:
+    """Build layer-2 text_watermark binary question from unified frame_text_spec."""
+    spec = text_spec if isinstance(text_spec, dict) else {}
+    mode = str(spec.get("mode") or "conservative")
+    allowed = [a for a in (spec.get("allowed_texts") or []) if isinstance(a, dict) and a.get("exact_text")]
+    if mode == "forbid_all":
+        return dict(_UNWANTED_TEXT_QUESTION)
+    if mode == "explicit_diegetic" and allowed:
+        parts = [f"{a.get('carrier') or '载体'}“{a.get('exact_text')}”" for a in allowed[:3]]
+        return {
+            "q": (
+                f"除剧情允许的文字（{'、'.join(parts)}）外，画面其余区域"
+                "（含天空、水面、背景空白处或角落）是否完全没有额外的地名标题、书法大字、字幕、水印或无关 logo？"
+            ),
+            "expect": "yes",
+            "key": True,
+            "reliability": "high",
+            "category": "text_watermark",
+        }
+    return {
+        "q": (
+            "画面是否完全没有非场景自然物体的额外地名标题、天空/水面/角落书法大字、"
+            "字幕、水印或无关 logo？"
+        ),
+        "expect": "yes",
+        "key": True,
+        "reliability": "high",
+        "category": "text_watermark",
+    }
+
+
 def build_targeted_questions(shot: dict, frame_kind: str, kf_index: int | None = None) -> list[dict]:
     """QC 入口：spec 驱动 vs 散文解析的 dispatch.
 
@@ -1925,8 +2353,10 @@ def build_targeted_questions(shot: dict, frame_kind: str, kf_index: int | None =
         qs = list(build_claim_checks_spec(shot, frame_kind, kf_index=kf_index))
     else:
         qs = list(build_claim_checks(shot, frame_kind))
+    from shared.prompt_facts import extract_frame_text_spec
+    text_spec = extract_frame_text_spec(shot, frame_kind, kf_index=kf_index)
     if not any(item.get("category") == "text_watermark" for item in qs):
-        qs.append(dict(_UNWANTED_TEXT_QUESTION))
+        qs.append(_build_text_watermark_question(text_spec))
     return qs
 
 
@@ -1974,7 +2404,14 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
       比对，仅记 unstable_flips（不改 severity，仅审计）
     详见 references/qc-reliability-calibration.md。
     """
-    _expected_frame = build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index) if isinstance(shot, dict) else None
+    _expected_frame = (
+        build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index, frame_path=frame_path)
+        if isinstance(shot, dict) else None
+    )
+    if (not prompt or not str(prompt).strip()) and frame_path:
+        _disk_snap = read_frame_request_snapshot(frame_path)
+        if isinstance(_disk_snap, dict) and str(_disk_snap.get("prompt") or "").strip():
+            prompt = str(_disk_snap["prompt"])
     try:
         _run_qc = should_run_qc(frame_path, expected_frame=_expected_frame)
     except TypeError:

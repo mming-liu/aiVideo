@@ -90,7 +90,7 @@ def test_acceptance_blocks_when_a_keyframe_index_is_missing(tmp_path, monkeypatc
 
 def test_acceptance_passes_when_all_indices_present(tmp_path, monkeypatch):
     import step02a_frame_gen.image_prompt_quality as q
-    from shared.image_qc import QcResult, build_qc_frame_meta, write_sidecar
+    from shared.image_qc import QcResult, build_qc_frame_meta, write_frame_request_snapshot, write_sidecar
 
     work = tmp_path / "vimax_working"
     d = work / "shots" / "3"
@@ -99,18 +99,20 @@ def test_acceptance_passes_when_all_indices_present(tmp_path, monkeypatch):
     for fname, kind, kf_i in (("first_frame.png", "first_frame", None),
                               ("last_frame.png", "last_frame", None)):
         _png(d / fname)
+        write_frame_request_snapshot(d / fname, shot=shot, frame_kind=kind, prompt="p", refs=[])
         write_sidecar(
             d / fname,
             QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-            frame_meta=build_qc_frame_meta(shot, kind, []),
+            frame_meta=build_qc_frame_meta(shot, kind, [], frame_path=d / fname),
         )
     for i in range(4):
         kp = d / ("keyframe_%d.png" % i)
         _png(kp)
+        write_frame_request_snapshot(kp, shot=shot, frame_kind="keyframe", prompt=f"d{i}", refs=[], kf_index=i)
         write_sidecar(
             kp,
             QcResult(has_hallucination=False, issues=[], ok=True, raw_result=""),
-            frame_meta=build_qc_frame_meta(shot, "keyframe", [], kf_index=i),
+            frame_meta=build_qc_frame_meta(shot, "keyframe", [], kf_index=i, frame_path=kp),
         )
     _png(d / "keyframe_0_doodle.png")          # 中间产物不影响判定
     monkeypatch.setattr(q, "chapter_dir", lambda: tmp_path)

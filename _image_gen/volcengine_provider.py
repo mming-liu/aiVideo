@@ -177,26 +177,59 @@ class VolcengineImageService(ImageGenerationService):
         _fail_fast = os.getenv("VOLCENGINE_IMAGE_FAIL_FAST", "0").strip() == "1"
         _attempts = 0
 
+        from shared import request_events as _req_events
+        _op_id = (
+            str(getattr(req, "operation_id", None) or "").strip()
+            or str((req.frame_contract or {}).get("operation_id") if isinstance(getattr(req, "frame_contract", None), dict) else "").strip()
+            or _req_events.new_request_id()
+        )
+        _last_sent_model = canonical_image_model_id(self._model_queue[0]) if self._model_queue else ""
+        _last_sent_refs: list[str] = list(original_refs)
+        _last_sent_prompt: str = str(req.prompt or "")
+        _http_request_ids: list[str] = []
+
         def _finish(result):
             # 统一出口：**任何**失败结果（含输出敏感软跳过、下载失败）都记中止标记，
             # 后续 generate 由 _send 在发送前拒绝；关闭开关时保持原行为。
+            if getattr(result, "request_meta", None) is None:
+                result.request_meta = {
+                    "operation_id": _op_id,
+                    "provider": "volcengine",
+                    "model_id": _last_sent_model,
+                    "effective_refs": list(_last_sent_refs),
+                    "effective_prompt": _last_sent_prompt,
+                    "attempt_count": _attempts,
+                    "request_ids": list(_http_request_ids),
+                }
             if _fail_fast and not result.success:
                 with _POST_LOCK:
                     _ABORT[0] = result.error or "生成失败"
             return result
 
-        def _record(outcome: str) -> None:
+        def _record(outcome: str, status_code: int | None = None) -> None:
             """回写本次已发送 POST 的终局分类；账本错误不得掩盖生成结果."""
             from shared import post_budget, request_events
             try:
-                post_budget.record("image", outcome,
-                                   request_id=request_events.current_request_id())
+                post_budget.record(
+                    "image", outcome,
+                    request_id=request_events.current_request_id(),
+                    operation_id=_op_id,
+                    model_id=_last_sent_model,
+                    provider="volcengine",
+                    attempt_seq=_attempts,
+                    status_code=status_code,
+                )
             except Exception as _degrade_exc:
                 from shared.degrade import note_degraded as _note_degraded
                 _note_degraded("_image_gen/volcengine_provider.py:_record", _degrade_exc)
 
-        def _send(payload: dict):
-            nonlocal _attempts
+        def _send(payload: dict, active_refs: list[str] | None = None):
+            nonlocal _attempts, _last_sent_model, _last_sent_refs, _last_sent_prompt
+            _model_sent = str(payload.get("model") or _last_sent_model)
+            _last_sent_model = _model_sent
+            if active_refs is not None:
+                _last_sent_refs = list(active_refs)
+            _last_sent_prompt = str(payload.get("prompt") or req.prompt or "")
             with _POST_LOCK:
                 if _ABORT[0]:
                     raise _PostLimit("本批已中止（%s），拒绝后续请求" % _ABORT[0])
@@ -209,13 +242,34 @@ class VolcengineImageService(ImageGenerationService):
                 # 跨进程账本（STEP02A_IMAGE_BUDGET_TOTAL>0 时启用）：发送前原子扣减，
                 # 重启/分批续跑会接着已用次数；账本损坏 fail-closed。
                 from shared import post_budget, request_events
+                _attempts += 1
                 _rid = request_events.begin_request("image")
+                _http_request_ids.append(_rid)
                 try:
-                    post_budget.acquire("image", request_id=_rid)
+                    post_budget.acquire(
+                        "image", request_id=_rid,
+                        operation_id=_op_id,
+                        model_id=_model_sent,
+                        provider="volcengine",
+                        attempt_seq=_attempts,
+                    )
                 except post_budget.PostBudgetExhausted as exc:
                     raise _PostLimit(str(exc)) from exc
-                _attempts += 1
                 _POSTS_USED[0] += 1
+            try:
+                from shared import request_events as _req_ev
+                _req_ev.emit(
+                    "http_attempt",
+                    request_id=_rid,
+                    kind="image",
+                    operation_id=_op_id,
+                    model_id=_model_sent,
+                    provider="volcengine",
+                    attempt_seq=_attempts,
+                    dispatched=True,
+                )
+            except Exception:
+                pass
             try:
                 return requests.post(f"{self._base_url}/images/generations",
                                      json=payload, headers=self._headers, timeout=180)
@@ -336,7 +390,7 @@ class VolcengineImageService(ImageGenerationService):
                 _verbose_write(f"[DEBUG] image_submit: ref[{i}] 源路径={src}")
 
             try:
-                resp = _send(payload)
+                resp = _send(payload, active_refs=ref_paths)
             except _PostLimit as exc:
                 last_error = str(exc)
                 _verbose_write(f"  [镜头{req.shot_index}] [STOP] {last_error}")
@@ -352,11 +406,11 @@ class VolcengineImageService(ImageGenerationService):
                 from shared.content_safety import input_sensitive_retry_prompt
                 sanitized = input_sensitive_retry_prompt(req.prompt)
                 if sanitized and sanitized != req.prompt:
-                    _record("transport_failed")
+                    _record("transport_failed", status_code=resp.status_code)
                     _verbose_write(f"[IMAGE-RETRY] input_sensitive: original={req.prompt}; revised={sanitized}")
                     payload["prompt"] = sanitized
                     try:
-                        resp = _send(payload)
+                        resp = _send(payload, active_refs=ref_paths)
                     except _PostLimit as exc:
                         last_error = str(exc)
                         _verbose_write(f"  [镜头{req.shot_index}] [STOP] {last_error}")
@@ -365,7 +419,7 @@ class VolcengineImageService(ImageGenerationService):
                         last_error = f"input-sensitive retry failed: {exc}"
                         break
                     if resp.status_code != 200:
-                        _record("transport_failed")
+                        _record("transport_failed", status_code=resp.status_code)
                         last_error = f"input-sensitive retry rejected [{resp.status_code}]: {resp.text}"
                         break
 
@@ -374,17 +428,17 @@ class VolcengineImageService(ImageGenerationService):
                 try:
                     data = resp.json().get("data", [])
                 except Exception as e:
-                    _record("transport_failed")
+                    _record("transport_failed", status_code=200)
                     last_error = f"响应解析失败: {e} ({resp.text[:200]})"
                     break
                 if not data:
-                    _record("transport_failed")
+                    _record("transport_failed", status_code=200)
                     last_error = f"响应中无 data: {resp.text[:300]}"
                     break
                 item = data[0]
                 img_url = item.get("url")
                 if not img_url:
-                    _record("transport_failed")
+                    _record("transport_failed", status_code=200)
                     last_error = f"响应中未找到图片 URL: {resp.text[:300]}"
                     break
                 return _finish(self._download(req, img_url, model_idx))
@@ -393,7 +447,7 @@ class VolcengineImageService(ImageGenerationService):
             if resp.status_code == 429:
                 from shared import post_budget
                 if post_budget.is_quota_error(resp.text):
-                    _record("account_quota_refused")
+                    _record("account_quota_refused", status_code=429)
                     post_budget.mark_quota_exhausted("image", resp.text[:300])
                     last_error = ("账户图片额度耗尽（429 SetLimitExceeded），"
                                   "本批停止后续 POST: %s" % resp.text[:300])
@@ -401,7 +455,7 @@ class VolcengineImageService(ImageGenerationService):
                     with _POST_LOCK:
                         _ABORT[0] = last_error
                     break
-                _record("transport_failed")
+                _record("transport_failed", status_code=429)
                 wait = compute_429_wait(resp.text, fallback_seconds=60.0 / 10, backoff_seconds=1.0)
                 _verbose_write(f"  [镜头{req.shot_index}] [!] 429 限速，等待 {wait:.0f}s 后重试...")
                 time.sleep(wait)
@@ -411,7 +465,7 @@ class VolcengineImageService(ImageGenerationService):
             if resp.status_code == 403:
                 from shared import post_budget
                 if post_budget.is_quota_error(resp.text):
-                    _record("account_quota_refused")
+                    _record("account_quota_refused", status_code=403)
                     post_budget.mark_quota_exhausted("image", resp.text[:300])
                     last_error = ("账户图片额度耗尽（403），"
                                   "本批停止后续 POST: %s" % resp.text[:300])
@@ -419,7 +473,7 @@ class VolcengineImageService(ImageGenerationService):
                     with _POST_LOCK:
                         _ABORT[0] = last_error
                     break
-                _record("transport_failed")
+                _record("transport_failed", status_code=403)
                 if model_idx + 1 < len(self._model_queue):
                     model_idx += 1
                     _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 返回 403，"
@@ -433,7 +487,7 @@ class VolcengineImageService(ImageGenerationService):
                 tok in resp.text
                 for tok in ("InvalidEndpoint", "ClosedEndpoint", "ModelNotOpen", "UnsupportedModel")
             ):
-                _record("transport_failed")
+                _record("transport_failed", status_code=resp.status_code)
                 if model_idx + 1 < len(self._model_queue):
                     model_idx += 1
                     _verbose_write(
@@ -445,15 +499,8 @@ class VolcengineImageService(ImageGenerationService):
                 break
 
             # ---- 400 + OutputImageSensitiveContentDetected：输出图片被内容安全过滤拦截 ----
-            # 2026-08-29：触发场景=古风权谋刺杀/流血/持械对峙（钩子首帧的「黑衣人刺」、
-            # v6.32 强制伤处可见的「暗红洇在白袍」、尾帧「匕首没入水中」等）。
-            # 哪怕 prompt 已被 sanitize_prompt 替换成"出人命/倒下/暗红洇痕"，
-            # Seedream 生成的实际图片仍会含血/刀，output 端过滤器拒收。
-            # 处理：① 走 _model_queue 下一个模型（4.0/5.0-lite 规则基线可能不同）
-            #       ② 全失败则 soft_skip=True，下游不 raise 阻塞整批
-            # 不重写 prompt（确定性兜底范围外，应触发 LLM regen 而非代码层硬填）。
             if resp.status_code == 400 and "OutputImageSensitiveContentDetected" in resp.text:
-                _record("qc_rejected")
+                _record("qc_rejected", status_code=400)
                 _budget_left = not (_max_attempts and _attempts >= _max_attempts) and not (
                     _max_posts and _POSTS_USED[0] >= _max_posts
                 )
@@ -462,7 +509,6 @@ class VolcengineImageService(ImageGenerationService):
                     _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 输出触发内容安全过滤，"
                           f"切换到 {self._model_queue[model_idx]} 重试")
                     continue
-                # 所有模型均因输出敏感失败 → soft_skip 标记，不阻塞后续分镜
                 last_error = (f"所有模型均因输出内容安全过滤失败 (OutputImageSensitiveContentDetected)；"
                               f"该 shot 软跳过，需人工复核 prompt 是否含高敏画面元素")
                 sensitive_skip = True
@@ -472,19 +518,19 @@ class VolcengineImageService(ImageGenerationService):
 
             # ---- 400 且报 negative_prompt 不支持：去掉后重试一次 ----
             if resp.status_code == 400 and "negative_prompt" in resp.text and payload.get("negative_prompt"):
-                _record("transport_failed")
+                _record("transport_failed", status_code=400)
                 _verbose_write(f"  [镜头{req.shot_index}] [!] {model} 不支持 negative_prompt，去掉后重试")
                 payload.pop("negative_prompt", None)
                 continue
 
             # ---- 5xx / 连接类：重试 ----
             if 500 <= resp.status_code < 600:
-                _record("transport_failed")
+                _record("transport_failed", status_code=resp.status_code)
                 _verbose_write(f"  [镜头{req.shot_index}] [!] 服务端 {resp.status_code}，3s 后重试...")
                 time.sleep(3)
                 continue
 
-            _record("transport_failed")
+            _record("transport_failed", status_code=resp.status_code)
             last_error = f"API 错误 [{resp.status_code}]: {resp.text[:300]}"
             break
 
@@ -493,7 +539,12 @@ class VolcengineImageService(ImageGenerationService):
             soft_skip=sensitive_skip,  # 2026-08-29：仅 OutputImageSensitiveContentDetected 全失败时为 True
         ))
 
-    def _download(self, req: ImageGenerationRequest, img_url: str, model_idx: int) -> ImageGenerationResult:
+    def _download(
+        self,
+        req: ImageGenerationRequest,
+        img_url: str,
+        model_idx: int,
+    ) -> ImageGenerationResult:
         """下载图片到本地，区分首帧/尾帧/关键帧文件名."""
         try:
             os.makedirs(config.OUTPUT_DIR, exist_ok=True)
@@ -536,6 +587,14 @@ class VolcengineImageService(ImageGenerationService):
                 from shared.degrade import note_degraded as _note_degraded
                 _note_degraded("_image_gen/volcengine_provider.py:_download", _degrade_exc)
 
+            resolved_model = canonical_image_model_id(
+                self._model_queue[model_idx]
+            ) if model_idx < len(self._model_queue) else ""
+            _op_from_req = str(
+                getattr(req, "operation_id", None)
+                or (req.frame_contract or {}).get("operation_id") if isinstance(getattr(req, "frame_contract", None), dict) else ""
+                or ""
+            )
             size_kb = len(img_bytes) / 1024
             if model_idx > 0:
                 _verbose_write(f"  [INFO] 图片已回退到模型: {self._model_queue[model_idx]}")
@@ -543,8 +602,14 @@ class VolcengineImageService(ImageGenerationService):
                   f"{save_path} ({size_kb:.1f} KB)")
             from shared import post_budget, request_events
             try:
-                post_budget.record("image", "generated_ok",
-                                   request_id=request_events.current_request_id())
+                post_budget.record(
+                    "image", "generated_ok",
+                    request_id=request_events.current_request_id(),
+                    operation_id=_op_from_req,
+                    model_id=resolved_model,
+                    provider="volcengine",
+                    status_code=200,
+                )
             except Exception as _degrade_exc:
                 from shared.degrade import note_degraded as _note_degraded
                 _note_degraded("_image_gen/volcengine_provider.py:_download", _degrade_exc)
@@ -555,9 +620,22 @@ class VolcengineImageService(ImageGenerationService):
             )
         except Exception as e:
             from shared import post_budget, request_events
+            resolved_model = canonical_image_model_id(
+                self._model_queue[model_idx]
+            ) if model_idx < len(self._model_queue) else ""
+            _op_from_req = str(
+                getattr(req, "operation_id", None)
+                or ((req.frame_contract or {}).get("operation_id") if isinstance(getattr(req, "frame_contract", None), dict) else "")
+                or ""
+            )
             try:
-                post_budget.record("image", "transport_failed",
-                                   request_id=request_events.current_request_id())
+                post_budget.record(
+                    "image", "transport_failed",
+                    request_id=request_events.current_request_id(),
+                    operation_id=_op_from_req,
+                    model_id=resolved_model,
+                    provider="volcengine",
+                )
                 request_events.emit("image_download_failed", kind="image",
                                     detail=str(e)[:300])
             except Exception as _degrade_exc:
