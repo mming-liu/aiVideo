@@ -636,6 +636,15 @@ def verify_plan_execution(plan: dict, *, characters: list | None = None,
                         "message": "参考条目缺少 path，无法核对参考身份"})
                     continue
                 if not expected:
+                    from shared.ref_compose import _is_planned_frame_or_sheet
+                    if (
+                        ref.get("prepared") is None
+                        and ref.get("materialized_at_execution") is True
+                        and _is_planned_frame_or_sheet(path)
+                    ):
+                        # Deferred runtime artifact (e.g., planned first_frame or ref_sheet) is
+                        # materialized during execution and has no pre-run sha256.
+                        continue
                     issues.append({
                         "code": "plan_reference_missing", "severity": "reject",
                         "path": f"visual_plan.{frame.get('frame_id')}.references",
@@ -873,8 +882,110 @@ def apply_frame_observations(plan: dict, observations: list[dict]) -> dict:
     return updated
 
 
+_GENERIC_CROWD_ROLES = frozenset({
+    "群演", "路人", "群众", "百姓", "侍卫", "士兵", "婢女", "家丁", "庄仆", "伙计",
+})
+
+
+def check_pre_shot_asset_gate(
+    script: dict,
+    *,
+    only_indices: set[int] | None = None,
+    frames: set[str] | None = None,
+) -> dict:
+    """G3 Pre-Shot Asset Gate: read-only check for style_anchor and named character portraits."""
+    from shared.paths import style_bank_dir, vimax_working_dir, characters_bank_dir
+    from shared.vimax_bridge import _resolve_style_anchor_path, _units_for_indices
+    from shared.prompt_facts import project_frame_facts
+
+    chars = list(script.get("characters") or []) if isinstance(script, dict) else []
+    known_named = {
+        _text(c.get("identifier") or c.get("name"))
+        for c in chars if isinstance(c, dict)
+    } - _GENERIC_CROWD_ROLES
+
+    style_anchor = _resolve_style_anchor_path()
+    reg_path = vimax_working_dir() / "character_portraits_registry.json"
+    reg: dict = {}
+    if reg_path.is_file():
+        try:
+            reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        except Exception:
+            reg = {}
+    bank_dir = characters_bank_dir()
+
+    def _has_portrait(name: str) -> bool:
+        views = reg.get(name) if isinstance(reg, dict) else None
+        if isinstance(views, dict):
+            for v in ("front", "base", "side", "back", "face"):
+                entry = views.get(v)
+                p = entry.get("path", "") if isinstance(entry, dict) else ""
+                if p and Path(p).is_file():
+                    return True
+        cdir = bank_dir / name
+        return any((cdir / f"{v}.png").is_file() for v in ("base", "front", "side", "face"))
+
+    all_shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    idx_set = only_indices if only_indices is not None else {
+        int(s.get("index", 0)) for s in all_shots
+    }
+    units = _units_for_indices(script, idx_set) if idx_set else []
+    kinds = _frame_kinds(frames)
+    missing_portraits: list[dict] = []
+    seen_missing: set[tuple[int, str]] = set()
+    for unit in units:
+        s_idx = int(unit.get("index", 0))
+        for k in kinds:
+            fk = "last_frame" if k == "lf" else ("keyframe" if k == "kf" else "first_frame")
+            if fk == "keyframe":
+                kf_indices = list(range(len(unit.get("keyframes") or []))) or [None]
+            else:
+                kf_indices = [None]
+            for kf_i in kf_indices:
+                proj = project_frame_facts(unit, fk, chars, kf_index=kf_i)
+                for ent in (proj.get("entities") or []):
+                    nm = _text(ent.get("name"))
+                    if not nm or nm in _GENERIC_CROWD_ROLES:
+                        continue
+                    if known_named and nm not in known_named:
+                        continue
+                    if not _has_portrait(nm) and (s_idx, nm) not in seen_missing:
+                        seen_missing.add((s_idx, nm))
+                        missing_portraits.append({
+                            "shot_index": s_idx,
+                            "frame": k,
+                            "character": nm,
+                            "reason": "portrait_not_registered",
+                        })
+
+    issues: list[dict] = []
+    if not style_anchor:
+        issues.append({
+            "code": "style_anchor_missing",
+            "severity": "warn",
+            "path": str(style_bank_dir() / "style_anchor.png"),
+            "message": "全局 style_anchor.png 缺失；缺肖像或空镜帧将无法用视觉参考锚定画风",
+        })
+    for item in missing_portraits:
+        issues.append({
+            "code": "character_portrait_missing",
+            "severity": "reject",
+            "path": f"shots[{item['shot_index']}].{item['frame']}",
+            "character": item["character"],
+            "message": f"镜头 {item['shot_index']} 出镜角色「{item['character']}」尚未完成肖像建库/锁定",
+        })
+    status = "blocked" if missing_portraits else "ok"
+    return {
+        "status": status,
+        "style_anchor": style_anchor,
+        "missing_portraits": missing_portraits,
+        "issues": issues,
+    }
+
+
 __all__ = [
     "VISUAL_PLAN_SCHEMA", "VISUAL_PLAN_STAGE", "VISUAL_ALLOWED_CHANGES",
     "VisualPlanError", "build_visual_plan", "validate_plan_identity",
     "write_visual_plan", "verify_frame_observations", "apply_frame_observations",
+    "check_pre_shot_asset_gate",
 ]

@@ -270,3 +270,146 @@ def run_verify_only(script_path: Path, work_dir: Path, *,
         "image_posts": 0, "vision_qc_calls": 0,
     }, ensure_ascii=False))
     return 0
+
+
+def recheck_failed_qc(
+    script_path: Path,
+    work_dir: Path,
+    *,
+    shots: set[int] | None = None,
+    frames: set[str] | None = None,
+    statuses: tuple[str, ...] = ("qc_call_failed",),
+) -> dict:
+    """Zero-image-POST visual QC recheck for frames in qc_call_failed (or specified) state."""
+    from shared.image_qc import (
+        build_qc_frame_meta,
+        frame_identity,
+        maybe_qc_sync,
+        qc_provider,
+        qc_state,
+        write_sidecar,
+    )
+    from shared.paths import FIRST_FRAME_FILENAME, LAST_FRAME_FILENAME
+    from shared.vimax_bridge import _emit_stage4_ledger, is_empty_scene
+
+    script_path = Path(script_path)
+    work_dir = Path(work_dir)
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    chars = list(script.get("characters") or [])
+    units: list[dict] = []
+    if isinstance(script.get("hook"), dict):
+        units.append(script["hook"])
+    units.extend(s for s in (script.get("shots") or []) if isinstance(s, dict))
+
+    want_ff = frames is None or "ff" in frames
+    want_lf = frames is None or "lf" in frames
+    want_kf = frames is None or "kf" in frames or any(str(f).startswith("kf") for f in frames)
+    kf_only = (
+        {int(str(f)[2:]) for f in frames if str(f).startswith("kf") and str(f)[2:].isdigit()}
+        if frames is not None and "kf" not in frames else None
+    )
+
+    checked: list[dict] = []
+    counts = {"checked": 0, "qc_passed": 0, "qc_rejected": 0, "qc_call_failed": 0, "skipped": 0}
+    target_statuses = set(statuses)
+
+    for shot in units:
+        idx = int(shot.get("index", 0))
+        if shots is not None and idx not in shots:
+            continue
+        sdir = work_dir / "shots" / str(idx)
+        if not sdir.is_dir():
+            continue
+        empty_scene = is_empty_scene(shot, chars)
+        candidates: list[tuple[str, int | None, Path]] = []
+        if want_ff:
+            candidates.append(("first_frame", None, sdir / FIRST_FRAME_FILENAME))
+        if want_lf:
+            candidates.append(("last_frame", None, sdir / LAST_FRAME_FILENAME))
+        if want_kf:
+            for kf_i in range(len(shot.get("keyframes") or [])):
+                if kf_only is not None and kf_i not in kf_only:
+                    continue
+                candidates.append(("keyframe", kf_i, sdir / f"keyframe_{kf_i}.png"))
+
+        for fkind, kf_i, fpath in candidates:
+            if not fpath.is_file():
+                continue
+            meta = build_qc_frame_meta(shot, fkind, chars, kf_index=kf_i)
+            before = qc_state(fpath, expected_frame=meta)
+            if str(before.get("status") or "") not in target_statuses:
+                counts["skipped"] += 1
+                continue
+            pre_digest = (frame_identity(fpath).get("sha256") or None)
+            res = maybe_qc_sync(fpath, shot, fkind, chars, empty_scene, kf_index=kf_i)
+            if res.error == "skipped":
+                counts["skipped"] += 1
+                continue
+            write_sidecar(fpath, res, pre_digest=pre_digest, frame_meta=meta)
+            after = qc_state(fpath, expected_frame=meta)
+            after_status = str(after.get("status") or "qc_call_failed")
+            verdict_detail = str((after.get("data") or {}).get("verdict_detail") or "")
+            counts["checked"] += 1
+            if after_status in counts:
+                counts[after_status] += 1
+            if res.ok:
+                try:
+                    log_path = fpath.parent / f"{fpath.stem}_qc_log.json"
+                    log = json.loads(log_path.read_text(encoding="utf-8")) if log_path.is_file() else []
+                    if not isinstance(log, list):
+                        log = []
+                    log.append({
+                        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "provider": qc_provider(),
+                        "has_hallucination": res.has_hallucination,
+                        "person_count": getattr(res, "person_count", None),
+                        "answers": getattr(res, "answers", None),
+                        "issues": [
+                            {"category": i.category, "severity": i.severity, "description": i.description}
+                            for i in res.issues
+                        ],
+                        "variation": "recheck_failed_qc",
+                    })
+                    log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+            role = f"keyframe_{kf_i}" if fkind == "keyframe" and kf_i is not None else fkind
+            defect_cls = (
+                "qc_dispute" if after_status == "qc_call_failed"
+                else "stochastic_miss" if after_status == "qc_rejected"
+                else "none"
+            )
+            _emit_stage4_ledger(
+                shot, role, 0,
+                action_type="qc_recheck",
+                defect_class=defect_cls,
+                qc_verdict=after_status,
+                detail=verdict_detail or str(getattr(res, "error", "") or ""),
+            )
+            checked.append({
+                "shot_index": idx,
+                "frame": role,
+                "path": str(fpath),
+                "before": before.get("status"),
+                "after": after_status,
+                "verdict_detail": verdict_detail,
+            })
+
+    return {
+        "schema": "step02a.qc_recheck/1",
+        "image_posts": 0,
+        "counts": counts,
+        "frames": checked,
+    }
+
+
+def run_recheck_failed_qc(
+    script_path: Path,
+    work_dir: Path,
+    *,
+    shots: set[int] | None = None,
+    frames: set[str] | None = None,
+) -> int:
+    report = recheck_failed_qc(script_path, work_dir, shots=shots, frames=frames)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 1 if report["counts"]["qc_call_failed"] > 0 else 0

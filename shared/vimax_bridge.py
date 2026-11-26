@@ -1547,6 +1547,25 @@ def _collect_space_object_refs(shot: dict) -> list[str]:
         return []
 
 
+_PROP_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("钓杆", "钓竿", "鱼竿"),
+)
+
+
+def _prop_terms(name: str) -> list[str]:
+    """Return canonical orthographic synonyms for a prop name without duplicating."""
+    t = str(name or "").strip()
+    if not t:
+        return []
+    out = [t]
+    for grp in _PROP_SYNONYM_GROUPS:
+        if t in grp:
+            for item in grp:
+                if item not in out:
+                    out.append(item)
+    return out
+
+
 def _collect_prop_asset_refs(shot: dict, limit: int = 2,
                              frame_desc: str | None = None,
                              characters: list | None = None) -> list[str]:
@@ -1596,7 +1615,12 @@ def _collect_prop_asset_refs(shot: dict, limit: int = 2,
             entry = pbank.get_prop(pid) or {}
             if _is_space_object_prop(entry):
                 continue
-            match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
+            raw_terms = [pid] + list(entry.get("consistent_terms", []) or [])
+            match_sources: list[str] = []
+            for rt in raw_terms:
+                for syn in _prop_terms(rt):
+                    if syn not in match_sources:
+                        match_sources.append(syn)
             # 命中词：identifier 精确命中优先，否则按别名长度降序（长词更具体，
             # 如「寒光匕首」优先于「匕首」）。
             hit = None
@@ -1695,6 +1719,27 @@ def _compose_frame_refs_by_category(
     return composed
 
 
+def _resolve_style_anchor_path() -> str | None:
+    """Read-only lookup for locked global style_anchor.png (returns path or None without creating dirs)."""
+    try:
+        from shared.paths import style_bank_dir
+        sdir = style_bank_dir()
+        if not sdir.is_dir():
+            return None
+        json_path = sdir / "style_bank.json"
+        if json_path.is_file():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            img = str(data.get("style_anchor_image") or "").strip()
+            if img and Path(img).is_file():
+                return img
+        default = sdir / "style_anchor.png"
+        if default.is_file():
+            return str(default.resolve())
+    except Exception:
+        return None
+    return None
+
+
 def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
                                  limit: int = 5, for_frame: str = "首帧",
                                  return_buckets: bool = False,
@@ -1727,12 +1772,19 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
             scene_refs = []
             _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 特写帧跳过场景资产图（防广角拉构图）")
     if empty_scene:
+        style_anchor_used = False
+        if not scene_refs:
+            _sa = _resolve_style_anchor_path()
+            if _sa and _sa not in scene_refs:
+                scene_refs.append(_sa)
+                style_anchor_used = True
         if return_buckets:
             return {"refs": scene_refs[:limit],
                     "buckets": [("scene", scene_refs[:limit])],
                     "omissions": omissions,
                     "missing": [],
-                    "identity_reference": "empty_scene"}
+                    "identity_reference": "empty_scene",
+                    "style_anchor_used": style_anchor_used}
         return scene_refs[:limit]
 
     space_refs = _collect_space_object_refs(shot)
@@ -1774,6 +1826,15 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
         id_ref_state = "verified" if portrait_refs else "unverified"
     prop_refs = _collect_prop_asset_refs(shot, limit=3, frame_desc=frame_desc, characters=characters)
 
+    # G3: inject global style_anchor.png when portraits are missing/unregistered
+    # so cross-chapter text_only renders keep the book's locked visual style.
+    style_anchor_used = False
+    if missing_refs or not portrait_refs:
+        _sa = _resolve_style_anchor_path()
+        if _sa and _sa not in scene_refs:
+            scene_refs = list(scene_refs) + [_sa]
+            style_anchor_used = True
+
     bucket_list = [("scene", list(scene_refs) + list(space_refs)),
                    ("chars", list(portrait_refs)),
                    ("props", list(prop_refs))]
@@ -1784,6 +1845,7 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
             "omissions": omissions,
             "missing": missing_refs,
             "identity_reference": id_ref_state,
+            "style_anchor_used": style_anchor_used,
         }
     return _compose_frame_refs_by_category(
         shot, for_frame, scene_refs, space_refs, portrait_refs, prop_refs, limit=limit,
@@ -3003,7 +3065,11 @@ def _extract_prop_layout(
                         if not _prop:
                             continue
                         _hand = ""
-                        _pp = scan.find(_prop)
+                        _pp = -1
+                        for _pt in _prop_terms(_prop):
+                            _pp = scan.find(_pt)
+                            if _pp >= 0:
+                                break
                         if _pp >= 0:
                             _pre = scan[max(0, _pp - 8):_pp]
                             for _h in ("左手", "右手", "双手"):
@@ -3235,6 +3301,24 @@ def _char_inert_in_shot(ident: str, scan_text: str, characters: list | None) -> 
     return False
 
 
+def _dedupe_char_anchor_guard(additions: list[str]) -> list[str]:
+    """Ensure the shared human head/face guard appears at most once across all character anchors in a frame."""
+    guard = str(_NO_ANIMAL_FEATURES_GUARD or "")
+    if not guard or not additions:
+        return additions
+    seen_guard = False
+    cleaned: list[str] = []
+    for item in additions:
+        if guard in item:
+            seen_guard = True
+            cleaned.append(item.replace(guard, ""))
+        else:
+            cleaned.append(item)
+    if seen_guard and cleaned:
+        cleaned[-1] = f"{cleaned[-1]}{guard}"
+    return cleaned
+
+
 def _inject_character_costume(desc: str, characters: list | None,
                               shot: dict | None = None,
                               frame_kind: str | None = None,
@@ -3324,6 +3408,7 @@ def _inject_character_costume(desc: str, characters: list | None,
                 continue
             additions.append(combined)
         if additions:
+            additions = _dedupe_char_anchor_guard(additions)
             # v6.50：desc 尾部句号 + 本处固定 "。" → 双句号（矛盾门会拦），
             # 先剥再拼
             return f"{desc.rstrip('。')}。{('，'.join(additions))}"
@@ -3610,6 +3695,7 @@ def _inject_frame_spec(
                 continue
             additions.append(combined)
         if additions:
+            additions = _dedupe_char_anchor_guard(additions)
             return f"{desc.rstrip('。')}。{('，'.join(additions))}"
         return desc
     except Exception:
@@ -3951,7 +4037,9 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
             text = f"{text}。{prop}"
         scene = shot.get("scene", "") or ""
         location = shot.get("location", "") or ""
-        ctx = f"（场景：{location or scene}）" if (location or scene) else ""
+        from shared.style_prefix import visual_location_hint
+        vis_loc = visual_location_hint(location or scene, shot)
+        ctx = f"（环境：{vis_loc}）" if vis_loc else ""
         camera = str(shot.get("camera_movement") or "")
         from shared.shot_motion_checks import is_fixed_camera
         if is_fixed_camera(camera):
@@ -4004,7 +4092,9 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
             text = f"{text}。{prop}"
         scene = shot.get("scene", "") or ""
         location = shot.get("location", "") or ""
-        ctx = f"（场景：{location or scene}）" if (location or scene) else ""
+        from shared.style_prefix import visual_location_hint
+        vis_loc = visual_location_hint(location or scene, shot)
+        ctx = f"（环境：{vis_loc}）" if vis_loc else ""
         text = (
             f"{text}{ctx}"
             f"，环境延续首帧：船的朝向、月亮位置、背景建筑方位、"
@@ -4064,6 +4154,40 @@ def _classify_generation_failure(
     if qc_critical:
         return FAILURE_STOCHASTIC_MISS
     return "none"
+
+
+def _resolve_ledger_qc_verdict(
+    frame_path: str | Path,
+    shot: dict,
+    frame_kind: str,
+    characters: list | None,
+    *,
+    qc_critical: bool,
+    qc_last=None,
+    kf_index: int | None = None,
+) -> tuple[str, str, str]:
+    """Derive (defect_class, qc_verdict, detail) from authoritative qc_state()."""
+    if qc_last is not None and not getattr(qc_last, "ok", True):
+        return FAILURE_QC_DISPUTE, "qc_call_failed", str(getattr(qc_last, "error", ""))
+    try:
+        from shared.image_qc import build_qc_frame_meta, qc_state
+        meta = build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index)
+        state = qc_state(Path(frame_path), expected_frame=meta)
+        status = str(state.get("status") or "")
+        verdict_detail = str((state.get("data") or {}).get("verdict_detail") or "")
+        if status == "qc_call_failed":
+            return FAILURE_QC_DISPUTE, "qc_call_failed", str((state.get("data") or {}).get("error") or "")
+        if status == "qc_rejected" or qc_critical:
+            return FAILURE_STOCHASTIC_MISS, "qc_rejected", verdict_detail or "critical_reject"
+        if status == "qc_passed":
+            return "none", "qc_passed", verdict_detail or "clean_pass"
+        if status:
+            return "none", status, verdict_detail
+    except Exception:
+        pass
+    if qc_critical:
+        return FAILURE_STOCHASTIC_MISS, "qc_rejected", "critical_reject"
+    return "none", "qc_passed", "clean_pass"
 
 
 def _emit_stage4_ledger(
@@ -4206,8 +4330,18 @@ async def _gen_first_frame_async(
     # 放在 try 外，fail-fast 异常向上传播让该帧当场失败（不再烧额度画必错的图）
     _assert_ff = shot.get("ff_desc_final")
     if _assert_ff:
-        from shared.prompt_contradiction import assert_no_contradictions
-        assert_no_contradictions(_assert_ff, f"shot{idx} 首帧")
+        from shared.prompt_contradiction import PromptContradictionError, assert_no_contradictions
+        try:
+            assert_no_contradictions(_assert_ff, f"shot{idx} 首帧")
+        except PromptContradictionError as _pc_err:
+            shot["_last_failure_class"] = FAILURE_REQUEST_CONFLICT
+            _emit_stage4_ledger(
+                shot, "first_frame", 0,
+                prompt_text=_assert_ff, refs=list(reference_paths or []),
+                action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
+                qc_verdict="not_run", detail=str(_pc_err),
+            )
+            raise
 
     # v6.53 A.4：QC_MAX_ATTEMPTS=重抽总尝试次数（含首次），默认沿用调用方
     try:
@@ -4247,8 +4381,8 @@ async def _gen_first_frame_async(
         _emit_stage4_ledger(
             shot, "first_frame", 0,
             prompt_text=ff_desc_full, refs=refs,
-            action_type="generate", defect_class=FAILURE_REQUEST_CONFLICT,
-            detail=str(_preflight_err["issues"][:2]),
+            action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
+            qc_verdict="not_run", detail=str(_preflight_err["issues"][:2]),
         )
         _bridge_log(f"  [CONTRACT-STOP] shot_{idx} 首帧契约冲突，拒绝发包: {_preflight_err['issues'][:2]}")
         return None
@@ -4322,13 +4456,17 @@ async def _gen_first_frame_async(
             qc_critical = await _maybe_qc_frame(shot, str(ff_path), "first_frame", characters, empty_scene,
                                                  variation=attempt_variation)
             _qc_last = shot.get("_qc_last")
-            if _qc_last is not None and not getattr(_qc_last, "ok", True):
+            _df_cls, _qc_verdict, _qc_detail = _resolve_ledger_qc_verdict(
+                ff_path, shot, "first_frame", characters,
+                qc_critical=qc_critical, qc_last=_qc_last,
+            )
+            if _df_cls == FAILURE_QC_DISPUTE:
                 shot["_last_failure_class"] = FAILURE_QC_DISPUTE
                 _emit_stage4_ledger(
                     shot, "first_frame", attempt + 1,
                     prompt_text=ff_desc_full, refs=refs,
                     action_type="generate", defect_class=FAILURE_QC_DISPUTE,
-                    qc_verdict="qc_call_failed", detail=str(getattr(_qc_last, "error", "")),
+                    qc_verdict="qc_call_failed", detail=_qc_detail,
                 )
                 _bridge_log(f"  [QC-DISPUTE] shot_{idx} 首帧 QC 调用异常，保留图片停止重抽（0 额外 POST）")
                 return str(ff_path)
@@ -4338,15 +4476,19 @@ async def _gen_first_frame_async(
                     shot, "first_frame", attempt + 1,
                     prompt_text=ff_desc_full, refs=refs,
                     action_type="generate", defect_class=FAILURE_STOCHASTIC_MISS,
-                    qc_verdict="qc_critical",
+                    qc_verdict=_qc_verdict, detail=_qc_detail,
                 )
                 if await _try_qc_repair(image_adapter, shot, str(ff_path), "first_frame",
                                         characters, empty_scene, idx):
+                    _, _rep_v, _rep_d = _resolve_ledger_qc_verdict(
+                        ff_path, shot, "first_frame", characters,
+                        qc_critical=False, qc_last=shot.get("_qc_last"),
+                    )
                     _emit_stage4_ledger(
                         shot, "first_frame", attempt + 1,
                         prompt_text=ff_desc_full, refs=refs,
                         action_type="local_edit", defect_class="none",
-                        qc_verdict="qc_passed",
+                        qc_verdict=_rep_v, detail=_rep_d,
                     )
                 elif attempt < max_retries:
                     if not _del_frame_unless_protected(
@@ -4359,12 +4501,12 @@ async def _gen_first_frame_async(
                                 "保留末版留痕（attempts_exhausted）")
                     return str(ff_path)
             else:
-                shot["_last_failure_class"] = "none"
+                shot["_last_failure_class"] = _df_cls
                 _emit_stage4_ledger(
                     shot, "first_frame", attempt + 1,
                     prompt_text=ff_desc_full, refs=refs,
-                    action_type="generate", defect_class="none",
-                    qc_verdict="qc_passed",
+                    action_type="generate", defect_class=_df_cls,
+                    qc_verdict=_qc_verdict, detail=_qc_detail,
                 )
             # v6.30：doodle 区域编辑 fallback — 精确空间约束 prompt 调不到位时
             # 走 i2i + 红框二修；QC critical 之后才做（不在已知坏帧上浪费 i2i）。
@@ -4487,6 +4629,13 @@ async def _gen_last_frame_async(
         try:
             assert_no_contradictions(_assert_lf, f"shot{idx} 尾帧")
         except PromptContradictionError as e:
+            shot["_last_failure_class"] = FAILURE_REQUEST_CONFLICT
+            _emit_stage4_ledger(
+                shot, "last_frame", 0,
+                prompt_text=_assert_lf, refs=list(reference_paths or []),
+                action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
+                qc_verdict="not_run", detail=str(e),
+            )
             _bridge_log(f"  [LF-SKIP] shot{idx} 尾帧 prompt 矛盾，软跳过（不阻塞整批）: {e}")
             return None
 
@@ -4503,8 +4652,8 @@ async def _gen_last_frame_async(
         _emit_stage4_ledger(
             shot, "last_frame", 0,
             prompt_text=lf_desc_full, refs=refs,
-            action_type="generate", defect_class=FAILURE_REQUEST_CONFLICT,
-            detail=str(_preflight_err["issues"][:2]),
+            action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
+            qc_verdict="not_run", detail=str(_preflight_err["issues"][:2]),
         )
         _bridge_log(f"  [CONTRACT-STOP] shot_{idx} 尾帧契约冲突，拒绝发包: {_preflight_err['issues'][:2]}")
         return None
@@ -4585,13 +4734,17 @@ async def _gen_last_frame_async(
             qc_critical = await _maybe_qc_frame(shot, str(lf_path), "last_frame", characters, empty_scene,
                                                  variation=attempt_variation)
             _qc_last = shot.get("_qc_last")
-            if _qc_last is not None and not getattr(_qc_last, "ok", True):
+            _df_cls, _qc_verdict, _qc_detail = _resolve_ledger_qc_verdict(
+                lf_path, shot, "last_frame", characters,
+                qc_critical=qc_critical, qc_last=_qc_last,
+            )
+            if _df_cls == FAILURE_QC_DISPUTE:
                 shot["_last_failure_class"] = FAILURE_QC_DISPUTE
                 _emit_stage4_ledger(
                     shot, "last_frame", attempt + 1,
                     prompt_text=lf_desc_full, refs=refs,
                     action_type="generate", defect_class=FAILURE_QC_DISPUTE,
-                    qc_verdict="qc_call_failed", detail=str(getattr(_qc_last, "error", "")),
+                    qc_verdict="qc_call_failed", detail=_qc_detail,
                 )
                 _bridge_log(f"  [QC-DISPUTE] shot_{idx} 尾帧 QC 调用异常，保留图片停止重抽（0 额外 POST）")
                 return str(lf_path)
@@ -4601,15 +4754,19 @@ async def _gen_last_frame_async(
                     shot, "last_frame", attempt + 1,
                     prompt_text=lf_desc_full, refs=refs,
                     action_type="generate", defect_class=FAILURE_STOCHASTIC_MISS,
-                    qc_verdict="qc_critical",
+                    qc_verdict=_qc_verdict, detail=_qc_detail,
                 )
                 if await _try_qc_repair(image_adapter, shot, str(lf_path), "last_frame",
                                         characters, empty_scene, idx):
+                    _, _rep_v, _rep_d = _resolve_ledger_qc_verdict(
+                        lf_path, shot, "last_frame", characters,
+                        qc_critical=False, qc_last=shot.get("_qc_last"),
+                    )
                     _emit_stage4_ledger(
                         shot, "last_frame", attempt + 1,
                         prompt_text=lf_desc_full, refs=refs,
                         action_type="local_edit", defect_class="none",
-                        qc_verdict="qc_passed",
+                        qc_verdict=_rep_v, detail=_rep_d,
                     )
                     return str(lf_path)
                 elif attempt < max_retries:
@@ -4622,12 +4779,12 @@ async def _gen_last_frame_async(
                     _bridge_log(f"  [QC] shot_{idx} {attempt+1} 次尝试均 critical，"
                                 "保留末版留痕（attempts_exhausted）")
                     return str(lf_path)
-            shot["_last_failure_class"] = "none"
+            shot["_last_failure_class"] = _df_cls
             _emit_stage4_ledger(
                 shot, "last_frame", attempt + 1,
                 prompt_text=lf_desc_full, refs=refs,
-                action_type="generate", defect_class="none",
-                qc_verdict="qc_passed",
+                action_type="generate", defect_class=_df_cls,
+                qc_verdict=_qc_verdict, detail=_qc_detail,
             )
             return str(lf_path)
         if attempt < max_retries:
@@ -4950,10 +5107,23 @@ async def _gen_keyframes_async(
             if _kf_preflight:
                 shot["_last_failure_class"] = FAILURE_REQUEST_CONFLICT
                 _emit_stage4_ledger(
-                    shot, f"keyframe_{i}", attempt + 1,
+                    shot, f"keyframe_{i}", 0,
                     prompt_text=kf_desc_full, refs=refs,
-                    action_type="generate", defect_class=FAILURE_REQUEST_CONFLICT,
-                    detail=str(_kf_preflight["issues"][:2]),
+                    action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
+                    qc_verdict="not_run", detail=str(_kf_preflight["issues"][:2]),
+                )
+                break
+
+            from shared.prompt_contradiction import PromptContradictionError, assert_no_contradictions
+            try:
+                assert_no_contradictions(kf_desc_full, f"shot{idx} 关键帧{i}")
+            except PromptContradictionError as _kf_pc_err:
+                shot["_last_failure_class"] = FAILURE_REQUEST_CONFLICT
+                _emit_stage4_ledger(
+                    shot, f"keyframe_{i}", 0,
+                    prompt_text=kf_desc_full, refs=refs,
+                    action_type="blocked_preflight", defect_class=FAILURE_REQUEST_CONFLICT,
+                    qc_verdict="not_run", detail=str(_kf_pc_err),
                 )
                 break
 
@@ -4994,13 +5164,17 @@ async def _gen_keyframes_async(
                     variation=attempt_variation,
                     kf_index=i)
                 _qc_last = shot.get("_qc_last")
-                if _qc_last is not None and not getattr(_qc_last, "ok", True):
+                _df_cls, _qc_verdict, _qc_detail = _resolve_ledger_qc_verdict(
+                    kf_path, shot, "keyframe", characters,
+                    qc_critical=qc_critical, qc_last=_qc_last, kf_index=i,
+                )
+                if _df_cls == FAILURE_QC_DISPUTE:
                     shot["_last_failure_class"] = FAILURE_QC_DISPUTE
                     _emit_stage4_ledger(
                         shot, f"keyframe_{i}", attempt + 1,
                         prompt_text=kf_desc_full, refs=refs,
                         action_type="generate", defect_class=FAILURE_QC_DISPUTE,
-                        qc_verdict="qc_call_failed", detail=str(getattr(_qc_last, "error", "")),
+                        qc_verdict="qc_call_failed", detail=_qc_detail,
                     )
                     kf_paths.append(str(kf_path))
                     break
@@ -5010,15 +5184,19 @@ async def _gen_keyframes_async(
                         shot, f"keyframe_{i}", attempt + 1,
                         prompt_text=kf_desc_full, refs=refs,
                         action_type="generate", defect_class=FAILURE_STOCHASTIC_MISS,
-                        qc_verdict="qc_critical",
+                        qc_verdict=_qc_verdict, detail=_qc_detail,
                     )
                     if await _try_qc_repair(image_adapter, shot, str(kf_path), "keyframe",
                                             characters, empty_scene, idx, kf_index=i):
+                        _, _rep_v, _rep_d = _resolve_ledger_qc_verdict(
+                            kf_path, shot, "keyframe", characters,
+                            qc_critical=False, qc_last=shot.get("_qc_last"), kf_index=i,
+                        )
                         _emit_stage4_ledger(
                             shot, f"keyframe_{i}", attempt + 1,
                             prompt_text=kf_desc_full, refs=refs,
                             action_type="local_edit", defect_class="none",
-                            qc_verdict="qc_passed",
+                            qc_verdict=_rep_v, detail=_rep_d,
                         )
                         kf_paths.append(str(kf_path))
                         break
@@ -5033,12 +5211,12 @@ async def _gen_keyframes_async(
                                        "保留末版留痕（attempts_exhausted）")
                     kf_paths.append(str(kf_path))
                     break
-                shot["_last_failure_class"] = "none"
+                shot["_last_failure_class"] = _df_cls
                 _emit_stage4_ledger(
                     shot, f"keyframe_{i}", attempt + 1,
                     prompt_text=kf_desc_full, refs=refs,
-                    action_type="generate", defect_class="none",
-                    qc_verdict="qc_passed",
+                    action_type="generate", defect_class=_df_cls,
+                    qc_verdict=_qc_verdict, detail=_qc_detail,
                 )
                 # v6.30：doodle 区域编辑 fallback（关键帧同首帧——精确空间约束
                 # prompt 调不到位时走 i2i+红框二修）。失败保留原图（graceful degradation）。

@@ -579,6 +579,15 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
                             "severity": "reject", "path": "visual_plan",
                             "message": str(exc)[:1000]}]
 
+    pre_shot_asset_gate: dict = {}
+    try:
+        from step02a_frame_gen.execution_plan import check_pre_shot_asset_gate
+        pre_shot_asset_gate = check_pre_shot_asset_gate(
+            script, only_indices=only_indices, frames=frames,
+        )
+    except Exception as exc:  # noqa: BLE001
+        pre_shot_asset_gate = {"status": "error", "error": str(exc)[:500]}
+
     return {
         "schema": "step02a.plan/1",
         "model_sends": 0,
@@ -602,6 +611,7 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
         "prompt_stage": "assembled_pre_adapter",
         "prompt_preflight": {"status": "blocked" if prompt_problems else "ok",
                              "problems": prompt_problems},
+        "pre_shot_asset_gate": pre_shot_asset_gate,
         "visual_plan": visual_plan,
         "visual_plan_status": visual_plan.get("status", "blocked"),
         "visual_plan_issues": plan_issues,
@@ -666,6 +676,8 @@ def main():
                         help="把候选 visual_plan.json 写到显式路径（plan-only 与真实入口共用）")
     parser.add_argument("--verify-only", action="store_true",
                         help="零生成/零视觉 QC：按锁定且通过 QC 的资产重建并合并产品验收报告")
+    parser.add_argument("--recheck-failed-qc", action="store_true",
+                        help="零生图 POST：只读扫描并重检处于 qc_call_failed 状态的已生成帧")
     parser.add_argument("--verify-shots", default="1,2",
                         help="--verify-only 的镜头范围（默认 1,2）")
     parser.add_argument("--verify-policies", default="1:auto,2:first_only",
@@ -693,6 +705,14 @@ def main():
     frames = _default_frames(frames, args.all_frames)
     script_path = script_file()
     work_dir = wd()
+
+    if getattr(args, "recheck_failed_qc", False):
+        from step02a_frame_gen.verify_acceptance import run_recheck_failed_qc
+        raise SystemExit(run_recheck_failed_qc(
+            script_path, work_dir,
+            shots=only_indices,
+            frames=parse_frame_selector(args.frames) if args.frames else ({"ff", "lf", "kf"} if args.all_frames else None),
+        ))
 
     if getattr(args, "verify_only", False):
         from step02a_frame_gen.verify_acceptance import run_verify_only
@@ -813,6 +833,20 @@ def main():
         logger.info(f"[ASSET] 资产图: 场景{asset_result.get('scenes', 0)} / 道具{asset_result.get('props', 0)}")
     except Exception as e:
         logger.warn(f"[ASSET] 资产图生成失败（不阻断帧生成）: {e}")
+
+    # G3 Pre-Shot Asset Gate: after portrait/scene banks are built, refuse to spend
+    # shot-frame POSTs if named on-screen characters still lack registered portraits.
+    if os.getenv("STEP02A_REQUIRE_PORTRAIT_GATE", "1").strip() == "1":
+        from step02a_frame_gen.execution_plan import check_pre_shot_asset_gate
+        _asset_gate = check_pre_shot_asset_gate(
+            _script_for_qa, only_indices=only_indices, frames=frames,
+        )
+        if _asset_gate.get("status") != "ok":
+            logger.error(
+                f"[ASSET-GATE] 出镜命名角色尚缺肖像建库，禁止继续抽分镜帧: "
+                f"{_asset_gate.get('missing_portraits')[:5]}"
+            )
+            raise SystemExit(2)
 
     # 生成帧（全部或指定镜头）
     results = asyncio.run(gen_all_frames(

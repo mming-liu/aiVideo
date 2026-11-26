@@ -209,7 +209,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         "1. face_consistency 人物五官/脸型异常、扭曲、模糊不清",
         "2. body_deformity 肢体畸形（多指/少指/扭曲/关节错位/比例失调）",
         "3. unexpected_object 多余物体、漂浮/穿透/半透明等违反物理逻辑的现象",
-        "4. text_watermark 乱码文字、水印、logo",
+        "4. text_watermark 画面任意区域（含天空、水面、背景或角落）出现任何非剧情要求的文字、书法标题、地名大字、牌匾乱码、水印或 logo",
         "5. subject_consistency 画面主体人物/场景/道具与预期明显不符",
     ]
     if not empty_scene:
@@ -292,8 +292,8 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         "属 unexpected_object critical（参考图样式污染）",
         "",
         "只返回一个 JSON 对象，不要任何其他内容：",
-        '{"has_hallucination":true或false,"issues":[{"category":"类别","description":"描述","severity":"critical或warning"}]}',
-        "category 只能从以上列表选；has_hallucination 为 true 当且仅当存在至少一个 critical 或两个以上 warning。",
+        '{"has_hallucination":true或false,"has_unwanted_text":true或false,"issues":[{"category":"类别","description":"描述","severity":"critical或warning"}]}',
+        "category 只能从以上列表选；若画面出现任何非剧情要求的文字/书法标题/地名大字/水印/logo，has_unwanted_text 必须为 true 且附带 text_watermark critical 条目；has_hallucination 为 true 当且仅当存在至少一个 critical。",
     ])
     return "\n".join(lines)
 
@@ -332,7 +332,9 @@ def _map_category(raw: str) -> str:
 
 
 def _severity_of(category: str, description: str, raw_severity: str) -> str:
-    """确定 severity：物理违规自动升级 critical，其余沿用模型判定."""
+    """确定 severity：物理违规与画面非剧情文字/水印自动升级 critical，其余沿用模型判定."""
+    if category == "text_watermark":
+        return "critical"
     if any(kw in description for kw in _PHYSICS_VIOLATION_KEYWORDS):
         return "critical"
     if category == "unexpected_object" and any(kw in description for kw in ("漂浮", "穿透", "半透明", "融合", "光束")):
@@ -418,7 +420,6 @@ def parse_verdict(text: str) -> QcResult:
 def _result_from_json(data: dict, raw: str) -> QcResult:
     """从已解析的 JSON dict 构建 QcResult."""
     issues: list[QcIssue] = []
-    has = bool(data.get("has_hallucination", False))
 
     for item in data.get("issues", []) or []:
         if not isinstance(item, dict):
@@ -427,12 +428,16 @@ def _result_from_json(data: dict, raw: str) -> QcResult:
         description = str(item.get("description", "") or "")
         severity = _severity_of(category, description, str(item.get("severity", "warning")))
         issues.append(QcIssue(category=category, description=description, severity=severity))
-        if severity == "critical":
-            has = True
 
-    # ≥2 warning 视为检出问题（对齐现有判定标准）
-    if sum(1 for i in issues if i.severity == "warning") >= 2:
-        has = True
+    if bool(data.get("has_unwanted_text", False)) and not any(i.category == "text_watermark" for i in issues):
+        issues.append(QcIssue(
+            category="text_watermark",
+            description="画面检测到非剧情文字、书法标题或水印（has_unwanted_text=true）",
+            severity="critical",
+        ))
+
+    has_critical = any(i.severity == "critical" for i in issues)
+    has = has_critical or (bool(data.get("has_hallucination", False)) and not issues)
 
     return QcResult(has_hallucination=has, issues=issues, ok=True, raw_result=raw)
 
@@ -679,6 +684,12 @@ def write_sidecar(frame_path: Path, result: QcResult, *,
             "description": i.description,
             "severity": severity,
         })
+    if final_status == "qc_rejected":
+        verdict_detail = "critical_reject"
+    elif final_status == "qc_passed":
+        verdict_detail = "warning_only_pass" if issues_data else "clean_pass"
+    else:
+        verdict_detail = final_status
     data = {
         # 兼容字段（submit_poll 旧读法仍可读）
         "has_hallucination": bool(result.has_hallucination),
@@ -686,6 +697,7 @@ def write_sidecar(frame_path: Path, result: QcResult, *,
         # v2 身份/状态
         "schema_version": 2,
         "status": final_status,
+        "verdict_detail": verdict_detail,
         "status_reason": reason,
         "image": image,
         "frame": frame_meta or {},
@@ -755,6 +767,31 @@ _GROUNDING_PROMPT = (
 #: 次数由 `QC_VISION_HTTP_RETRIES` 控制（默认 2 次重试 = 最多 3 次尝试）。
 _QC_HTTP_RETRY_STATUS = frozenset({429, 502, 503, 504})
 _QC_HTTP_RETRY_BACKOFF = (2.0, 5.0)
+_QC_SESSION_LOCK = __import__("threading").Lock()
+_QC_SESSION = None
+_QC_SESSION_DIRTY = False
+
+
+def _get_qc_session():
+    """Return managed requests.Session, closing and rebuilding if marked dirty (Step01 M3.2 pattern)."""
+    global _QC_SESSION, _QC_SESSION_DIRTY
+    with _QC_SESSION_LOCK:
+        if _QC_SESSION is None or _QC_SESSION_DIRTY:
+            if _QC_SESSION is not None:
+                try:
+                    _QC_SESSION.close()
+                except Exception:
+                    pass
+            _QC_SESSION = requests.Session()
+            _QC_SESSION_DIRTY = False
+        return _QC_SESSION
+
+
+def _mark_qc_session_dirty() -> None:
+    """Mark connection pool dirty after transient SSL/connection failure so next attempt opens fresh sockets."""
+    global _QC_SESSION_DIRTY
+    with _QC_SESSION_LOCK:
+        _QC_SESSION_DIRTY = True
 
 
 def _qc_http_retries() -> int:
@@ -797,14 +834,19 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
     retries = _qc_http_retries()
     last_err = ""
     for attempt in range(retries + 1):
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "x-opencode-session": _QC_SESSION_ID,
+        }
+        if attempt > 0:
+            headers["Connection"] = "close"
+        session = _get_qc_session()
+        resp = None
         try:
-            resp = requests.post(
+            resp = session.post(
                 f"{base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                    "x-opencode-session": _QC_SESSION_ID,
-                },
+                headers=headers,
                 json={
                     "model": QC_OPENCODE_MODEL,
                     "messages": [{"role": "user", "content": [
@@ -817,24 +859,29 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
                 },
                 timeout=QC_OPENCODE_TIMEOUT_SEC,
             )
+            if resp.status_code == 200:
+                data = resp.json()
+                content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+                if not content:
+                    raise RuntimeError("opencode 返回空内容")
+                return content
+            last_err = f"opencode {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code not in _QC_HTTP_RETRY_STATUS or attempt >= retries:
+                raise RuntimeError(last_err)
+            delay = _qc_retry_after(resp)
         except (requests.exceptions.SSLError,
                 requests.exceptions.ConnectionError) as exc:
+            _mark_qc_session_dirty()
             last_err = f"opencode 传输异常: {exc}"
             if attempt >= retries:
                 raise RuntimeError(last_err) from exc
-            delay = _QC_HTTP_RETRY_BACKOFF[min(attempt, len(_QC_HTTP_RETRY_BACKOFF) - 1)]
-            time.sleep(delay)
-            continue
-        if resp.status_code == 200:
-            data = resp.json()
-            content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
-            if not content:
-                raise RuntimeError("opencode 返回空内容")
-            return content
-        last_err = f"opencode {resp.status_code}: {resp.text[:200]}"
-        if resp.status_code not in _QC_HTTP_RETRY_STATUS or attempt >= retries:
-            raise RuntimeError(last_err)
-        delay = _qc_retry_after(resp)
+            delay = None
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
         if delay is None:
             delay = _QC_HTTP_RETRY_BACKOFF[min(attempt, len(_QC_HTTP_RETRY_BACKOFF) - 1)]
         time.sleep(delay)
@@ -1846,6 +1893,15 @@ def build_claim_checks_spec(shot: dict, frame_kind: str, kf_index: int | None = 
     return qs[:8]  # per-frame ≤8 问（腾出视线/道具名额）
 
 
+_UNWANTED_TEXT_QUESTION = {
+    "q": "画面任意区域（含天空、水面、背景或角落）是否完全没有任何文字、书法标题、地名大字、牌匾乱码、水印或 logo？",
+    "expect": "yes",
+    "key": True,
+    "reliability": "high",
+    "category": "text_watermark",
+}
+
+
 def build_targeted_questions(shot: dict, frame_kind: str, kf_index: int | None = None) -> list[dict]:
     """QC 入口：spec 驱动 vs 散文解析的 dispatch.
 
@@ -1860,14 +1916,18 @@ def build_targeted_questions(shot: dict, frame_kind: str, kf_index: int | None =
     has_spec = isinstance(shot.get("frame_layouts"), dict)
     if flag == "1":
         # 强制 desc 路径
-        return build_claim_checks(shot, frame_kind)
-    if flag == "0":
+        qs = list(build_claim_checks(shot, frame_kind))
+    elif flag == "0":
         # 强制 spec 路径（无 spec 章 → []）
-        return build_claim_checks_spec(shot, frame_kind, kf_index=kf_index)
-    # 自动：新章 → spec；老章 → desc
-    if has_spec:
-        return build_claim_checks_spec(shot, frame_kind, kf_index=kf_index)
-    return build_claim_checks(shot, frame_kind)
+        qs = list(build_claim_checks_spec(shot, frame_kind, kf_index=kf_index))
+    elif has_spec:
+        # 自动：新章 → spec；老章 → desc
+        qs = list(build_claim_checks_spec(shot, frame_kind, kf_index=kf_index))
+    else:
+        qs = list(build_claim_checks(shot, frame_kind))
+    if not any(item.get("category") == "text_watermark" for item in qs):
+        qs.append(dict(_UNWANTED_TEXT_QUESTION))
+    return qs
 
 
 def _ask_yes_no(frame_path: str | Path, questions: list[dict]) -> dict[str, str]:
@@ -2002,7 +2062,7 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
                     pass  # 答对，streak 维持（low 类不清零）
                 elif sev in ("critical", "warning"):
                     all_issues.append(QcIssue(
-                        category="anchor_mismatch",
+                        category=str(item.get("category") or "anchor_mismatch"),
                         description=f"「{item['q']}」答 {got}，期望 {item['expect']}",
                         severity=sev,
                     ))
@@ -2029,15 +2089,16 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         return QcResult(has_hallucination=False, issues=[], ok=False, raw_result="",
                         error=ark_error)
 
-    # 第 3 层：通用语义 QC 强制降级为 warning（无放行权）
+    # 第 3 层：通用语义 QC 默认降级为 warning；仅 text_watermark（非剧情文字/水印）
+    # 保留 critical（G2 硬门，防止天空大字/水印被 warning 放行）。
     for issue in semantic_result.issues:
+        _sev = "critical" if issue.category == "text_watermark" else "warning"
         all_issues.append(QcIssue(category=issue.category,
                                   description=f"[opencode] {issue.description}",
-                                  severity="warning"))
+                                  severity=_sev))
 
     has_critical = any(i.severity == "critical" for i in all_issues)
-    warn_n = sum(1 for i in all_issues if i.severity == "warning")
-    has_hallucination = has_critical or warn_n >= 2
+    has_hallucination = has_critical
     return QcResult(has_hallucination=has_hallucination, issues=all_issues, ok=True,
                     raw_result=semantic_result.raw_result,
                     error=ark_error,

@@ -1484,6 +1484,32 @@ def _age_label(value) -> str:
     return _AGE_LABEL_ZH.get(raw.lower(), raw)
 
 
+_ADMIN_LOCATION_PREFIX_RE = re.compile(
+    r"^[\u4e00-\u9fff]{1,6}(?:镇|村|城|州|府|县|郡|乡|关)"
+)
+_MANSION_LOCATION_PREFIX_RE = re.compile(
+    r"^[\u4e00-\u9fff]{1,3}(?:府|家)(?=(?:别庄|大院|宅院|府邸|庄园))"
+)
+
+
+def visual_location_hint(location: str, shot: dict | None = None) -> str:
+    """将专有地名转为纯视觉环境特征描述，避免扩散模型把地名当成画面题字/水印渲染."""
+    loc = str(location or "").strip()
+    if not loc:
+        return ""
+    # 先剥除行政区划/专有宅邸前缀（如「云河镇水湾」→「水湾」、「杨府别庄」→「别庄」），
+    # 保留通用地貌/建筑名词（如「作坊」「茶室」「酒家」「堤岸」）。
+    stripped = _ADMIN_LOCATION_PREFIX_RE.sub("", loc).strip()
+    stripped = _MANSION_LOCATION_PREFIX_RE.sub("", stripped).strip()
+    if stripped and len(stripped) >= 2:
+        return stripped
+    # 整词本身是行政专名且剥空时，尝试从 shot 自身描述提取地貌后缀，否则退回通用词。
+    for suffix in ("水湾", "荷塘", "河畔", "堤岸", "码头", "酒家", "客栈", "宅院", "别庄", "街道", "山林", "船舱"):
+        if suffix in loc:
+            return suffix
+    return "古风实景环境"
+
+
 def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
                                  shot: dict | None = None,
                                  characters: list | None = None,
@@ -1506,7 +1532,8 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
         # 的版式混入主画面（下 1/3 变成白底产品图）。参考图只借"内容"不借"版式"。
         "画面必须是完整连贯的单幅场景环境，"
         "禁止纯白背景/影棚布光/产品图版式，禁止输出上下拼接或分屏的合成画面；"
-        "参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面。"
+        "参考图仅用于人物长相、服装与道具外观参考，参考图的背景样式禁止混入画面；"
+        "纯视觉画面呈现，画面任意区域无任何文字、地名标题、字幕、牌匾题字或水印。"
     )
     if frame_type == "首帧":
         strict_constraints += (
@@ -1521,15 +1548,15 @@ def add_image_strict_constraints(prompt: str, frame_type: str = "首帧",
             "【关键帧】这是动作进行中的画面，展示动作过程中的一个瞬间状态。"
         )
 
-    # 地点一致性锚定：把镜头的 location 注入画面，防止图片模型自由发挥地点，
-    # 导致同一场景在不同镜头/不同帧之间环境不一致（与视频 prompt 的
-    # 「场景一致性约束」同源，保证图生视频前导帧与视频场景统一）。
+    # 地点一致性锚定：只传转译后的视觉地貌特征（不直传专有中文地名标题词），
+    # 防止扩散模型把专名当成书法标题写进天空（Stage 2 B4 实测教训）。
     if shot is not None:
         location = shot.get("location", "") or shot.get("scene", "")
         if location:
+            visual_loc = visual_location_hint(location, shot)
             strict_constraints += (
-                f"【场景地点】本画面发生地点必须是{location}。"
-                "严格遵守该地点特征，禁止偏移到其他地点。"
+                f"【场景环境】保持与{visual_loc}一致的自然与建筑空间特征，"
+                "严格遵守该环境特征，不渲染地名牌匾或标题文字。"
             )
 
     # 根据镜头实际内容动态生成角色约束（不再硬编码刺客/第一章角色名）

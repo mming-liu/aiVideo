@@ -421,6 +421,7 @@ tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_qc_admission_s05.py
 !tests/step02a_frame_gen/test_frame_contract_matrix_s06.py
 !tests/step02a_frame_gen/test_stage1_closure.py
+!tests/step02a_frame_gen/test_phase2a_governance.py
 !tests/step04_merge/
 tests/step04_merge/*
 !tests/step04_merge/test_step04_shots_subset.py

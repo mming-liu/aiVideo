@@ -454,7 +454,10 @@ class VolcengineImageService(ImageGenerationService):
             # 不重写 prompt（确定性兜底范围外，应触发 LLM regen 而非代码层硬填）。
             if resp.status_code == 400 and "OutputImageSensitiveContentDetected" in resp.text:
                 _record("qc_rejected")
-                if model_idx + 1 < len(self._model_queue):
+                _budget_left = not (_max_attempts and _attempts >= _max_attempts) and not (
+                    _max_posts and _POSTS_USED[0] >= _max_posts
+                )
+                if model_idx + 1 < len(self._model_queue) and _budget_left:
                     model_idx += 1
                     _verbose_write(f"  [镜头{req.shot_index}] [!] 模型 {model} 输出触发内容安全过滤，"
                           f"切换到 {self._model_queue[model_idx]} 重试")
