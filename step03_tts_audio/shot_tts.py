@@ -856,7 +856,8 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
                      voice_registry=None, use_async: bool = False, *,
                      scope: dict | None = None, script_revision: str = "",
                      candidate_context: Optional[TtsCandidateContext] = None,
-                     provider=None, collected: Optional[list] = None) -> List[str]:
+                     provider=None, collected: Optional[list] = None,
+                     plan: dict | None = None) -> List[str]:
     """为所有分镜生成 TTS 音频（对白轨）.
 
     Returns: 成功生成的音频文件路径列表（失败项**不**计入，由调用方按自己的判据停下）。
@@ -864,7 +865,7 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
     shots = script.get("shots", [])
     hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
     units = ([hook] if hook else []) + list(shots)
-    _plan = script.get("chapter_outline")
+    _plan = plan if isinstance(plan, dict) and plan else script.get("chapter_outline")
     _plan = _plan if isinstance(_plan, dict) else None
     if not units:
         print("[WARN] No shots data")
@@ -939,7 +940,8 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
                       voice_registry=None,
                       candidate_context: Optional[TtsCandidateContext] = None,
                       collected: Optional[list] = None,
-                      only_indices=None, full_shots: list | None = None) -> List[str]:
+                      only_indices=None, full_shots: list | None = None,
+                      plan: dict | None = None) -> List[str]:
     """为**图外旁白**生成独立 TTS 音轨（2026-09-30 复核第 7 轮第 3 项）.
 
     与 `gen_shot_tts` 的三点不同（都是**有意**的）：
@@ -957,7 +959,7 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
     from step01_script_gen.plan_feasibility import (broadcast_narration_entries,
                                                     layout_voice_entries,
                                                     voice_units)
-    plan = script.get("chapter_outline")
+    plan = plan if isinstance(plan, dict) and plan else script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
     entries = broadcast_narration_entries(plan)
     if not entries:

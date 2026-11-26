@@ -23,14 +23,16 @@
 
 问题：提交稿 `e916207d…` 缺 `chapter_outline`，旧报告临时补计划后得到 `0e8461dd…`，`revision_mismatch=true`。
 
-修复方式：不重写分镜，不重烧终审；把计划放进候选的**正常计划缓存**：
+修复方式：不重写分镜，不重烧终审；把计划放进候选的**受绑定计划缓存**：
 
-- `.tmp/s35/ch1_committed/chapter_outline.cache.json` = `{"outline": ch1_verified_plan}`；
+- `.tmp/s35/ch1_committed/chapter_outline.cache.json` 使用 `step01.chapter_outline.cache.v2`：绑定 `book_name`/`chapter`、`script_revision`、`plan_sha256` 与 `outline`；
+- `shared/plan_cache.py` 校验章号、旧稿 revision 和计划摘要；不匹配/损坏/无 schema 明确抛 `PlanCacheError`；
 - `tools/voice_unit_report.py` 自动加载该缓存，作为 `build_speech_units(plan=...)` 的显式输入；
-- `step03_tts_audio/main.py` 的正常/候选/plan-only 三个入口都通过 `_plan_for_script()` 读取同一缓存；
-- `step03_tts_audio/shot_tts.py:build_speech_units()` 新增 `plan` 参数；不修改 `script_result.json`，不改变 `script_revision`。
+- `step03_tts_audio/main.py` 用 `_audio_context()` **一次解析**有效计划，声音策略、旁白合同、声音单位、缺轨检查、声音状态共用同一份；正常/候选/plan-only 三个入口都经此；
+- `gen_all_shot_tts()` / `gen_narration_tts()` 新增 `plan` 参数，实际合成不再直接读稿内 `chapter_outline`；
+- 不修改 `script_result.json`，不改变 `script_revision`。
 
-新报告 `.tmp/s44/ch1_voice_final.json`：
+新报告 `.tmp/s44/ch1_voice_v2.json`：
 
 - `script_revision = e916207daf6d…`（与提交回执一致）；
 - `revision_mismatch = false`；
@@ -71,7 +73,7 @@
 - `tests/step02a_frame_gen/test_frame_protection.py`
 - `tests/step03_tts_audio/test_tts_units_and_cli.py`
 
-结果：基线 **78 passed**，最终交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。Step03 计划缓存另加 2 条测试，`test_plan_cache.py + test_tts_units_and_cli.py` 共 13 passed。
+结果：基线 **78 passed**，最终交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。Step03 计划缓存/策略入口测试：`test_plan_cache.py + test_tts_units_and_cli.py` 共 **20 passed**；其中 `_audio_context()` 用 4 条旁白缓存验证了策略读到 `narration_tts_required=True`。
 
 主工作树全量（P2 后）：`tests/step01_script_gen tests/shared` **6333 passed / 295 skipped / 4 xfailed**（192s）。Step03 受影响的 11 条测试通过。
 
@@ -92,10 +94,10 @@
 
 `adoption_plan.json` 已补：
 
-- 正式提交后用 `_create_adoption_receipt` 生成新 `step01_adoption_receipt.json`；
-- 旧收据移到 `snapshots/adoption_receipt_pre_s44.json`；
-- 回退时恢复旧收据并删除新收据；
-- 采纳清单加入 `chapter_outline.cache.json`。
+- 正式提交后用 `_create_adoption_receipt` 生成新 **`step01_adoption.json`**（与代码/配置/发布事务一致）；
+- 旧收据移到 `snapshots/adoption_pre_s44.json`；
+- 回退时恢复旧收据；旧文件不存在则删除新收据；
+- 采纳清单加入 `chapter_outline.cache.json`；正式 `chapter_001` 原先没有该缓存，回退时删除新增文件（若旧缓存存在则恢复旧缓存）。
 
 正式替换仍未执行。
 
@@ -104,6 +106,7 @@
 - `179dcad` fix(step01/tts): bind identity evidence, strict identity types, and plan-backed voice report
 - `0512325` fix(step03): load candidate plan cache for speech units
 - `bee6395` test(step03): cover candidate plan cache loading
+- 本文件后续提交：绑定计划缓存、统一 `_audio_context()`、修正采纳收据名
 
 ## 八、未完成/边界
 

@@ -39,20 +39,15 @@ from step03_tts_audio.cli import (ENV_ATTEMPT_ID, StageOptions,
                                   plan_only_from_env, new_attempt_id)
 
 
-def _plan_for_script(script: dict) -> dict:
-    """优先用稿件内计划，其次读候选的正常计划缓存（S44/P1）."""
+def _plan_for_script(script: dict, *, scope: dict | None = None,
+                     script_revision: str = "") -> dict:
+    """优先用稿件内计划，其次读**已绑定身份**的候选计划缓存（S44/P1）."""
     plan = script.get("chapter_outline") if isinstance(script, dict) else None
     if isinstance(plan, dict) and plan:
         return plan
-    cache = Path(CHAPTER_DIR) / "chapter_outline.cache.json"
-    if cache.is_file():
-        try:
-            data = json.loads(cache.read_text(encoding="utf-8"))
-            outline = data.get("outline") if isinstance(data, dict) and "outline" in data else data
-            return outline if isinstance(outline, dict) else {}
-        except (OSError, ValueError):
-            return {}
-    return {}
+    from shared.plan_cache import FILENAME, load_plan_cache
+    return load_plan_cache(
+        Path(CHAPTER_DIR) / FILENAME, scope=scope or {}, script_revision=script_revision)
 
 
 class _LogContext:
@@ -111,6 +106,21 @@ def _resolve_clip_inputs(hook, shots, scope, clips_ctx) -> list:
     return out
 
 
+def _audio_context(script: dict, *, scope: dict, revision: str,
+                   actual_audio_present: bool, only_indices=None):
+    """解析一次有效计划，供策略、生成、缺轨检查共用（S44/P1）."""
+    from shared.audio_policy import (require_narration_contract,
+                                     resolve_audio_policy)
+    from step03_tts_audio.shot_tts import narration_subset_entries
+    plan = _plan_for_script(script, scope=scope, script_revision=revision)
+    contract = require_narration_contract(plan)
+    entries = [{"index": i, **e} for i, e in narration_subset_entries(
+        plan, script.get("shots") or [], only_indices)]
+    policy = resolve_audio_policy(actual_audio_present=actual_audio_present,
+                                  narration_present=bool(entries))
+    return plan, contract, entries, policy
+
+
 def _candidate_attempt_dir(candidate_root, attempt_id: Path | str) -> Path:
     from shared.enhancement_io import ATTEMPTS_DIRNAME
     return Path(candidate_root) / ATTEMPTS_DIRNAME / str(attempt_id)
@@ -139,7 +149,8 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
                      or tts_config.PROVIDER)
     units = build_speech_units(script, scope=scope, script_revision=revision,
                                provider_name=provider_name,
-                               plan=_plan_for_script(script))
+                               plan=_plan_for_script(
+                                   script, scope=scope, script_revision=revision))
     ctx = TtsCandidateContext.create(
         candidate_root, attempt_id=attempt_id, experiment_id=experiment_id,
         scope=scope, script_revision=revision, source=source, clips=clips_ctx,
@@ -388,26 +399,17 @@ def main(options=None):
                 "——旧稿的视频不得配到新稿的配音上" % (cand_rev[:12], revision[:12]))
         source = clips_ctx.source or "video_candidates"
 
-    plan = script.get("chapter_outline")
-    plan = plan if isinstance(plan, dict) else {}
-
     # v6.73: model capability + actual clip audio streams determine the source.
     # 2026-10-03：素材解析改走**唯一 resolver**（Step03/04 与 hook 同规则）。
-    from shared.audio_policy import resolve_audio_policy
     clip_inputs = _resolve_clip_inputs(hook, shots, scope, clips_ctx)
     actual_audio_present = probe_actual_audio(clip_inputs)
     # 图外旁白是正交的一维（复核第 7 轮）：视频模型不会念它（旁白是叙述文字，
     # step02 的 prompt 不把它当台词），所以**无论 native 还是 tts_mix** 都要有独立音轨。
-    from shared.audio_policy import require_narration_contract
     # **按计划自称的模式**核声音合同（主专题 §5）：新模式出现图外旁白 ⇒ **合同冲突**，
     # 退回规划者，不静默清空、也不"给它合成一条旁白轨"冒充合法无旁白。
-    _narr_contract = require_narration_contract(plan)
-    from step03_tts_audio.shot_tts import narration_subset_entries
-    _narr_entries = [{"index": _i, **e}
-                     for _i, e in narration_subset_entries(
-                         plan, script.get("shots") or [], only_indices)]
-    policy = resolve_audio_policy(actual_audio_present=actual_audio_present,
-                                  narration_present=bool(_narr_entries))
+    plan, _narr_contract, _narr_entries, policy = _audio_context(
+        script, scope=scope, revision=revision,
+        actual_audio_present=actual_audio_present, only_indices=only_indices)
     forced = (os.getenv("STEP03_FORCE", "0").strip() == "1" or candidate_root is not None
               or plan_only)
     _logger.info(
@@ -466,7 +468,8 @@ def main(options=None):
         units = build_speech_units(gen_script, scope=scope, script_revision=revision,
                                    only_indices=only_indices,
                                    full_shots=script.get("shots"),
-                                   plan=_plan_for_script(gen_script))
+                                   plan=_plan_for_script(
+                                       gen_script, scope=scope, script_revision=revision))
         # S18-3：plan-only 打印扣除转场后的真实可用窗口（与 step04 同一时间线）。
         from step03_tts_audio.shot_tts import _compute_voice_windows
         # 子集：用**生成用脚本**（hook 已按子集移除）算窗口，否则计划打印会带上
@@ -543,7 +546,8 @@ def main(options=None):
             units = build_speech_units(gen_script, scope=scope, script_revision=revision,
                                        only_indices=only_indices,
                                        full_shots=script.get("shots"),
-                                       plan=_plan_for_script(gen_script))
+                                       plan=_plan_for_script(
+                                           gen_script, scope=scope, script_revision=revision))
             missing_d = [u.unit_id for u in units
                          if u.kind == "dialogue" and u.unit_id not in produced]
             missing_n = [u.unit_id for u in units
@@ -562,14 +566,14 @@ def main(options=None):
             _logger.info("\n=== Generate per-shot TTS (dynamic voice) ===")
             # 初始化音色注册表（跨章节保持角色声音一致）
             gen_all_shot_tts(gen_script, AUDIO_OUTPUT_DIR, voice_registry, use_async=True,
-                             scope=scope, script_revision=revision)
+                             scope=scope, script_revision=revision, plan=plan)
         if policy.narration_tts_required:
             # 图外旁白：独立音轨（固定旁白音色，一条旁白一个文件）
             _logger.info("\n=== Generate off-screen narration TTS ===")
             gen_narration_tts(gen_script, AUDIO_OUTPUT_DIR, scope=scope,
                               script_revision=revision, voice_registry=voice_registry,
                               only_indices=only_indices,
-                              full_shots=script.get("shots"))
+                              full_shots=script.get("shots"), plan=plan)
     except Exception as e:
         _logger.error(f"[ERROR] {e}")
         sys.exit(1)
