@@ -1,7 +1,7 @@
 # S44 复核收口：P1/P2 修复、A 清理与同组对账
 
 **日期：** 2026-11-26
-**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`。
+**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`、`39038c0`。
 **状态：** P1/P2 已修复；A 清理已执行；B 保留；两章候选未正式采纳，未生成媒体。
 
 ## 一、A 清理（已执行）
@@ -66,7 +66,7 @@
 
 ## 四、S40 同组逐用例对账
 
-在干净 worktree 中，对 `a4f56da`（基线）与 `bee6395`（最终交付）运行同一组：
+在干净 worktree 中，对 `a4f56da`（基线）与 `39038c0`（最终交付）运行同一组：
 
 - `tests/step01_script_gen/test_step01_commit.py`
 - `tests/step02a_frame_gen/test_execution_plan.py`
@@ -106,7 +106,7 @@
 - `179dcad` fix(step01/tts): bind identity evidence, strict identity types, and plan-backed voice report
 - `0512325` fix(step03): load candidate plan cache for speech units
 - `bee6395` test(step03): cover candidate plan cache loading
-- 本文件后续提交：绑定计划缓存、统一 `_audio_context()`、修正采纳收据名
+- `39038c0` fix(step03): bind plan cache identity and share one effective plan
 
 ## 八、未完成/边界
 
