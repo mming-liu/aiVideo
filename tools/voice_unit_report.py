@@ -165,8 +165,32 @@ def main() -> int:
 
     ch = Path(args.chapter_dir) if args.chapter_dir else chapter_dir()
     script = json.loads((ch / "script_result.json").read_text(encoding="utf-8"))
-    report = build_report(script, plan_dir=Path(args.plan_dir) if args.plan_dir else None,
-                          audio_mode=args.audio_mode)
+    # S41：只读报告不得因“给新角色分配音色”写正式 global/voice_registry.json。
+    # 把注册表路径临时指向复制件；没有现成注册表时用空临时表。
+    import os
+    import shutil
+    import tempfile
+    from tts.voice_registry import get_registry, reset_registry_cache
+    _prev_registry = os.environ.get("TTS_VOICE_REGISTRY_PATH")
+    _tmp_dir = None
+    if not _prev_registry:
+        _tmp_dir = Path(tempfile.mkdtemp(prefix="voice_report_registry_"))
+        _src = Path(get_registry().registry_path)
+        _dst = _tmp_dir / "voice_registry.json"
+        if _src.is_file():
+            shutil.copyfile(_src, _dst)
+        os.environ["TTS_VOICE_REGISTRY_PATH"] = str(_dst)
+        reset_registry_cache()
+    try:
+        report = build_report(script, plan_dir=Path(args.plan_dir) if args.plan_dir else None,
+                              audio_mode=args.audio_mode)
+    finally:
+        if _tmp_dir is not None:
+            if _prev_registry is None:
+                os.environ.pop("TTS_VOICE_REGISTRY_PATH", None)
+            else:
+                os.environ["TTS_VOICE_REGISTRY_PATH"] = _prev_registry
+            reset_registry_cache()
     out = Path(args.out_json)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
