@@ -25,6 +25,11 @@ def test_plan_cache_loads_bound_outline(tmp_path):
     assert load_plan_cache(path, scope=SCOPE, script_revision=REV) == {"main_events": ["甲"]}
 
 
+def test_plan_cache_missing_is_rejected(tmp_path):
+    with pytest.raises(PlanCacheError, match="缺失"):
+        load_plan_cache(tmp_path / "none.json", scope=SCOPE, script_revision=REV)
+
+
 @pytest.mark.parametrize("scope,revision,match", [
     ({"book_name": "杀青州", "chapter": 2}, REV, "chapter"),
     ({"book_name": "别部", "chapter": 1}, REV, "book_name"),

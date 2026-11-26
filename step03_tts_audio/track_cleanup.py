@@ -29,7 +29,7 @@ SCHEMA = "step03_track_cleanup.v1"
 
 
 def expected_tracks(script: dict, *, only_indices=None,
-                    full_shots: list | None = None) -> dict:
+                    full_shots: list | None = None, plan: dict | None = None) -> dict:
     """返回 `{"dialogue": {文件名: 镜头号}, "narration": {文件名: N}}`.
 
     只规划、不读盘、不调模型。
@@ -37,7 +37,7 @@ def expected_tracks(script: dict, *, only_indices=None,
     from step01_script_gen.plan_feasibility import shot_needs_dialogue_track
     from step03_tts_audio.shot_tts import narration_subset_entries
 
-    plan = script.get("chapter_outline")
+    plan = plan if isinstance(plan, dict) and plan else script.get("chapter_outline")
     plan = plan if isinstance(plan, dict) else {}
     shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
     dialogue: dict[str, int] = {}
@@ -161,11 +161,11 @@ def apply_cleanup(plan: dict, quarantine_dir) -> dict:
 
 def run(script: dict, *, directory=None, only_indices=None,
         full_shots: list | None = None, apply: bool = False,
-        quarantine_dir=None) -> dict:
+        quarantine_dir=None, plan: dict | None = None) -> dict:
     """生产入口：算期望轨 → 扫描 → （可选）隔离脏轨。默认 dry-run."""
     root = Path(directory) if directory is not None else audio_dir()
     expected = expected_tracks(script, only_indices=only_indices,
-                               full_shots=full_shots)
+                               full_shots=full_shots, plan=plan)
     plan = plan_cleanup(root, expected)
     if apply and plan["dirty"]:
         quarantine = (Path(quarantine_dir) if quarantine_dir is not None

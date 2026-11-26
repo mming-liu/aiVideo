@@ -667,6 +667,12 @@ def build_step01_commit_manifest(*, run_id: str, created_at: str, revision: str,
                     "sha1": sha1_file(path),
                     "bytes": path.stat().st_size,
                 }
+        # S44/P1：外置计划缓存是提交产物的受校验依赖，纳入摘要清单。
+        cache = Path(chapter_dir) / "chapter_outline.cache.json"
+        payload["plan_cache_required"] = cache.is_file()
+        if cache.is_file():
+            payload["artifacts"]["chapter_outline.cache.json"] = {
+                "sha1": sha1_file(cache), "bytes": cache.stat().st_size}
     return payload
 
 
@@ -815,6 +821,16 @@ def verify_step01_commit_manifest(chapter_dir: Path, script: dict,
                 f"{stage} committed artifact changed after commit: {name} "
                 f"(manifest={item.get('sha1')} actual={actual})"
             )
+    cache_name = "chapter_outline.cache.json"
+    if manifest.get("plan_cache_required") and cache_name not in artifacts:
+        raise QualityGateError(f"{stage} commit manifest requires {cache_name} but has no digest")
+    if cache_name in artifacts:
+        item = artifacts[cache_name]
+        target = Path(chapter_dir) / cache_name
+        if not target.exists():
+            raise QualityGateError(f"{stage} plan cache missing: {target}")
+        if not isinstance(item, dict) or sha1_file(target) != str(item.get("sha1")):
+            raise QualityGateError(f"{stage} plan cache changed after commit: {cache_name}")
     return manifest
 
 

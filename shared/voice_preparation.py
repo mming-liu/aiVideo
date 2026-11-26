@@ -86,8 +86,8 @@ def _source_kind(unit: dict) -> str:
     return "unknown"
 
 
-def _outline_texts(script: dict) -> tuple[list[str], list[str]]:
-    outline = script.get("chapter_outline") or {}
+def _outline_texts(script: dict, plan: dict | None = None) -> tuple[list[str], list[str]]:
+    outline = plan if isinstance(plan, dict) and plan else (script.get("chapter_outline") or {})
     dialogue = [_text(x) for x in (outline.get("dialogue_lines") or []) if _text(x)]
     narration = []
     for entry in outline.get("narration_lines") or []:
@@ -129,7 +129,8 @@ def _unit_identity_issues(unit: dict, script: dict, dialogue: list[str],
 def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None = None,
                             audio_paths: dict | None = None,
                             require_native_verified: bool = True,
-                            require_audio_artifacts: bool = False) -> dict:
+                            require_audio_artifacts: bool = False,
+                            plan: dict | None = None) -> dict:
     """构建声音准备报告（纯离线；``audio_paths`` 给定时探测实际时长）.
 
     ``windows`` 是 ``{shot_index: available_sec}``；缺省用 ``shot.duration_sec``。
@@ -137,11 +138,11 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
     """
     if not isinstance(script, dict):
         raise ValueError("script 必须是对象")
-    outline = script.get("chapter_outline") or {}
+    outline = plan if isinstance(plan, dict) and plan else (script.get("chapter_outline") or {})
     units_raw = outline.get("voice_units") if isinstance(outline, dict) else None
     units_raw = units_raw if isinstance(units_raw, list) else []
     shots = {s.get("index"): s for s in script.get("shots") or [] if isinstance(s, dict)}
-    dialogue, narration = _outline_texts(script)
+    dialogue, narration = _outline_texts(script, plan)
     known = {_text(c.get("identifier") or c.get("name")) if isinstance(c, dict) else _text(c)
              for c in script.get("characters") or []}
     windows = windows or {}

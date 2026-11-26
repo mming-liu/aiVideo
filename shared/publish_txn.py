@@ -35,7 +35,9 @@ LOCK_NAME = ".publish.lock"
 LOCK_STALE_SEC = 600
 
 #: 发布事务覆盖的文件组：三份正式产物 + 提交清单 + 采纳凭据。
-PUBLISH_FILES = tuple(STEP01_ARTIFACT_FILES) + ("step01_commit.json", "step01_adoption.json")
+PUBLISH_FILES = (tuple(STEP01_ARTIFACT_FILES)
+                 + ("chapter_outline.cache.json", "step01_commit.json",
+                    "step01_adoption.json"))
 
 
 class PublishError(RuntimeError):

@@ -61,12 +61,15 @@ def write_plan_cache(path, plan: dict, *, scope, script_revision: str) -> Path:
     return target
 
 
-def load_plan_cache(path, *, scope, script_revision: str) -> dict:
+def load_plan_cache(path, *, scope, script_revision: str,
+                    allow_missing: bool = False) -> dict:
     target = Path(path)
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {}
+        if allow_missing:
+            return {}
+        raise PlanCacheError(f"计划缓存缺失: {target}") from None
     except (OSError, ValueError) as exc:
         raise PlanCacheError(f"计划缓存不可读或损坏: {target}: {exc}") from exc
     if not isinstance(data, dict):

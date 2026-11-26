@@ -147,10 +147,9 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
     provider_name = (str(getattr(provider, "PROVIDER_NAME", "") or "")
                      or (_caps_of(provider).provider if provider is not None else "")
                      or tts_config.PROVIDER)
+    plan = _plan_for_script(script, scope=scope, script_revision=revision)
     units = build_speech_units(script, scope=scope, script_revision=revision,
-                               provider_name=provider_name,
-                               plan=_plan_for_script(
-                                   script, scope=scope, script_revision=revision))
+                               provider_name=provider_name, plan=plan)
     ctx = TtsCandidateContext.create(
         candidate_root, attempt_id=attempt_id, experiment_id=experiment_id,
         scope=scope, script_revision=revision, source=source, clips=clips_ctx,
@@ -185,7 +184,7 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
             _paths = {a.unit_id: str(a.path) for a in artifacts}
             _report = build_voice_preparation(
                 script, scope=scope, windows=_windows, audio_paths=_paths,
-                require_audio_artifacts=True)
+                require_audio_artifacts=True, plan=plan)
             _target = attempt / "voice_preparation.json"
             eio.commit_json_swap(_target, eio.prepare_json_swap(
                 _target, _report, ensure_ascii=False, indent=2))
@@ -493,7 +492,8 @@ def main(options=None):
                 build_voice_preparation, feedback_for_conflicts,
             )
             _windows = {str(k): max(0.0, e - s) for k, (s, e) in _win.items()}
-            _vp = build_voice_preparation(gen_script, scope=scope, windows=_windows)
+            _vp = build_voice_preparation(gen_script, scope=scope, windows=_windows,
+                                          plan=plan)
             _vp["feedback"] = feedback_for_conflicts(_vp)
             _vp_path = Path(candidate_root) / "plan" / "voice_preparation.json"
             _vp_path.write_text(json.dumps(_vp, ensure_ascii=False, indent=2),
@@ -521,7 +521,7 @@ def main(options=None):
         # M4：精准分轨（期望集合与生成/消费同一判据，不读盘、不合成）。
         from step03_tts_audio.track_cleanup import expected_tracks
         _expected = expected_tracks(gen_script, only_indices=only_indices,
-                                    full_shots=script.get("shots"))
+                                    full_shots=script.get("shots"), plan=plan)
         _logger.info("[PLAN] 期望音轨：对白 %d 条、旁白 %d 条（精准分轨，未写盘）"
                      % (len(_expected["dialogue"]), len(_expected["narration"])))
         # M8.3：音色绑定一一关系（同一档案不绑多声线、同一声线不复用多档案）。
@@ -647,7 +647,7 @@ def main(options=None):
         try:
             from step03_tts_audio.track_cleanup import run as _track_cleanup
             _plan = _track_cleanup(
-                script, only_indices=only_indices,
+                script, only_indices=only_indices, plan=plan,
                 apply=_clean_mode in ("1", "apply", "quarantine", "move"))
             _logger.info("[TRACKS] 期望 %d 条，保留 %d 条，脏轨 %d 条，缺轨 %d 条"
                          % (len(_plan["expected"]), len(_plan["keep"]),

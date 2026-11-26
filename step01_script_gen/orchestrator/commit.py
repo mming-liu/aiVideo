@@ -1104,6 +1104,19 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
                          ensure_ascii=False, indent=2)
         atomic_dump_json(_mrt.OUTPUT_FILE, _msc._strip_runtime_fields(script),
                          ensure_ascii=False, indent=2)
+        # S44/P1：必需计划缓存与三件套同事务发布；失败则回滚提交。
+        _plan_for_cache = plan if isinstance(plan, dict) and plan else script.get("chapter_outline")
+        _cache_book = str(script.get("book_name") or os.getenv("BOOK_NAME") or "").strip()
+        _cache_chapter = script.get("chapter_index")
+        if not isinstance(_cache_chapter, int) or isinstance(_cache_chapter, bool):
+            _cache_chapter = getattr(_mrt, "NOVEL_CHAPTER", None)
+        if (isinstance(_plan_for_cache, dict) and _plan_for_cache and _cache_book
+                and isinstance(_cache_chapter, int) and not isinstance(_cache_chapter, bool)):
+            from shared.plan_cache import FILENAME as _PLAN_CACHE_FILENAME, write_plan_cache
+            write_plan_cache(
+                _mrt.CHAPTER_DIR / _PLAN_CACHE_FILENAME, _plan_for_cache,
+                scope={"book_name": _cache_book, "chapter": _cache_chapter},
+                script_revision=revision)
         # commit manifest 是「提交完成」的唯一标志
         manifest = build_step01_commit_manifest(
             run_id=run_id, created_at=_mrt._step01_now(), revision=revision,
@@ -1141,17 +1154,6 @@ def _commit_step01_outputs(script: dict, novel_text: str, *,
         return script, summary
 
     _txn.commit()
-    # S44/P1：把本轮计划写成**受提交身份绑定**的缓存，供 Step03 正常入口消费。
-    if isinstance(plan, dict) and plan:
-        try:
-            from shared.plan_cache import FILENAME, write_plan_cache
-            write_plan_cache(
-                _mrt.CHAPTER_DIR / FILENAME, plan,
-                scope={"book_name": script.get("book_name"),
-                       "chapter": script.get("chapter_index")},
-                script_revision=revision)
-        except Exception as _pc_exc:                             # noqa: BLE001
-            _mrt._logger.warn("计划缓存写入失败（不改变已提交产物）: %s" % _pc_exc)
     summary["status"] = "COMMITTED"
     summary["revision"] = revision
     summary["manifest"] = manifest

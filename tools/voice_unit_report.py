@@ -22,6 +22,21 @@ from shared.quality_gate import compute_script_revision
 from shared.run_scope import current_scope_identity
 
 
+def load_report_plan(ch: Path, script: dict, plan_dir=None) -> dict:
+    """声音报告与 Step03 共用 v2 缓存校验；无缓存时只接受稿内计划."""
+    from shared.plan_cache import FILENAME, load_plan_cache
+    revision = str(script.get("script_revision") or "") or compute_script_revision(script)
+    scope = {"book_name": script.get("book_name"), "chapter": script.get("chapter_index")}
+    base = Path(plan_dir) if plan_dir else Path(ch)
+    path = base if base.is_file() else (base / FILENAME)
+    if path.is_file():
+        return load_plan_cache(path, scope=scope, script_revision=revision)
+    plan = script.get("chapter_outline")
+    if not isinstance(plan, dict) or not plan:
+        raise SystemExit("缺少受绑定的 chapter_outline.cache.json，且稿内无 chapter_outline")
+    return plan
+
+
 def build_report(script: dict, *, plan_dir: Path | None = None,
                  audio_mode: str | None = None, plan: dict | None = None) -> dict:
     from shared.audible_speech import missing_audible_speech_units
@@ -182,19 +197,7 @@ def main() -> int:
         shutil.copyfile(_src, _dst)
     os.environ["TTS_VOICE_REGISTRY_PATH"] = str(_dst)
     reset_registry_cache()
-    plan = None
-    if args.plan_dir:
-        _plan_path = Path(args.plan_dir)
-        if _plan_path.is_dir():
-            _plan_path = _plan_path / "chapter_outline.cache.json"
-        if _plan_path.is_file():
-            _data = json.loads(_plan_path.read_text(encoding="utf-8"))
-            plan = (_data.get("outline") if isinstance(_data, dict) and "outline" in _data
-                    else _data)
-    elif (ch / "chapter_outline.cache.json").is_file():
-        _data = json.loads((ch / "chapter_outline.cache.json").read_text(encoding="utf-8"))
-        plan = (_data.get("outline") if isinstance(_data, dict) and "outline" in _data
-                else _data)
+    plan = load_report_plan(ch, script, plan_dir=args.plan_dir)
     try:
         report = build_report(script, plan_dir=Path(args.plan_dir) if args.plan_dir else None,
                               audio_mode=args.audio_mode, plan=plan)
