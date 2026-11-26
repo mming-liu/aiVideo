@@ -1175,10 +1175,20 @@ def _run_merge(options, attempt):
   from shared.plan_cache import FILENAME as PLAN_CACHE_NAME, load_plan_cache
   plan = script.get("chapter_outline")
   if not isinstance(plan, dict) or not plan:
+    _cache_path = CHAPTER_DIR / PLAN_CACHE_NAME
+    _manifest_path = CHAPTER_DIR / "step01_commit.json"
+    _cache_required = False
+    if _manifest_path.is_file():
+      try:
+        _cache_required = bool(json.loads(
+          _manifest_path.read_text(encoding="utf-8")).get("plan_cache_required"))
+      except (OSError, ValueError):
+        _cache_required = False
     plan = load_plan_cache(
-      CHAPTER_DIR / PLAN_CACHE_NAME,
+      _cache_path,
       scope={"book_name": script.get("book_name"), "chapter": script.get("chapter_index")},
-      script_revision=script_revision)
+      script_revision=script_revision, allow_missing=not _cache_required)
+    plan = plan if isinstance(plan, dict) else {}
   # 逐镜身份摘要走**已有单源**（shared.quality_gate.per_shot_revisions / shot_semantic_digest）
   from shared.quality_gate import per_shot_revisions as _per_shot_revisions
   shot_digests = _per_shot_revisions(script)
