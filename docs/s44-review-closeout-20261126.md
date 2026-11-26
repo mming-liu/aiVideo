@@ -1,7 +1,7 @@
 # S44 复核收口：P1/P2 修复、A 清理与同组对账
 
 **日期：** 2026-11-26
-**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`、`39038c0`。
+**基线：** `82a98c0`；本包修复提交 `179dcad`、`0512325`、`bee6395`、`39038c0`、`55976cf`。
 **状态：** P1/P2 已修复；A 清理已执行；B 保留；两章候选未正式采纳，未生成媒体。
 
 ## 一、A 清理（已执行）
@@ -30,6 +30,7 @@
 - `tools/voice_unit_report.py` 自动加载该缓存，作为 `build_speech_units(plan=...)` 的显式输入；
 - `step03_tts_audio/main.py` 用 `_audio_context()` **一次解析**有效计划，声音策略、旁白合同、声音单位、缺轨检查、声音状态共用同一份；正常/候选/plan-only 三个入口都经此；
 - `gen_all_shot_tts()` / `gen_narration_tts()` 新增 `plan` 参数，实际合成不再直接读稿内 `chapter_outline`；
+- 正常提交成功后由 `commit.py` 写同一 v2 缓存（`plan` + 章节身份 + `revision`），后续生成不必再手工造缓存；
 - 不修改 `script_result.json`，不改变 `script_revision`。
 
 新报告 `.tmp/s44/ch1_voice_v2.json`：
@@ -75,7 +76,7 @@
 
 结果：基线 **78 passed**，最终交付 **78 passed**；JUnit 用例名集合完全一致，状态差异 **0**。Step03 计划缓存/策略入口测试：`test_plan_cache.py + test_tts_units_and_cli.py` 共 **20 passed**；其中 `_audio_context()` 用 4 条旁白缓存验证了策略读到 `narration_tts_required=True`。
 
-主工作树全量（P2 后）：`tests/step01_script_gen tests/shared` **6333 passed / 295 skipped / 4 xfailed**（192s）。Step03 受影响的 11 条测试通过。
+主工作树全量（`55976cf`）：`tests/step01_script_gen tests/shared` **6333 passed / 295 skipped / 4 xfailed**（188s）。Step03 计划缓存/策略/CLI 共 20 passed。
 
 干净检出全量的两个既有环境问题仍保留：
 
@@ -107,6 +108,7 @@
 - `0512325` fix(step03): load candidate plan cache for speech units
 - `bee6395` test(step03): cover candidate plan cache loading
 - `39038c0` fix(step03): bind plan cache identity and share one effective plan
+- `55976cf` fix(step01): write bound plan cache on commit
 
 ## 八、未完成/边界
 
