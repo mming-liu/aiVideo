@@ -655,3 +655,4 @@ start_studio.bat
 !tests/step04_merge/test_s07_publication.py
 !/docs/downstream-safe-delivery-evidence/
 !/docs/downstream-safe-delivery-evidence/**
+.archive/
