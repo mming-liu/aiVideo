@@ -1,8 +1,8 @@
 # 下游安全出片包（S01–S07）证据归档 — 2026-11-27
 
-本目录位于任务 worktree 之外（`docs/` 随 fast-forward 合入 master 后仍在主仓库），
-保存可复核的最小证据。**大型媒体、原始日志和缓存不在此目录**，仍保留在
-`.tmp/worktrees/downstream-safe-delivery/` 直至清理前，见 `cleanup-manifest.md`。
+本目录位于任务 worktree 之外（`docs/` 已随 fast-forward 合入 master），保存可复核的最小证据。
+**任务 worktree、验证副本、缓存与可再生临时文件已于 2026-11-27 清理完毕**，见
+`cleanup-manifest.md`；本目录与主仓库 `output/`（未改动）是唯一保留证据。
 
 ## 1. 交付身份
 

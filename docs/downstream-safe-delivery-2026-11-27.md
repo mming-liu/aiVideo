@@ -285,3 +285,7 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 - 原始测试日志归档在 `docs/downstream-safe-delivery-evidence/2026-11-27/`
   （`s07-end-to-end.log`、`fault-and-identity-tests.log`）。
 - 真实模型调用、正式媒体采纳、生产章节重跑、远端推送、Stage 3/4 均未执行。
+- **临时对象清理（M07）**：本任务 worktree、验证副本、pytest/ruff/Python 缓存、worktree
+  `output/`（1 个测试泄漏文件）、快照 zip 与已合并分支均已按 `cleanup-manifest.md` 移除；
+  `git worktree list` 只剩主仓库、`.tmp/s14a` 与 `aiVideo-s14base`。清理前后用户未跟踪
+  文件与正式 `output/` 摘要不变。

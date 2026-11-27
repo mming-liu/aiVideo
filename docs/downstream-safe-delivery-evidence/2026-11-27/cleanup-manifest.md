@@ -21,3 +21,18 @@
 递归前检查重解析点/符号链接；不跟随范围外链接；不使用 `cmd /c`；不使用 `--force`。
 
 **保留**：证据目录（随 master 保留）、主仓库用户文件与正式产物、其他工作区。
+
+## 执行结果（2026-11-27，M07）
+
+| 对象 | 结果 |
+|---|---|
+| `.tmp/fresh_pytest`、`.tmp/s07-clean`、`.tmp/s07-debug`、`.tmp/s04-real`、`.tmp/head.zip`、`.tmp/verify.zip` | 已删除（s04-real 的原始章节仍在主仓库 `output/锦衣夜行/...`，已核对存在） |
+| `.pytest_tmp`、`.pytest_cache`、`.ruff_cache`、各级 `__pycache__` | 已删除 |
+| worktree `output/`（1 个测试泄漏文件 `step02_events.json`） | 已删除（非正式产物） |
+| 本任务 worktree `C:/myFloders/git/aiVideo/.tmp/worktrees/downstream-safe-delivery` | `git worktree remove` 成功（未用 `--force`）；`.tmp/worktrees/` 空目录一并移除 |
+| 分支 `codex/downstream-safe-delivery` | `git branch -d` 成功（marker: 已合并） |
+| `C:/myFloders/git/aiVideo/.tmp/downstream-safe-delivery-verify-482676b` | 已删除 |
+| 保留 | 主仓库 `output/`（3191 文件 / 989,104,390 字节，未变）、8 项用户未跟踪文件（SHA 未变）、`.tmp/s14a`、`aiVideo-s14base`、本证据目录、主仓库其他历史 `.tmp/phase2b_*` |
+
+删除前逐项校验了绝对路径位于本任务 worktree 内、非符号链接/junction；未使用 `cmd /c`、
+未递归删除主仓库 `.tmp` 整体、未对含用户工作的仓库执行 `reset`。
