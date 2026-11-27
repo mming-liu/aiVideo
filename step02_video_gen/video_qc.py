@@ -137,7 +137,17 @@ def probe_video_media(video_path: Path, *, expected_duration: float | None = Non
     """
     video_path = Path(video_path)
     issues: list[dict] = []
-    metrics: dict = {"expected_duration": expected_duration}
+    # 2026-11-27 复核：黑场/静帧/首帧偏离**尚未用真实生成片校准**，默认只做影子评估
+    # （warning，进报告与重抽判据），`VIDEO_MEDIA_ENFORCE=1` 才升级为 critical 硬拦。
+    # 确定损坏（无流/不可解码/时长严重不符）始终 critical。
+    enforce = str(os.getenv("VIDEO_MEDIA_ENFORCE", "0")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+    def _severity(code: str, *, calibrated: bool = False) -> str:
+        return "critical" if (calibrated or enforce) else "warning"
+
+    metrics: dict = {"expected_duration": expected_duration,
+                     "enforce_uncalibrated": enforce}
     tool_versions = {"ffmpeg": bool(_find_ffmpeg()), "probe": "shared.media_inspect.v1"}
     if not video_path.is_file():
         return MediaProbeResult(status=STATUS_UNAVAILABLE, measured=False,
@@ -191,7 +201,7 @@ def probe_video_media(video_path: Path, *, expected_duration: float | None = Non
                                   if duration and duration > 0 else None)
         if events and duration and duration > 0 and total_black >= duration * 0.6:
             issues.append({"code": "media_black_whole", "kind": "black",
-                           "severity": "critical",
+                           "severity": _severity("media_black_whole"),
                            "message": "黑场覆盖成片 %.0f%%（整段黑屏）"
                                       % (100 * total_black / duration),
                            "evidence": {"segments": metrics["black_segments"]},
@@ -221,7 +231,7 @@ def probe_video_media(video_path: Path, *, expected_duration: float | None = Non
                                    if duration and duration > 0 else None)
         if events and duration and duration > 0 and frozen >= duration * 0.9:
             issues.append({"code": "media_freeze_whole", "kind": "freeze",
-                           "severity": "critical",
+                           "severity": _severity("media_freeze_whole"),
                            "message": "整片静帧（画面卡死 %.0f%%）"
                                       % (100 * frozen / duration),
                            "evidence": {"segments": metrics["freeze_segments"]},
@@ -248,7 +258,7 @@ def probe_video_media(video_path: Path, *, expected_duration: float | None = Non
                         "metric": method, "first_frame": str(first_frame_path)}
             if corr < critical_below:
                 issues.append({"code": "media_first_frame_drift", "kind": "frame_binding",
-                               "severity": "critical",
+                               "severity": _severity("media_first_frame_drift"),
                                "message": ("首帧与输入 first_frame 结构相关 %.2f < %.2f"
                                            "（画面几乎无关）" % (corr, critical_below)),
                                "evidence": evidence, "time_range": [0.0, 0.0]})

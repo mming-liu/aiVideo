@@ -108,78 +108,51 @@ def is_shared_tier(tier: str) -> bool:
 
 
 # ===========================================================================
-# S04/A1：音色容量扩容通道（**显式配置**，不发明 provider 不存在的音色）
+# S04/A1：音色容量扩容通道 —— **未交付**（2026-11-27 复核后撤回）
 # ---------------------------------------------------------------------------
-# 旧池只有 8 条内置音色（旁白占 1 条），这是 Sambert 通道的物理天花板。扩容只
-# 接受**调用方显式给出**的、该 provider 真实存在的音色/声线：
-# - `TTS_EXTRA_VOICES`：`id|gender|age_range` 逗号分隔（旧池通道，如
-#   DashScope 账号下已开通的 Sambert/自定义音色）；
-# - `TTS_EXTRA_SPEAKERS`：逗号分隔（有独立 speaker 的 provider，如
-#   `voice_design` 创建出来的 voice id、`QWEN3_LOCAL_SPEAKERS` 同口径）。
-# 非法写法**显式报错**（配置错误不静默忽略、不猜 gender/年龄段）。
-# 通道本身零调用：只在规划/分配阶段决定"还有哪些声线可用"。
+# 曾用 `TTS_EXTRA_VOICES` / `TTS_EXTRA_SPEAKERS` 把配置里的音色直接并入旧池与
+# provider 白名单。复核指出：代码不校验 provider 侧是否真存在这些声线，把配置当成
+# 已核实能力会制造"扩容完成"的假证据。故本包**移除**该通道：角色音色仍只取内置池，
+# provider 合法声线仍只取 `caps.legal_speakers`。真正扩容须按 provider 能力表核对后
+# 另行交付（并带零调用校验），不能靠环境变量白名单。
 # ===========================================================================
 
-EXTRA_VOICES_ENV = "TTS_EXTRA_VOICES"
-EXTRA_SPEAKERS_ENV = "TTS_EXTRA_SPEAKERS"
-_VALID_GENDERS = ("male", "female")
-_VALID_AGES = ("young", "middle", "old")
+TIER_POLICY_ENV = "VOICE_TIER_POLICY"
+TIER_POLICY_STRICT = "strict"
+TIER_POLICY_TIERED = "tiered"
 
 
-def configured_extra_voices() -> list:
-    """`TTS_EXTRA_VOICES` 解析出的额外旧池音色（形状同 AVAILABLE_VOICES）."""
-    raw = (os.getenv(EXTRA_VOICES_ENV, "") or "").strip()
-    if not raw:
-        return []
-    out = []
-    seen = set()
-    for item in raw.split(","):
-        parts = [p.strip() for p in item.split("|")]
-        if len(parts) != 3 or not all(parts):
-            raise ValueError(
-                "%s 条目 %r 非法；格式应为 `音色id|male|young`（gender=%s，age_range=%s）"
-                % (EXTRA_VOICES_ENV, item, "/".join(_VALID_GENDERS),
-                   "/".join(_VALID_AGES)))
-        voice_id, gender, age = parts[0], parts[1].lower(), parts[2].lower()
-        if gender not in _VALID_GENDERS or age not in _VALID_AGES:
-            raise ValueError(
-                "%s 条目 %r 的 gender/age_range 非法（可选 %s / %s）"
-                % (EXTRA_VOICES_ENV, item, "/".join(_VALID_GENDERS),
-                   "/".join(_VALID_AGES)))
-        if voice_id in seen:
-            raise ValueError("%s 条目 %r 重复" % (EXTRA_VOICES_ENV, voice_id))
-        seen.add(voice_id)
-        out.append({"id": voice_id, "gender": gender, "age_range": age,
-                    "style": "显式配置音色", "rate": "1.0", "volume": "55",
-                    "source": "config"})
-    return out
+def tier_policy() -> str:
+    """生效的声线合同：默认 `strict`（严格 1:1 独占，旧合同）；`tiered` 才启用分级共享."""
+    raw = str(os.getenv(TIER_POLICY_ENV, "") or "").strip().lower()
+    if raw in ("", TIER_POLICY_STRICT):
+        return TIER_POLICY_STRICT
+    if raw == TIER_POLICY_TIERED:
+        return TIER_POLICY_TIERED
+    raise ValueError("%s=%r 非法；合法值：%s / %s"
+                     % (TIER_POLICY_ENV, raw, TIER_POLICY_STRICT,
+                        TIER_POLICY_TIERED))
 
 
-def configured_extra_speakers() -> list:
-    """`TTS_EXTRA_SPEAKERS` 解析出的额外 speaker（去掉空白与重复）."""
-    raw = (os.getenv(EXTRA_SPEAKERS_ENV, "") or "").strip()
-    if not raw:
-        return []
-    return sorted({p.strip() for p in raw.split(",") if p.strip()})
+def tiered_sharing_enabled() -> bool:
+    return tier_policy() == TIER_POLICY_TIERED
 
 
 def character_voice_pool() -> list:
-    """角色可选音色池 = 内置池 + 显式配置扩容（旁白音色始终排除）."""
+    """角色可选音色池 = 内置池（旁白音色始终排除）.
+
+    扩容通道未交付：不再从环境变量并入未核实的音色（见上方说明）。
+    """
     base = list(CHARACTER_VOICES)
     known = {v["id"] for v in base}
     if NARRATOR_VOICE["id"]:
         known.add(NARRATOR_VOICE["id"])
-    for voice in configured_extra_voices():
-        if voice["id"] not in known:
-            base.append(voice)
     return base
 
 
 def legal_speakers_for(caps) -> tuple:
-    """provider 声明白名单 + 显式配置扩容（仅取并集；不校验 provider 侧真实性）."""
-    legal = {str(x) for x in (getattr(caps, "legal_speakers", ()) or ())}
-    legal.update(configured_extra_speakers())
-    return tuple(sorted(legal))
+    """provider 声明的合法声线（只认能力表，不用环境变量扩张白名单）."""
+    return tuple(sorted({str(x) for x in (getattr(caps, "legal_speakers", ()) or ())}))
 
 
 class VoicePoolExhaustedError(RuntimeError):

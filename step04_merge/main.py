@@ -633,6 +633,15 @@ def _encode_settings(*, require_explicit_font: bool = False) -> EncodeSettings:
     )
 
 
+def _replace_dataclass_path(result, new_path):
+    """把 `RenderResult.path` 换成发布后的正式路径（其余事实不变）."""
+    from dataclasses import replace as _dc_replace
+    try:
+        return _dc_replace(result, path=Path(new_path))
+    except Exception:  # noqa: BLE001 - 非 dataclass 时如实保留原对象
+        return result
+
+
 def _declared_black_windows(timeline) -> list:
     """时间线**声明**的黑场窗口（fadeblack/fadewhite 转场 + 首尾端点淡变）.
 
@@ -1411,8 +1420,9 @@ def _run_merge(options, attempt):
                        _adj.clip_index, _adj.shot_index, _adj.action,
                        _adj.clip_sec, _adj.audio_sec, _adj.overflow_sec,
                        _adj.applied_sec, ("（截断，已显式允许）" if _adj.action == "trim" else "")))
-    # 补齐/加速后的目标时长进入同一套时间线算术（窗口/转场/字幕都按它）
-    target_durations = list(_audio_fit.clip_durations)
+    # 注意：**不能**把 `_audio_fit.clip_durations` 再赋给 target_durations——pad 已经
+    # 由 `_build_timeline(clip_pads=...)` 加一次，赋调整后时长会重复计长（曾出现
+    # 2s 视频 + 2.8s 音频被拉成 3.58s）。补齐只经 `clip_pads` 一条通道生效。
     _logger.info("[AUDIO-FIT] policy=%s adjustments=%d pads=%d atempo=%d"
                  % (_AUDIO_OVERFLOW_POLICY, len(_audio_fit.adjustments),
                     len(_clip_pads), len(_tts_atempo)))
@@ -1556,6 +1566,10 @@ def _run_merge(options, attempt):
   _expected_hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
   _expected_body_sec = sum(float(s.get("duration_sec") or s.get("duration") or 0)
                            for s in shots if isinstance(s, dict)) or None
+  # 补齐是**本次显式声明的**延长：预期总长必须把它算进去，否则 pad 策略会被
+  # `timeline_duration_long` 误判成"成片超长"（复核 P1-5 的主链缺口之一）。
+  if _expected_body_sec is not None and _clip_pads:
+    _expected_body_sec += sum(float(v or 0.0) for v in _clip_pads.values())
   _expected_hook_sec = (float(_expected_hook.get("duration_sec")
                               or _expected_hook.get("duration") or 0)
                         if _expected_hook else None) or None
@@ -1640,19 +1654,28 @@ def _run_merge(options, attempt):
     return _report
   _logger.info(f"[INFO] 编码: preset={VIDEO_PRESET} crf={_CRF} 分辨率={OUT_W}x{OUT_H}"
                f"（MERGE_RESOLUTION 可调；上线 1080x1920 时同步改 BAILIAN_VIDEO_RESOLUTION=1080P）")
-  result = render(timeline, FINAL_OUT, TEMP_DIR, settings=settings,
+  # P1（2026-11-27 复核）：**先渲染到临时候选，全部检查通过后才发布正式成片**。
+  # 旧顺序 render(..., FINAL_OUT) 内部已 os.replace，终检一旦 BLOCK，旧成片已被覆盖，
+  # 旧质量报告却可能仍是 PASS——失败会破坏基线。现在失败只丢临时文件。
+  _publish_tmp = Path(TEMP_DIR) / ("final_publish_candidate%s"
+                                   % (Path(FINAL_OUT).suffix or ".mp4"))
+  try:
+    _publish_tmp.unlink()
+  except OSError:
+    pass
+  result = render(timeline, _publish_tmp, TEMP_DIR, settings=settings,
                   color_filter=_color_filter(), subtitle_filter=subtitle_filter,
                   logger=_logger, srt_path=SRT_OUT,
                   evidence_dir=(attempt.outputs_dir if attempt is not None else None))
   duration = result.duration_sec
-  _logger.info(f"[OK] Final video generated: {FINAL_OUT}")
+  _logger.info(f"[INFO] 候选成片已编码: {_publish_tmp}（尚未发布到 {FINAL_OUT}）")
   _logger.info(f"[INFO] ffmpeg={result.ffmpeg_version} sha256={result.sha256[:12]} "
                f"实测 {duration:.2f}s {result.width}x{result.height}@{result.fps:g} "
                f"音频={result.has_audio} 耗时={result.elapsed_sec:.1f}s "
                f"阶段={'→'.join(result.stages)}")
   # S06：合成后复核成片时长与关键音轨；不一致按失败退出，不宣称成片可用。
   from step04_merge.timeline import verify_rendered_output
-  _rendered = verify_rendered_output(FINAL_OUT, timeline, _acceptance)
+  _rendered = verify_rendered_output(_publish_tmp, timeline, _acceptance)
   timeline = _replace(timeline, acceptance={**_acceptance, "rendered": _rendered})
   if _rendered.get("status") != "pass":
     _logger.error(f"[TIMELINE] 合成后复核未通过: {_rendered.get('codes')}")
@@ -1671,13 +1694,16 @@ def _run_merge(options, attempt):
       pass
 
   # 6.9 S06/M3：成片自动化终检（编码规范/音画一致/黑场/静帧/静音/字幕/响度/moov）
+  # 全部检查在**临时候选**上做；通过后才原子发布，失败不触碰既有 final.mp4 / 报告。
   from step04_merge.quality_gate import evaluate_final
   _media_quality = evaluate_final(
-      FINAL_OUT, expected_duration=float(timeline.total_duration_sec),
+      _publish_tmp, expected_duration=float(timeline.total_duration_sec),
       width=OUT_W, height=OUT_H, fps=timeline.fps,
       audio_required=bool(timeline.audio_tracks
                           or any(c.has_audio for c in timeline.clips)),
       audio_sample_rate=48000,
+      video_codec=os.getenv("MERGE_QUALITY_EXPECT_VIDEO_CODEC", "h264").strip() or "h264",
+      audio_codec=os.getenv("MERGE_QUALITY_EXPECT_AUDIO_CODEC", "aac").strip() or "aac",
       declared_black_windows=_declared_black_windows(timeline),
       srt_path=(None if _dry_run else SRT_OUT))
   _logger.info("[STEP04-MEDIA] status=%s checks=%d defects=%s"
@@ -1693,11 +1719,29 @@ def _run_merge(options, attempt):
   if _media_quality["status"] == "BLOCK":
     _codes = [d.get("code") for d in _media_quality["defects"]
               if d.get("severity") == "block"]
-    _logger.error("[STEP04-MEDIA] 成片终检未通过: %s" % _codes)
+    _logger.error("[STEP04-MEDIA] 成片终检未通过（正式成片未被覆盖）: %s" % _codes)
     raise RenderError("final_quality_blocked", "verify",
-                      "成片终检未通过（%s）：%s"
-                      % (",".join(str(c) for c in _codes), str(FINAL_OUT)),
+                      "成片终检未通过（%s）：候选 %s 未发布；既有成片保留原样"
+                      % (",".join(str(c) for c in _codes), str(_publish_tmp)),
                       exit_code=2)
+  if _media_quality["status"] == "UNVERIFIED":
+    _unverified = [c.get("name") for c in _media_quality["checks"]
+                   if c.get("status") == "unavailable"]
+    _logger.error("[STEP04-MEDIA] 必要检测不可用（%s）——不发布未验证成片" % _unverified)
+    raise RenderError("final_quality_unverified", "verify",
+                      "成片终检缺少必要检测（%s），未验证的成片不得替换正式产物"
+                      % ",".join(str(n) for n in _unverified), exit_code=2)
+
+  # ---- 发布事务：检查全过 → 原子替换正式成片 → 再写对应质量报告 ----
+  Path(FINAL_OUT).parent.mkdir(parents=True, exist_ok=True)
+  try:
+    os.replace(_publish_tmp, FINAL_OUT)
+  except OSError as _pub_exc:
+    raise RenderError("publish_failed", "publish",
+                      "成片发布失败（既有成片保留原样）: %s" % _pub_exc,
+                      exit_code=3) from _pub_exc
+  result = _replace_dataclass_path(result, FINAL_OUT)
+  _logger.info(f"[OK] Final video generated: {FINAL_OUT}")
 
   # 8. 候选提交（只在增强模式）：冻结输入 → manifest → accepted 替换 + 读回
   if attempt is not None:

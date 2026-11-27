@@ -337,12 +337,16 @@ def build_duration_audit(units: list, *, script: dict, scope: dict | None = None
                       for s in (script.get("shots") or []) if isinstance(s, dict)}
     units_out: list[dict] = []
     shots_out: dict = {}
+    narrations_out: dict = {}
     measured_count = 0
     overflow_units: list[str] = []
     for unit in units or []:
         if not isinstance(unit, dict):
             continue
-        shot_index = unit.get("shot_index")
+        is_narration = str(unit.get("kind") or "") == "narration"
+        carriers = [int(x) for x in (unit.get("shot_indexes") or [])
+                    if isinstance(x, (int, float, str)) and str(x).strip().lstrip("-").isdigit()]
+        shot_index = None if is_narration else unit.get("shot_index")
         try:
             shot_key = int(shot_index) if shot_index is not None else None
         except (TypeError, ValueError):
@@ -367,6 +371,8 @@ def build_duration_audit(units: list, *, script: dict, scope: dict | None = None
             "unit_id": unit.get("unit_id"),
             "kind": unit.get("kind"),
             "shot_index": shot_key,
+            # 旁白按**真实承载镜头**登记；N 序号只是音轨编号，不能当镜头号
+            "shot_indexes": carriers,
             "speaker": unit.get("speaker") or "",
             "chars": len(str(unit.get("text") or "")),
             "planned_est_sec": declared,
@@ -377,7 +383,21 @@ def build_duration_audit(units: list, *, script: dict, scope: dict | None = None
             "state": unit.get("state"),
             "measurement": unit.get("measurement"),
             "audio_path": unit.get("audio_path") or "",
+            "audio_sha256": unit.get("audio_sha256") or "",
         })
+        if is_narration:
+            # 一条旁白音轨可能跨多个镜头：只按**整段承载窗口**对账，
+            # 不折进任何单镜的 audio_need，避免把跨镜声音误判成某镜超窗。
+            narrations_out[str(unit.get("unit_id"))] = {
+                "index": unit.get("source_index"),
+                "shot_indexes": carriers,
+                "carrier_window_sec": window,
+                "planned_est_sec": declared,
+                "actual_wav_sec": actual,
+                "overflow_sec": overflow,
+                "state": unit.get("state"),
+            }
+            continue
         if shot_key is None:
             continue
         entry = shots_out.setdefault(str(shot_key), {
@@ -401,11 +421,15 @@ def build_duration_audit(units: list, *, script: dict, scope: dict | None = None
             entry["window_sec"] = window
     for key, entry in shots_out.items():
         need = entry.get("audio_need_sec")
+        declared = entry.get("declared_need_sec")
         window = entry.get("window_sec")
         if need is not None and window is not None:
             entry["overflow_sec"] = round(need - window, 6)
-        base = max([v for v in (entry.get("planned_dur_sec"), need,
-                                entry.get("declared_need_sec")) if v] or [0.0])
+        if declared is not None and window is not None:
+            entry["declared_overflow_sec"] = round(declared - window, 6)
+        else:
+            entry["declared_overflow_sec"] = None
+        base = max([v for v in (entry.get("planned_dur_sec"), need, declared) if v] or [0.0])
         entry["recommended_shot_dur"] = round(float(base), 3)
     max_overflow = max([u["overflow_sec"] for u in units_out
                         if u.get("overflow_sec") is not None] or [0.0])
@@ -418,12 +442,20 @@ def build_duration_audit(units: list, *, script: dict, scope: dict | None = None
         "provider": str(provider or ""),
         "units": units_out,
         "shots": shots_out,
+        "narrations": narrations_out,
         "summary": {
             "unit_count": len(units_out),
             "measured_units": measured_count,
             "overflow_units": sorted(overflow_units),
+            "overflow_narrations": sorted(
+                str(k) for k, v in narrations_out.items()
+                if (v.get("overflow_sec") or 0) > 1e-9),
             "overflow_shot_count": sum(
                 1 for e in shots_out.values() if (e.get("overflow_sec") or 0) > 1e-9),
+            # 估算阶段的超窗预测（未实测，只能作为生视频前风险提示）
+            "predicted_overflow_shot_count": sum(
+                1 for e in shots_out.values()
+                if (e.get("declared_overflow_sec") or 0) > 1e-9),
             "max_overflow_sec": round(float(max_overflow), 6),
         },
         "provider_calls": 0,

@@ -417,9 +417,30 @@ def derive_voice_tiers(script: dict, plan: dict | None = None, *,
     - 派生：发言单元数 ≥ `VOICE_PRIMARY_MIN_UNITS`（默认 2）或出镜 ≥ 2 镜 ⇒ primary；
       只有在**输入带帧布局**、且该角色仅发言 1 单元、仅出镜 ≤ 1 镜时才判 extra。
       没有帧布局就不猜"龙套"——保持旧的独占分配，宁可不共享也不误判主配角。
+    - **默认合同是 strict**（`VOICE_TIER_POLICY` 未设或=strict）：所有角色一律 primary，
+      声明/历史/派生都不改变"一人一音色"的旧合同；只有显式 `VOICE_TIER_POLICY=tiered`
+      才启用分级共享。这是 2026-11-27 复核要求的默认回退。
     """
+    from tts.voice_registry import tier_policy
     registry = registry if registry is not None else get_registry()
     characters = script.get("characters") or []
+    if tier_policy() != "tiered":
+        # 严格合同：不读声明/历史、不派生，全部独占（旁白仍走专用音色）。
+        strict_tiers: dict = {}
+        for c in characters:
+            if not isinstance(c, dict):
+                continue
+            ident = str(c.get("identifier") or c.get("name") or "").strip()
+            if ident:
+                strict_tiers[ident] = {
+                    "tier": VOICE_TIER_PRIMARY, "reason": "strict 合同（默认）",
+                    "source": "strict_policy",
+                    "speech_units": int(((roles or {}).get(ident) or {}).get("units") or 0),
+                }
+        strict_tiers[NARRATOR_ROLE] = {
+            "tier": VOICE_TIER_PRIMARY, "reason": "旁白专用音色", "source": "narrator",
+        }
+        return strict_tiers
     if roles is None:
         roles = _role_counts_free(script, plan)
     chars_by_id = {}

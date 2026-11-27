@@ -430,14 +430,75 @@ def _audio_overflow_tolerance() -> float:
     return value if value >= 0 else 0.15
 
 
-def _load_duration_audit(shots_dir: Path, *, audit: dict | None = None) -> tuple[dict | None, str]:
+AUDIT_SCHEMA = "step03_duration_audit.v1"
+#: 审计身份里与 scope 对齐的字段（缺省字段不比较，存在即必须一致）
+_AUDIT_SCOPE_FIELDS = ("chapter", "book_index", "book_name", "novel_name", "part")
+
+
+def _audit_identity_issues(audit: dict, *, script: dict, scope: dict | None) -> list[dict]:
+    """核对审计报告的**身份**：schema / scope / script_revision / 音频摘要.
+
+    只认"就是本次这份稿、这批音频"的实测数据。任何不一致都不得当作合法实测下限：
+    旧章报告会被当成当前镜头的超窗证据（或旧短音频漏掉当前超窗），两者都是错误裁决。
+    """
+    issues: list[dict] = []
+    if str(audit.get("schema") or "") != AUDIT_SCHEMA:
+        issues.append({"code": "audit_schema_mismatch",
+                       "actual": str(audit.get("schema") or "")})
+        return issues
+    audit_scope = audit.get("scope") if isinstance(audit.get("scope"), dict) else {}
+    current_scope = scope if isinstance(scope, dict) else {}
+    for field in _AUDIT_SCOPE_FIELDS:
+        if field not in audit_scope and field not in current_scope:
+            continue
+        if str(audit_scope.get(field)) != str(current_scope.get(field)):
+            issues.append({"code": "audit_scope_mismatch", "field": field,
+                           "audit": str(audit_scope.get(field)),
+                           "current": str(current_scope.get(field))})
+    expected_rev = str(script.get("script_revision") or "")
+    audit_rev = str(audit.get("script_revision") or "")
+    if expected_rev and audit_rev != expected_rev:
+        issues.append({"code": "audit_revision_mismatch",
+                       "audit": audit_rev, "current": expected_rev})
+    from shared.enhancement_io import sha256_file
+    digest_mismatch = 0
+    missing = 0
+    for unit in audit.get("units") or []:
+        if not isinstance(unit, dict):
+            continue
+        sha = str(unit.get("audio_sha256") or "")
+        path = str(unit.get("audio_path") or "")
+        if not sha or not path:
+            continue
+        candidate = Path(path)
+        if not candidate.is_file():
+            missing += 1
+            continue
+        try:
+            if sha256_file(candidate) != sha:
+                digest_mismatch += 1
+        except OSError:
+            missing += 1
+    if digest_mismatch:
+        issues.append({"code": "audit_audio_digest_mismatch", "count": digest_mismatch})
+    if missing:
+        issues.append({"code": "audit_audio_missing", "count": missing})
+    return issues
+
+
+def _load_duration_audit(shots_dir: Path, *, audit: dict | None = None,
+                         script: dict | None = None,
+                         scope: dict | None = None) -> tuple[dict | None, str, list]:
     """读 Step03 实测时长审计（`step03_duration_audit.json`）；不猜、不找"最新".
 
     查找顺序：显式 ``audit`` → 章目录（正式落点） → ``shots_dir`` 的父目录
-    （候选/实验根的同层落点）。两处都没有 ⇒ ``(None, "")``，计划里如实记无实测下限。
+    （候选/实验根的同层落点）。两处都没有 ⇒ ``(None, "", [])``，计划里如实记无实测下限。
+    找到但**身份不符/音频摘要不符** ⇒ ``(None, path, issues)``：拒绝使用，并留下拒绝原因
+    （调用方据此告警，不得把旧数据当本次实测）。
     """
     if isinstance(audit, dict) and audit:
-        return audit, "explicit"
+        issues = _audit_identity_issues(audit, script=script or {}, scope=scope)
+        return (None if issues else audit), "explicit", issues
     candidates: list[Path] = []
     try:
         candidates.append(Path(chapter_dir()) / "step03_duration_audit.json")
@@ -451,9 +512,11 @@ def _load_duration_audit(shots_dir: Path, *, audit: dict | None = None) -> tuple
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if isinstance(data, dict) and data.get("schema") == "step03_duration_audit.v1":
-            return data, str(path)
-    return None, ""
+        if not isinstance(data, dict) or data.get("schema") != AUDIT_SCHEMA:
+            continue
+        issues = _audit_identity_issues(data, script=script or {}, scope=scope)
+        return (None if issues else data), str(path), issues
+    return None, "", []
 
 
 def _shot_audio_audit(audit: dict | None, shot_index) -> dict | None:
@@ -468,11 +531,16 @@ def _shot_audio_audit(audit: dict | None, shot_index) -> dict | None:
 
 
 def _audio_overflow(shot_audit: dict | None, shot: dict, tolerance: float) -> dict | None:
-    """实测需要时长 > 计划镜头时长 + 容差 ⇒ 返回结构化超窗（否则 None）."""
+    """实测需要时长 > 可用窗口 + 容差 ⇒ 返回结构化超窗（否则 None）.
+
+    优先用审计里的 ``window_sec``（已扣转场重叠的真实可用窗口）；没有才退回计划时长。
+    """
     if not shot_audit:
         return None
     need = shot_audit.get("audio_need_sec")
-    planned = shot.get("duration_sec") or shot.get("duration")
+    planned = shot_audit.get("window_sec")
+    if planned is None:
+        planned = shot.get("duration_sec") or shot.get("duration")
     try:
         need = float(need) if need is not None else None
         planned = float(planned) if planned is not None else None
@@ -487,23 +555,58 @@ def _audio_overflow(shot_audit: dict | None, shot: dict, tolerance: float) -> di
         "overflow_sec": round(overflow, 6),
         "recommended_shot_dur": round(max(float(shot_audit.get("recommended_shot_dur") or 0.0),
                                           need), 3),
-        "message": ("镜头 %s 实测配音 %.2fs 超过计划时长 %.2fs（+%.2fs，容差 %.2fs）——"
+        "message": ("镜头 %s 实测配音 %.2fs 超过可用窗口 %.2fs（+%.2fs，容差 %.2fs）——"
                     "先改台词/拆镜或按推荐时长重排 step01，禁止带着超长台词生短视频"
                     % (shot.get("index"), need, planned, overflow, tolerance)),
     }
 
 
-def _assert_audio_fit(script: dict, shots_dir: Path, only_indices,
-                      *, duration_audit: dict | None = None) -> dict:
-    """生视频前核对实测配音下限：超窗镜头**启动即拒**（避免盲生短视频后截字）.
+def _narration_overflows(audit: dict | None, tolerance: float) -> list[dict]:
+    """跨镜旁白按**整段承载窗口**对账（不按 N 序号当镜头号）."""
+    if not isinstance(audit, dict):
+        return []
+    out: list[dict] = []
+    for unit_id, entry in (audit.get("narrations") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        need = entry.get("actual_wav_sec")
+        window = entry.get("carrier_window_sec")
+        try:
+            need = float(need) if need is not None else None
+            window = float(window) if window is not None else None
+        except (TypeError, ValueError):
+            continue
+        if need is None or window is None:
+            continue
+        overflow = need - window
+        if overflow <= max(0.0, tolerance) + 1e-9:
+            continue
+        out.append({
+            "unit_id": str(unit_id),
+            "kind": "narration",
+            "shot_indexes": list(entry.get("shot_indexes") or []),
+            "overflow_sec": round(overflow, 6),
+            "audio_need_sec": round(need, 6),
+            "window_sec": round(window, 6),
+            "message": ("旁白 %s 实测 %.2fs 超过承载窗口 %.2fs（+%.2fs）——跨镜旁白放不下，"
+                        "先调整镜头时长或旁白文本" % (unit_id, need, window, overflow)),
+        })
+    return out
 
-    返回``{"source", "tolerance_sec", "checked", "blocked"}``；无审计文件时
-    ``source=None``（如实记"无实测下限"，不假装已核）。
+
+def _assert_audio_fit(script: dict, shots_dir: Path, only_indices,
+                      *, duration_audit: dict | None = None,
+                      scope: dict | None = None) -> dict:
+    """生视频前核对实测配音下限：超窗镜头/旁白**启动即拒**（避免盲生短视频后截字）.
+
+    返回``{"source", "rejected", "tolerance_sec", "checked", "blocked"}``；无审计文件时
+    ``source=None``（如实记"无实测下限"，不假装已核）；审计身份不符时 ``rejected`` 列出原因。
     """
-    audit, source = _load_duration_audit(shots_dir, audit=duration_audit)
+    audit, source, issues = _load_duration_audit(shots_dir, audit=duration_audit,
+                                                 script=script, scope=scope)
     tolerance = _audio_overflow_tolerance()
-    report = {"source": source or None, "tolerance_sec": tolerance,
-              "checked": 0, "blocked": []}
+    report = {"source": source or None, "rejected": list(issues or []),
+              "tolerance_sec": tolerance, "checked": 0, "blocked": []}
     if not audit:
         return report
     hook = script.get("hook")
@@ -521,6 +624,7 @@ def _assert_audio_fit(script: dict, shots_dir: Path, only_indices,
         if problem:
             report["blocked"].append({"shot_index": idx, **problem,
                                       "audio_audit": info})
+    report["blocked"].extend(_narration_overflows(audit, tolerance))
     return report
 
 
@@ -588,9 +692,19 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
     hook = script.get("hook")
     queue = ([dict(hook, index=0)] if hook else []) + shots
     # S05/A2：消费 Step03 的实测时长审计（有就读；没有就按"无实测下限"如实记账）。
-    _audio_audit, _audit_source = _load_duration_audit(shots_dir, audit=duration_audit)
+    # 身份不符/音频摘要不符 ⇒ 拒绝使用，并把原因写进计划（不把旧数据当本次实测）。
+    _audio_audit, _audit_source, _audit_issues = _load_duration_audit(
+        shots_dir, audit=duration_audit, script=script, scope=scope)
     _audio_tolerance = _audio_overflow_tolerance()
     _audit_shots: dict = {}
+    _narr_overflows = _narration_overflows(_audio_audit, _audio_tolerance)
+    for _nar in _narr_overflows:
+        entries.append({"shot_index": _nar.get("shot_indexes") or [],
+                        "mode": os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower(),
+                        "verdict": "blocked", "code": "audio_overflow",
+                        "field_path": "narration_lines",
+                        "message": _nar["message"],
+                        "narration": _nar})
     for shot in queue:
         idx = shot.get("index")
         if only_indices is not None and idx not in only_indices:
@@ -751,10 +865,12 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
     pending = [e for e in entries if e.get("verdict") == "pending"]
     _audio_summary = {
         "source": _audit_source or None,
+        "rejected": list(_audit_issues or []),
         "tolerance_sec": _audio_tolerance,
         "shots": _audit_shots,
         "overflow": sorted(str(e.get("shot_index")) for e in entries
                            if e.get("code") == "audio_overflow"),
+        "narration_overflows": _narr_overflows,
     }
     return {"schema_version": "video_reroll_plan.v1", "chapter": chapter, "provider": provider,
             "model_id": resolved_model,
@@ -1203,14 +1319,17 @@ def main(options=None):
                                     qa_report=_qa_report))
 
     # S05/A2：实测配音超窗的镜头不允许生视频（不截字，也不盲生短视频）
-    _audio_fit = _assert_audio_fit(script, shots_dir, only_indices)
+    _audio_fit = _assert_audio_fit(script, shots_dir, only_indices, scope=scope)
+    if _audio_fit["rejected"]:
+        logger.warn("[AUDIO-FIT] 时长审计身份不符，已拒绝作为实测下限：%s"
+                    % _audio_fit["rejected"])
     if _audio_fit["source"]:
-        logger.info("[AUDIO-FIT] 实测配音下限：核 %d 镜，超窗 %d 镜（来源 %s）"
+        logger.info("[AUDIO-FIT] 实测配音下限：核 %d 镜，超窗 %d 条（来源 %s）"
                     % (_audio_fit["checked"], len(_audio_fit["blocked"]),
                        _audio_fit["source"]))
     else:
-        logger.warn("[AUDIO-FIT] 未找到 step03_duration_audit.json：本次生视频**无实测"
-                    "配音下限**（先跑 Step03 才能按真实时长前置拦截超窗）")
+        logger.warn("[AUDIO-FIT] 未找到可用的 step03_duration_audit.json：本次生视频**无"
+                    "实测配音下限**（先跑 Step03 才能按真实时长前置拦截超窗）")
     if _audio_fit["blocked"]:
         for item in _audio_fit["blocked"]:
             print(f"[ERROR] {item['message']}", flush=True)

@@ -162,6 +162,16 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
         })
         if plan_only:
             attempt.mkdir(parents=True, exist_ok=True)
+            # 规划阶段也落估算审计（prepared），候选路径与正式路径同一 schema。
+            try:
+                _write_duration_audit(
+                    script=script, gen_script=script, plan=plan, scope=scope,
+                    revision=revision,
+                    provider=str(getattr(provider, "PROVIDER_NAME", "") or tts_config.PROVIDER),
+                    target_dir=attempt, units=units, audio_paths={})
+            except Exception as _plan_audit_exc:  # noqa: BLE001
+                eio.append_event(attempt, "duration_audit_failed",
+                                 message=str(_plan_audit_exc)[:500])
             return []
         artifacts = synthesize_units(units, ctx, provider=provider)
         checks = None
@@ -188,7 +198,8 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
         except Exception as _vp_exc:  # noqa: BLE001 - 报告失败不掩盖合成结果，但必须可见
             eio.append_event(attempt, "voice_preparation_failed",
                              message=str(_vp_exc)[:500])
-        # S05/A2：候选运行同样落实测时长审计（Step02b 候选/正式 plan 都可读）
+        # S05/A2：候选运行同样落实测时长审计（Step02b 候选/正式 plan 都可读）。
+        # 路径取**本次实际产物**（attempt 内），不是正式章目录的 audio_file()。
         try:
             from shared.audio_policy import resolve_audio_policy as _resolve_policy
             _write_duration_audit(
@@ -197,7 +208,8 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
                 provider=str(getattr(provider, "PROVIDER_NAME", "") or tts_config.PROVIDER),
                 target_dir=attempt,
                 audio_mode=_resolve_policy().effective_merge_mode,
-                units=units, only_indices=only_indices)
+                units=units,
+                audio_paths={a.unit_id: str(a.path) for a in artifacts})
         except Exception as _audit_exc:  # noqa: BLE001
             eio.append_event(attempt, "duration_audit_failed",
                              message=str(_audit_exc)[:500])
@@ -227,17 +239,22 @@ def _write_duration_audit(*, script: dict, gen_script: dict, plan: dict | None,
                           scope: dict, revision: str, provider: str,
                           target_dir, audio_mode: str = "",
                           units: list | None = None,
+                          audio_paths: dict | None = None,
                           only_indices=None) -> dict:
     """S05/A2：实测音频时长对账 → `step03_duration_audit.json`（供 Step02b 消费）.
 
     单元身份与窗口来自**生产构造器** `build_speech_units`（与生成/消费同一判据）；
     时长由 `shared.voice_preparation._probe_duration`（ffprobe）实测，未测到就记
-    ``state=prepared``（不冒充超窗证据）。本函数只写本次运行自己的落点。
+    ``state=prepared``（不冒充超窗证据）。``audio_paths`` 给定时按单元 id 取**本次实际
+    产物**路径（候选 attempt / 桩产物），不再假定正式 `audio_file()`——候选音频不在
+    章目录。旁白只按**真实承载镜头与整段窗口**登记：N 序号是音轨编号，不是镜头号。
     """
     from shared.json_io import atomic_dump_json
     from shared.paths import audio_file, narration_audio_file
     from shared.voice_preparation import _probe_duration, build_duration_audit
+
     from step01_script_gen.timecode import _estimate_duration
+    from step01_script_gen.plan_feasibility import voice_units
     from step03_tts_audio.shot_tts import _compute_voice_windows, build_speech_units
 
     if units is None:
@@ -246,26 +263,58 @@ def _write_duration_audit(*, script: dict, gen_script: dict, plan: dict | None,
                                    full_shots=script.get("shots"), plan=plan)
     wins, _ = _compute_voice_windows(script, script.get("shots") or [])
     window_durs = {str(k): max(0.0, float(e) - float(s)) for k, (s, e) in wins.items()}
+    _shots = script.get("shots") or []
+    carrier_map = {
+        int(u.get("index")): [int(x) for x in (u.get("shot_indexes") or [])]
+        for u in voice_units(plan, _shots) if str(u.get("kind")) == "narration"
+    } if plan else {}
+    _paths = {str(k): str(v) for k, v in (audio_paths or {}).items()}
+
+    def _sha256(path: Path) -> str:
+        import hashlib
+        try:
+            h = hashlib.sha256()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+        except OSError:
+            return ""
+
     rows: list[dict] = []
     for unit in units:
         idx = int(getattr(unit, "source_index", 0) or 0)
-        if str(getattr(unit, "kind", "")) == "dialogue":
-            path = audio_file(idx)
-        else:
-            path = narration_audio_file(idx)
-        measured, why = (_probe_duration(str(path)) if path.is_file()
-                         else (None, "audio_missing"))
-        window = window_durs.get(str(idx))
-        if window is None:
+        is_narration = str(getattr(unit, "kind", "")) == "narration"
+        if is_narration:
+            carriers = carrier_map.get(idx) or []
+            path = Path(_paths[unit.unit_id]) if unit.unit_id in _paths \
+                else narration_audio_file(idx)
             planned = getattr(unit, "planned_window", None)
             if isinstance(planned, (list, tuple)) and len(planned) >= 2:
                 window = max(0.0, float(planned[1]) - float(planned[0]))
+            elif carriers:
+                window = sum(window_durs.get(str(s), 0.0) for s in carriers)
+            else:
+                window = None
+            shot_index = carriers[0] if carriers else None
+        else:
+            carriers = [idx]
+            path = Path(_paths[unit.unit_id]) if unit.unit_id in _paths else audio_file(idx)
+            window = window_durs.get(str(idx))
+            shot_index = idx
+            if window is None:
+                planned = getattr(unit, "planned_window", None)
+                if isinstance(planned, (list, tuple)) and len(planned) >= 2:
+                    window = max(0.0, float(planned[1]) - float(planned[0]))
+        measured, why = (_probe_duration(str(path)) if path.is_file()
+                         else (None, "audio_missing"))
         text = str(getattr(unit, "text", "") or "")
         rows.append({
             "unit_id": unit.unit_id,
-            "kind": ("narration" if str(getattr(unit, "kind", "")) == "narration"
-                     else "tts_dialogue"),
-            "shot_index": idx,
+            "kind": ("narration" if is_narration else "tts_dialogue"),
+            "shot_index": shot_index,
+            "shot_indexes": carriers,
+            "source_index": idx,
             "speaker": str(getattr(unit, "voice_role", "") or ""),
             "text": text,
             "declared_sec": round(float(_estimate_duration(text)), 6) if text else None,
@@ -274,6 +323,7 @@ def _write_duration_audit(*, script: dict, gen_script: dict, plan: dict | None,
             "state": "confirmed" if measured is not None else "prepared",
             "measurement": ("ffprobe" if measured is not None else why),
             "audio_path": str(path) if path.is_file() else "",
+            "audio_sha256": _sha256(path) if path.is_file() else "",
         })
     audit = build_duration_audit(rows, script=gen_script, scope=scope,
                                  script_revision=revision, audio_mode=audio_mode,
@@ -282,9 +332,10 @@ def _write_duration_audit(*, script: dict, gen_script: dict, plan: dict | None,
     target.parent.mkdir(parents=True, exist_ok=True)
     atomic_dump_json(target, audit, ensure_ascii=False, indent=2)
     _logger.info("[STEP03-DURATION] units=%d measured=%d overflow_shots=%d "
-                 "max_overflow=%.2fs path=%s"
+                 "overflow_narr=%d max_overflow=%.2fs path=%s"
                  % (audit["summary"]["unit_count"], audit["summary"]["measured_units"],
                     audit["summary"]["overflow_shot_count"],
+                    len(audit["summary"].get("overflow_narrations") or []),
                     audit["summary"]["max_overflow_sec"], target))
     return audit
 
@@ -578,6 +629,16 @@ def main(options=None):
                          % (_vp_path, _vp.get("status"), _vp.get("codes")))
         except Exception as _vp_exc:  # noqa: BLE001 - 规划失败要显式报出
             _logger.warn("[PLAN] 声音准备报告失败: %s" % _vp_exc)
+        # S05/A2：规划阶段就落审计（state=prepared，无实测），让超窗风险在付费前可见。
+        try:
+            _write_duration_audit(
+                script=script, gen_script=gen_script,
+                plan=_plan_for_script(gen_script, scope=scope, script_revision=revision),
+                scope=scope, revision=revision, provider=tts_config.PROVIDER,
+                target_dir=Path(candidate_root) / "plan", units=units,
+                audio_paths={}, only_indices=only_indices)
+        except Exception as _plan_audit_exc:  # noqa: BLE001
+            _logger.warn("[PLAN] 时长审计写入失败: %s" % _plan_audit_exc)
         # Step E：plan-only **没有**真实合成 ⇒ 章节声音状态显式落 prepared
         # （不是「合成失败」，是「还没合成」；Step04 正式合成会据此拒收）。
         try:
@@ -608,6 +669,18 @@ def main(options=None):
                          % (len(_bind_issues),
                             [i.get("code") for i in _bind_issues[:4]]))
         return
+
+    # S05/A2：合成**前**先落一份估算审计（state=prepared）。这样合成失败/被时长
+    # 守卫拒收时仍有可读的窗口与预测超窗，而不是"审计只在成功后才出现"。
+    try:
+        _write_duration_audit(
+            script=script, gen_script=gen_script,
+            plan=_plan_for_script(gen_script, scope=scope, script_revision=revision),
+            scope=scope, revision=revision, provider=tts_config.PROVIDER,
+            target_dir=CHAPTER_DIR, audio_mode=policy.effective_merge_mode,
+            units=None, only_indices=only_indices)
+    except Exception as _pre_audit_exc:  # noqa: BLE001 - 预审计失败不阻断合成
+        _logger.warn("[WARN] 合成前时长审计写入失败: %s" % _pre_audit_exc)
 
     try:
         tts_config.validate()

@@ -2,11 +2,13 @@
 """S04/A1：角色分级与龙套共享音色池（0 provider 调用）。
 
 覆盖：
-- 分级来源：输入声明 > 历史记录 > 本次发言/出镜结构（无帧布局不猜龙套）；
+- **默认 strict 合同**（2026-11-27 复核）：不读声明/历史/结构，全部独占；
+- `VOICE_TIER_POLICY=tiered` 时的分级来源：输入声明 > 历史记录 > 本次发言/出镜结构；
 - 独占角色满池**显式失败**（不静默降级、不撞旁白）；
 - 龙套共享不撞独占角色/旁白，同镜两个龙套不拿同一条声线；
 - 共享桶跨章稳定（后续独占角色不得抢走已共享的音色）；
-- `voice_unit_report` 在 7+ 角色的匿名单章上 `voice_uniqueness.ok=true`。
+- `voice_unit_report` 在 tiered 的 7+ 角色匿名单章上 `voice_uniqueness.ok=true`；
+- 未核实的扩容环境变量**不再**改变音色池/provider 白名单。
 """
 from __future__ import annotations
 
@@ -33,6 +35,9 @@ def _isolated_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("NOVEL_CHAPTER", "1")
     monkeypatch.setenv("TTS_VOICE_REGISTRY_PATH", str(tmp_path / "voice_registry.json"))
     monkeypatch.delenv("VOICE_PRIMARY_MIN_UNITS", raising=False)
+    monkeypatch.delenv("VOICE_TIER_POLICY", raising=False)
+    monkeypatch.delenv("TTS_EXTRA_VOICES", raising=False)
+    monkeypatch.delenv("TTS_EXTRA_SPEAKERS", raising=False)
     vreg.reset_registry_cache()
     yield
     vreg.reset_registry_cache()
@@ -89,7 +94,30 @@ def _build(script: dict, *, provider="dashscope_sdk"):
                                  script_revision="rev-s04", provider_name=provider)
 
 
-def test_tiers_come_from_speech_and_visibility_not_guesses():
+def test_default_strict_contract_keeps_one_voice_per_character(monkeypatch):
+    """默认合同 = strict：声明 extra 也不共享，全部独占（旧合同不变）."""
+    assert vreg.tier_policy() == "strict"
+    script = _pack([
+        {"index": 1, "speaker": "甲", "line": "先走一步。", "visible": ["甲"]},
+        {"index": 2, "speaker": "龙套", "line": "借过。", "visible": ["龙套"]},
+    ])
+    for char in script["characters"]:
+        if char["identifier"] == "龙套":
+            char["voice_tier"] = "extra"
+    tiers = st.derive_voice_tiers(script, script["chapter_outline"])
+    assert tiers["甲"]["tier"] == "primary"
+    assert tiers["龙套"]["tier"] == "primary"         # strict 不认声明/派生
+    assert tiers["龙套"]["source"] == "strict_policy"
+
+    units = _build(script)
+    assert {u.voice_tier for u in units} == {"primary"}
+    uniqueness = st.check_voice_uniqueness(units, None, script["characters"])
+    assert uniqueness["ok"]
+    assert uniqueness["shared_roles"] == []
+
+
+def test_tiers_come_from_speech_and_visibility_not_guesses(monkeypatch):
+    monkeypatch.setenv("VOICE_TIER_POLICY", "tiered")
     script = _pack([
         {"index": 1, "speaker": "甲", "line": "先走一步。", "visible": ["甲", "乙"]},
         {"index": 2, "speaker": "甲", "line": "跟上。", "visible": ["甲", "乙"]},
@@ -110,7 +138,8 @@ def test_tiers_come_from_speech_and_visibility_not_guesses():
     assert st.derive_voice_tiers(no_layout, no_layout["chapter_outline"])["甲"]["tier"] == "primary"
 
 
-def test_declared_tier_wins_and_is_recorded():
+def test_declared_tier_wins_and_is_recorded(monkeypatch):
+    monkeypatch.setenv("VOICE_TIER_POLICY", "tiered")
     script = _pack([
         {"index": 1, "speaker": "甲", "line": "先走。", "visible": ["甲", "乙"]},
         {"index": 2, "speaker": "甲", "line": "再走。", "visible": ["甲", "乙"]},
@@ -145,7 +174,8 @@ def test_primary_pool_exhaustion_fails_closed():
     assert "角色" in str(exc.value)
 
 
-def test_extras_share_without_colliding_primary_or_narrator():
+def test_extras_share_without_colliding_primary_or_narrator(monkeypatch):
+    monkeypatch.setenv("VOICE_TIER_POLICY", "tiered")
     # 3 个独占（各出镜多镜）+ 6 个只在一镜说一句的龙套
     spec = [
         {"index": 1, "speaker": "甲", "line": "开局。", "visible": ["甲", "乙"]},
@@ -228,61 +258,61 @@ def test_shared_voice_is_stable_across_chapters(tmp_path):
             assert prof.get("speaker") != voice1["id"]
 
 
-def test_voice_pool_expansion_channel_is_explicit_and_validated(monkeypatch):
-    """扩容通道只认显式配置：合法条目扩大池容量，非法写法显式报错."""
-    from tts.voice_registry import (character_voice_pool, configured_extra_speakers,
-                                    configured_extra_voices, legal_speakers_for)
+def test_unverified_expansion_env_channels_do_not_change_pool(monkeypatch):
+    """复核结论：`TTS_EXTRA_*` 不再并入音色池/provider 白名单（扩容通道未交付）."""
+    from tts.voice_registry import character_voice_pool, legal_speakers_for
 
-    base = len(character_voice_pool())
-    monkeypatch.setenv("TTS_EXTRA_VOICES", "custom-male-young|male|young,"
-                                           "custom-female-old|female|old")
-    voices = configured_extra_voices()
-    assert [v["id"] for v in voices] == ["custom-male-young", "custom-female-old"]
-    assert len(character_voice_pool()) == base + 2
-
-    monkeypatch.setenv("TTS_EXTRA_VOICES", "custom-x|unknown|young")
-    with pytest.raises(ValueError, match="gender/age_range"):
-        configured_extra_voices()
-    monkeypatch.setenv("TTS_EXTRA_VOICES", "only-id")
-    with pytest.raises(ValueError, match="非法"):
-        configured_extra_voices()
-
+    base_pool = [v["id"] for v in character_voice_pool()]
     class _Caps:
         legal_speakers = ("builtin-a",)
 
-    monkeypatch.setenv("TTS_EXTRA_SPEAKERS", "designed-x, designed-y,builtin-a")
-    assert configured_extra_speakers() == ["builtin-a", "designed-x", "designed-y"]
-    assert legal_speakers_for(_Caps()) == ("builtin-a", "designed-x", "designed-y")
+    monkeypatch.setenv("TTS_EXTRA_VOICES", "custom-male-young|male|young")
+    monkeypatch.setenv("TTS_EXTRA_SPEAKERS", "designed-x,designed-y")
+    assert [v["id"] for v in character_voice_pool()] == base_pool
+    assert legal_speakers_for(_Caps()) == ("builtin-a",)
 
 
-def test_expanded_pool_lifts_the_seven_voice_ceiling():
-    """8 个独占角色：内置池满 ⇒ 失败；显式扩容一条后同一输入可以通过."""
-    spec = [{"index": i, "speaker": "角色%d" % i, "line": "第%d句。" % i,
-             "visible": ["角色%d" % i, "角色%d" % (i % 8 + 1)]} for i in range(1, 9)]
-    script = _pack(spec)
-    for char in script["characters"]:
-        char["voice_tier"] = "primary"
-    with pytest.raises(SynthesisError):
-        st.plan_role_voices(script, script["chapter_outline"],
+def test_shared_pool_only_when_tiered_and_strict_exhausts():
+    """同一 6 龙套输入：strict ⇒ 满池显式失败；tiered ⇒ 共享后通过."""
+    spec = [
+        {"index": 1, "speaker": "甲", "line": "开局。", "visible": ["甲", "乙"]},
+        {"index": 2, "speaker": "甲", "line": "再说。", "visible": ["甲", "乙"]},
+        {"index": 3, "speaker": "乙", "line": "嗯。", "visible": ["甲", "乙", "丙"]},
+        {"index": 4, "speaker": "丙", "line": "到。", "visible": ["甲", "丙"]},
+        {"index": 5, "speaker": "龙套1", "line": "报！", "visible": ["龙套1"]},
+        {"index": 6, "speaker": "龙套2", "line": "让路！", "visible": ["龙套2"]},
+        {"index": 7, "speaker": "龙套3", "line": "借过！", "visible": ["龙套3"]},
+        {"index": 8, "speaker": "龙套4", "line": "收摊了！", "visible": ["龙套4"]},
+        {"index": 9, "speaker": "龙套5", "line": "小心火烛！", "visible": ["龙套5"]},
+        {"index": 10, "speaker": "龙套6", "line": "关门！", "visible": ["龙套6"]},
+    ]
+    strict_script = _pack(spec)
+    with pytest.raises(SynthesisError) as exc:
+        st.plan_role_voices(strict_script, strict_script["chapter_outline"],
                             registry=vreg.get_registry(), provider_name="dashscope_sdk")
+    assert exc.value.code == "voice_pool_exhausted"
 
+    # tiered：同一输入通过（龙套共享，独占角色各占一条）
     vreg.reset_registry_cache()
-    os.environ["TTS_EXTRA_VOICES"] = "扩容男声|male|young"
+    vreg.get_registry().mapping.clear()
+    vreg.get_registry().used_voice_ids.clear()
+    vreg.get_registry().role_tiers.clear()
+    os.environ["VOICE_TIER_POLICY"] = "tiered"
     try:
-        planned = st.plan_role_voices(script, script["chapter_outline"],
+        planned = st.plan_role_voices(strict_script, strict_script["chapter_outline"],
                                       registry=vreg.get_registry(),
                                       provider_name="dashscope_sdk")
-        assert len(planned) == 8
-        assert len({v["model_id"] for v in planned.values()}) == 8
+        assert len(planned) == 9          # 3 独占 + 6 龙套（含旁白音色不占角色池）
     finally:
-        os.environ.pop("TTS_EXTRA_VOICES", None)
+        os.environ.pop("VOICE_TIER_POLICY", None)
         vreg.reset_registry_cache()
 
 
-def test_voice_unit_report_ok_for_seven_plus_roles(tmp_path):
-    """7+ 角色匿名单章：报告零报错、voice_uniqueness.ok=true、分级可见."""
+def test_voice_unit_report_ok_for_seven_plus_roles(tmp_path, monkeypatch):
+    """7+ 角色匿名单章（tiered）：报告零报错、voice_uniqueness.ok=true、分级可见."""
     from tools.voice_unit_report import build_report
 
+    monkeypatch.setenv("VOICE_TIER_POLICY", "tiered")
     spec = [
         {"index": 1, "speaker": "甲", "line": "开局。", "visible": ["甲", "乙"]},
         {"index": 2, "speaker": "甲", "line": "再说。", "visible": ["甲", "乙"]},

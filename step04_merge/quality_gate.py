@@ -12,15 +12,27 @@
 8. **响度**：EBU R128 实测（目标 −16 LUFS）；偏差 > 3 LU 判阻断、> 1.5 LU 告警；
 9. **moov atom 前置**：`moov` 在 `mdat` 之前（快启）；否则告警。
 
-缺陷码直接写进报告，报告层不靠文案反推；`status` 只有 PASS / BLOCK 两态。
+**分级（2026-11-27 复核后）**：
+- **deterministic（默认硬拦）**：文件缺失、无视频/音频流、编码/分辨率/帧率/采样率不符、
+  音画时长差 >100ms、成片与时间线时长不符、字幕结束越过成片、发布失败；
+- **uncalibrated（默认影子评估，只告警）**：未声明黑场、整片静帧、响度偏离——
+  这些阈值尚未用真实生成片校准，`MERGE_QUALITY_ENFORCE=1` 才升级为硬拦；
+- **unavailable（未验证）**：必要检测跑不了时状态是 `UNVERIFIED`（**不是 PASS**），
+  由调用方按 required checks 决定不发布。
 """
 from __future__ import annotations
 
+import os
 import re
 import struct
 from pathlib import Path
 
 SCHEMA = "step04_media_quality.v1"
+
+ENV_ENFORCE = "MERGE_QUALITY_ENFORCE"
+#: 默认**必须真测到**的检查项（缺失即 UNVERIFIED，不能当 PASS）
+DEFAULT_REQUIRED_CHECKS = ("video_stream", "audio_stream", "av_duration",
+                           "black_detect", "freeze_detect", "loudness")
 
 #: 音画时长容差（秒）——方案指标 ≤ 100ms
 AV_DRIFT_TOLERANCE_SEC = 0.10
@@ -132,6 +144,30 @@ def _declared_windows(declared_black_windows) -> list:
     return out
 
 
+def _enforce_uncalibrated() -> bool:
+    """未校准判据是否升级为硬拦（默认关闭 = 影子评估）."""
+    return str(os.getenv(ENV_ENFORCE, "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _uncovered_total(start: float, end: float, windows: list) -> float:
+    """事件区间扣掉**已声明**窗口后，仍未覆盖的秒数（相交 ≠ 全豁免）."""
+    segments = [(float(start), float(end))]
+    for w_start, w_end in windows or ():
+        remaining = []
+        for seg_start, seg_end in segments:
+            if w_end <= seg_start or w_start >= seg_end:
+                remaining.append((seg_start, seg_end))
+                continue
+            if w_start > seg_start:
+                remaining.append((seg_start, w_start))
+            if w_end < seg_end:
+                remaining.append((w_end, seg_end))
+        segments = remaining
+        if not segments:
+            break
+    return sum(max(0.0, seg_end - seg_start) for seg_start, seg_end in segments)
+
+
 def _overlaps(start: float, end: float, windows: list) -> bool:
     return any(not (end < w_start or start > w_end) for w_start, w_end in windows)
 
@@ -191,34 +227,66 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
                    fps: int | float | None = None,
                    audio_required: bool = True,
                    audio_sample_rate: int | None = None,
+                   video_codec: str = "h264",
+                   audio_codec: str = "aac",
                    declared_black_windows=(),
                    srt_path=None,
-                   check_loudness: bool = True) -> dict:
-    """成片终检（0 元）。返回 ``{"schema","status","checks","defects","metrics"}``."""
+                   check_loudness: bool = True,
+                   required_checks=None,
+                   enforce_uncalibrated: bool | None = None) -> dict:
+    """成片终检（0 元）。返回 ``{"schema","status","checks","defects","metrics"}``.
+
+    ``status``：`BLOCK`（确定性问题/未校准项在 enforce 下命中）/
+    `UNVERIFIED`（必要检测跑不了，**不是 PASS**）/ `PASS`。
+    """
     final = Path(final_path)
+    enforce = (_enforce_uncalibrated() if enforce_uncalibrated is None
+               else bool(enforce_uncalibrated))
+    required = set(DEFAULT_REQUIRED_CHECKS if required_checks is None
+                   else required_checks)
+    if not check_loudness:
+        required.discard("loudness")
+    if srt_path is None:
+        required.discard("subtitle_duration")
     checks: list[dict] = []
     defects: list[dict] = []
-    metrics: dict = {"expected_duration": expected_duration}
+    metrics: dict = {"expected_duration": expected_duration,
+                     "enforce_uncalibrated": enforce}
+    unverified: list[str] = []
 
     def _check(name: str, status: str, **detail) -> None:
         checks.append({"name": name, "status": status, **detail})
+        if status == "unavailable" and name in required:
+            unverified.append(name)
 
     def _defect(code: str, message: str, *, severity: str = "block", **detail) -> None:
         defects.append({"code": code, "severity": severity, "message": message, **detail})
         _check(code, "fail" if severity == "block" else "warn", message=message)
 
+    def _soft_defect(code: str, message: str, **detail) -> None:
+        """未校准判据：默认只告警；`MERGE_QUALITY_ENFORCE=1` 时升级为阻断."""
+        _defect(code, message, severity="block" if enforce else "warn", **detail)
+
     if not final.is_file() or final.stat().st_size <= 2048:
         _defect("final_missing", "成片文件缺失或过小")
         return {"schema": SCHEMA, "status": "BLOCK", "checks": checks,
-                "defects": defects, "metrics": metrics}
+                "defects": defects, "metrics": metrics,
+                "unverified": unverified, "provider_calls": 0}
 
     probe = _probe(final)
     video = _stream_of(probe, "video")
     audio = _stream_of(probe, "audio")
     if video is None:
         _defect("video_stream_missing", "成片没有视频流")
-    if audio_required and audio is None:
-        _defect("audio_stream_missing", "本次声音合同要求音频，但成片没有音频流")
+    else:
+        _check("video_stream", "pass")
+    if audio is None:
+        if audio_required:
+            _defect("audio_stream_missing", "本次声音合同要求音频，但成片没有音频流")
+        else:
+            _check("audio_stream", "pass", note="不需要音频")
+    else:
+        _check("audio_stream", "pass")
 
     # ---- 1. 编码规范 ----
     if video is not None:
@@ -226,8 +294,9 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
         metrics.update({"video_codec": codec,
                         "width": video.get("width"), "height": video.get("height"),
                         "fps": video.get("r_frame_rate")})
-        if codec and codec != "h264":
-            _defect("video_codec_unsupported", f"视频编码 {codec} 不是 h264")
+        if codec and codec != str(video_codec):
+            _defect("video_codec_unsupported",
+                    f"视频编码 {codec} 不是目标 {video_codec}")
         if width and video.get("width") and int(video["width"]) != int(width):
             _defect("video_width_mismatch",
                     f"宽 {video['width']} ≠ 配置 {width}")
@@ -248,9 +317,9 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
         metrics.update({"audio_codec": audio.get("codec_name"),
                         "audio_sample_rate": audio.get("sample_rate"),
                         "audio_channels": audio.get("channels")})
-        if str(audio.get("codec_name") or "") not in ("", "aac"):
+        if str(audio.get("codec_name") or "") not in ("", str(audio_codec)):
             _defect("audio_codec_unsupported",
-                    f"音频编码 {audio.get('codec_name')} 不是 aac")
+                    f"音频编码 {audio.get('codec_name')} 不是目标 {audio_codec}")
         if audio_sample_rate and str(audio.get("sample_rate") or ""):
             if int(audio["sample_rate"]) != int(audio_sample_rate):
                 _defect("audio_sample_rate_mismatch",
@@ -283,7 +352,7 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
                     "成片 %.2fs 与时间线 %.2fs 不一致（差 %.2fs）"
                     % (total, float(expected_duration), delta))
 
-    # ---- 3. 黑场（声明窗口内不算缺陷） ----
+    # ---- 3. 黑场（只豁免**已声明且完整覆盖**的部分） ----
     from shared.media_inspect import parse_blackdetect, parse_freezedetect
     black_events, black_err = _detect_events(
         final, "blackdetect=d=%.2f:pix_th=%.2f" % (_BLACK_MIN_SEC, _BLACK_PIX_TH),
@@ -296,16 +365,16 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
         for event in black_events:
             start, end = float(event["start_sec"]), float(event["end_sec"])
             metrics.setdefault("black_segments", []).append([round(start, 3), round(end, 3)])
-            if end - start < UNDECLARED_BLACK_MIN_SEC:
-                continue
-            if _overlaps(start, end, declared):
-                continue
-            unexpected.append((start, end))
+            # 扣掉声明窗口后仍未覆盖的时长才算"未声明黑场"：
+            # 只声明 0–0.5s 淡入时，0–9s 黑场仍有 8.5s 未被覆盖，不能整体豁免。
+            uncovered = _uncovered_total(start, end, declared)
+            if uncovered >= UNDECLARED_BLACK_MIN_SEC:
+                unexpected.append((start, end, round(uncovered, 3)))
         if unexpected:
-            _defect("unexpected_black",
-                    "未声明的黑场 %d 段：%s" % (len(unexpected),
-                                            [[round(s, 2), round(e, 2)]
-                                             for s, e in unexpected[:4]]))
+            _soft_defect("unexpected_black",
+                         "未声明的黑场 %d 段：%s" % (len(unexpected),
+                                                 [[round(s, 2), round(e, 2), u]
+                                                  for s, e, u in unexpected[:4]]))
         else:
             _check("black_detect", "pass", segments=len(black_events))
 
@@ -325,7 +394,7 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
         ratio = (frozen / total) if total else 0.0
         metrics["freeze_ratio"] = round(ratio, 4)
         if total and ratio >= FULL_FREEZE_RATIO:
-            _defect("final_frozen", "整片静帧 %.0f%%（画面卡死）" % (100 * ratio))
+            _soft_defect("final_frozen", "整片静帧 %.0f%%（画面卡死）" % (100 * ratio))
         elif freeze_events:
             _check("freeze_detect", "warn", ratio=round(ratio, 4))
         else:
@@ -374,9 +443,9 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
                 _check("loudness", "warn", integrated_lufs=value,
                        reason="silent_track")
             elif diff > LOUDNESS_BLOCK_LU:
-                _defect("loudness_out_of_range",
-                        "实测响度 %.1f LUFS 偏离目标 %.1f LUFS 超过 %.1f LU"
-                        % (value, LOUDNESS_TARGET_LUFS, LOUDNESS_BLOCK_LU))
+                _soft_defect("loudness_out_of_range",
+                             "实测响度 %.1f LUFS 偏离目标 %.1f LUFS 超过 %.1f LU"
+                             % (value, LOUDNESS_TARGET_LUFS, LOUDNESS_BLOCK_LU))
             elif diff > LOUDNESS_WARN_LU:
                 _check("loudness", "warn", integrated_lufs=value, delta_lu=round(diff, 2))
             else:
@@ -396,9 +465,16 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
         _check("moov_faststart", "unavailable", detail=box_detail)
 
     blocking = [d for d in defects if d.get("severity") == "block"]
-    return {"schema": SCHEMA, "status": "BLOCK" if blocking else "PASS",
+    if blocking:
+        status = "BLOCK"
+    elif unverified:
+        # 必要检测跑不了 ⇒ **未验证**，不得当 PASS 采纳
+        status = "UNVERIFIED"
+    else:
+        status = "PASS"
+    return {"schema": SCHEMA, "status": status,
             "checks": checks, "defects": defects, "metrics": metrics,
-            "provider_calls": 0}
+            "unverified": unverified, "provider_calls": 0}
 
 
 __all__ = ["AV_DRIFT_TOLERANCE_SEC", "LOUDNESS_TARGET_LUFS", "SCHEMA",

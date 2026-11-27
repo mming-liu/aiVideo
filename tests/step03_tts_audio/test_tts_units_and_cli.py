@@ -37,6 +37,11 @@ _N1 = "四人围桌喝茶。"
 
 @pytest.fixture(autouse=True)
 def _isolated_registry(tmp_path, monkeypatch):
+    # 章目录也隔离到本用例：共享 .pytest_tmp 会被其它用例/上次运行留下正式日志，
+    # 令 `test_candidate_run_writes_only_under_the_candidate_root` 误报（2026-11-27）。
+    monkeypatch.setenv("OUTPUT_BASE", str(tmp_path / "out"))
+    monkeypatch.setenv("NOVEL_NAME", "匿名配音样本")
+    monkeypatch.setenv("BOOK_NAME", "匿名测试卷")
     monkeypatch.setenv("TTS_VOICE_REGISTRY_PATH", str(tmp_path / "voice_registry.json"))
     register_capabilities(StubProvider.PROVIDER_NAME, StubProvider().capabilities())
     vreg.reset_registry_cache()

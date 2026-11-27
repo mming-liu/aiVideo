@@ -3,9 +3,10 @@
 - **分支**：`codex/downstream-safe-delivery`
 - **隔离 worktree**：`C:/myFloders/git/aiVideo/.tmp/worktrees/downstream-safe-delivery`
 - **冻结基线 SHA**：`3aa86304525903c3a8bb3a1d52cdbb93c2864431`
-- **本包交付状态（2026-11-27）**：S01–S07 全部完成并提交（最新提交见 `git log`），
-  下游全量回归 `290 passed / 6 skipped`；干净副本（`git archive` 仅受控源码）同套新测试
-  `62 passed`。**全程 0 次外部模型调用**（TTS/视频均本地桩 + FFmpeg 合成媒体）。
+- **本包交付状态（2026-11-27，复核整改后）**：S01–S03 保持完成；S04–S07 已按当日复核意见
+  整改（默认合同回退 strict、媒体判据回退影子评估、发布事务改为"先检查后发布"等），
+  状态为**已整改待复验**。整改后下游全量回归见「九、复核整改记录」；干净副本复跑读数同节。
+  **全程 0 次外部模型调用**（TTS/视频均本地桩 + FFmpeg 合成媒体）。
 - **总体目标（零模型调用）**：在隔离环境中，通过真实 `Step03 → Step02b → Step04` 入口，证明声音完整、请求身份一致、恢复不重复提交、失败不覆盖基线，并产出可播放的合成测试片与完整报告。
 
 ## 一、S01 基线与生效配置快照（非敏感）
@@ -29,10 +30,10 @@
 | S01 基线与隔离 | `docs/downstream-safe-delivery-2026-11-27.md`、`tests/integration/downstream_fixtures.py`、`tests/integration/test_s01_isolation_baseline.py` | 已完成 | `pytest tests/integration/test_s01_isolation_baseline.py tests/test_py311_source_grammar.py` `15 passed`；`ruff check` 0 错误 |
 | S02 任务恢复与计量 | `shared/request_events.py`、`step02_video_gen/submit_poll.py`、`step02b_video_gen/main.py`、`_video_gen/*provider.py`、`tools/step02b_metrics_report.py`、`tests/step02b_video_gen/test_s02_recovery_and_metrics.py` | 已完成 | `pytest test_s02_recovery_and_metrics.py` `6 passed`、`test_production_trace.py` 全过、`ruff check` 0 错误 |
 | S03 逐镜策略贯通 | `shared/video_media_plan.py`（新增 `VIDEO_MEDIA_POLICY_SOURCE` / `resolve_shot_media_policy`）、`step02b_video_gen/cli.py`（`--media-policy-source`）、`step02b_video_gen/main.py`、`step02_video_gen/execution_requirements.py`、`step02_video_gen/prompt_builder.py`、`step02_video_gen/submit_poll.py`、`_video_gen/models.py`、`_video_gen/*provider.py`、`tests/step02b_video_gen/test_s03_mixed_shot_policies.py` | 已完成 | `pytest tests/step02b_video_gen/test_s03_mixed_shot_policies.py` `6 passed`；`tests/step02b_video_gen tests/step02_video_gen tests/step03_tts_audio tests/step04_merge tests/tts tests/integration` `258 passed / 14 skipped / 3 failed`（3 条均为既有 `tests.enhancements.test_transaction_cli` 缺失导入，与本包无关）；`ruff check` 无新增（既有 11 条 F401/F811 保持原样） |
-| S04 音色容量与身份 | `tts/voice_registry.py`（分级/共享桶/扩容通道）、`tts/models.py`（`SpeechUnit.voice_tier`）、`step03_tts_audio/shot_tts.py`（`derive_voice_tiers` / `plan_role_voices` / 分级版 `check_voice_uniqueness`）、`tts/synthesis_job.py`（speaker 校验与分配同源）、`shared/voice_fit.py`（共享等级不误报复用冲突）、`tools/voice_unit_report.py`、`tools/voice_tier_audit.py`（新增，多章审计）、`tests/tts/test_s04_voice_tiers.py` | 已完成 | `pytest tests/tts/test_s04_voice_tiers.py` `9 passed`；下游回归 `254 passed / 6 skipped`；`ruff check` 0 新增（`tts/synthesis_job.py` 的 `KIND_DIALOGUE` F401 为基线既有）；真实第 1+2 章只读副本离线核对：两章 `voice_uniqueness.ok=true`、跨章合并 `ok=true`、`provider_calls=0`，见「S04 证据」 |
-| S05 实测时长与防截音 | `shared/voice_preparation.py`（`build_duration_audit` 投影）、`step03_tts_audio/main.py`（`_write_duration_audit`：正式 + 候选都落 `step03_duration_audit.json`）、`step02b_video_gen/main.py`（`build_plan` 消费审计、`_assert_audio_fit` 生视频前拒收）、`step04_merge/audio_fit.py`（新增：策略纯算术）、`step04_merge/timeline.py`（`ClipEntry.pad_sec` / `TimelineAudioTrack.atempo`）、`step04_merge/backends/ffmpeg.py`（`tpad` / `atempo`）、`step04_merge/main.py`（策略接线 + `audio_fit` 入质量报告）、`tests/step04_merge/test_s05_audio_fit.py`、`tests/integration/test_s05_duration_audit.py` | 已完成 | `pytest tests/step04_merge/test_s05_audio_fit.py` `11 passed`（含真实 FFmpeg 渲染：pad 后音频尾音保留、音画等长）；`pytest tests/integration/test_s05_duration_audit.py` `6 passed`；下游回归 `270 passed / 6 skipped`（1 条 `step03.log` 断言失败来自 `.pytest_tmp` 上次跑测遗留的现场目录，清掉后该套件 `57 passed`）；`ruff check` 0 新增 |
-| S06 媒体检查与混音 | `step02_video_gen/video_qc.py`（`probe_video_media` 0 元探针、空镜判据复用 `is_empty_scene`）、`step02_video_gen/submit_poll.py`（探针先于视觉 QC、问题进 `VideoCheckReport`）、`step04_merge/backends/ffmpeg.py`（切点淡变 + 48kHz + `+faststart`）、`step04_merge/quality_gate.py`（新增：成片终检）、`step04_merge/main.py`（终检接线 + `step04_quality.json.media_check`、`step04_media_quality.json`）、`tests/step02_video_gen/test_s06_media_probe.py`、`tests/step04_merge/test_s06_merge_quality.py` | 已完成 | `pytest tests/step02_video_gen tests/step02b_video_gen tests/step04_merge` `185 passed / 6 skipped`；`pytest tests/step02_video_gen/test_s06_media_probe.py` `9 passed`（合成黑场/静帧/残缺/首帧偏离全部拦截、视觉 QC 0 调用）；`pytest tests/step04_merge/test_s06_merge_quality.py` `9 passed`（正常样片 PASS、音画差/缺音轨/黑场/静帧/字幕越界/响度全部 BLOCK）；`ruff check` 无新增 |
-| S07 完整离线交付 | `tests/integration/test_downstream_safe_delivery_s07.py`、干净副本复跑（`git archive` 到 `.tmp/s07-clean` 后同套测试） | 已完成 | `pytest tests/integration/test_downstream_safe_delivery_s07.py` `1 passed`（52s，三阶段各自真实入口 + 子进程）；干净副本同套 `9` 文件回归见「S07 证据」 |
+| S04 音色容量与身份 | `tts/voice_registry.py`（**默认 strict**：`VOICE_TIER_POLICY` 未设即严格独占；扩容通道撤回）、`tts/models.py`（`SpeechUnit.voice_tier`）、`step03_tts_audio/shot_tts.py`（分级仅在 `tiered` 下生效；分级版 `check_voice_uniqueness`）、`tts/synthesis_job.py`（speaker 校验与分配同源）、`shared/voice_fit.py`（仅 tiered 下豁免共享复用）、`tools/voice_unit_report.py`、`tools/voice_tier_audit.py`、`tests/tts/test_s04_voice_tiers.py` | **已整改待复验** | `pytest tests/tts/test_s04_voice_tiers.py` `10 passed`：默认 strict 下声明/派生均不共享；`tiered` 才启用共享且不撞主角/旁白；满池显式失败；`TTS_EXTRA_*` 不再改变池与白名单；真实第 1+2 章只读副本 `voice_uniqueness.ok=true`、`provider_calls=0`（strict 合同下重新核过） |
+| S05 实测时长与防截音 | `shared/voice_preparation.py`（`build_duration_audit`：音频摘要、旁白承载映射、`predicted_overflow`）、`step03_tts_audio/main.py`（`_write_duration_audit`：候选用**产物路径**、正式在合成前后各落一次、旁白按承载窗口）、`step02b_video_gen/main.py`（审计**身份校验** scope/revision/音频摘要；旁白超窗独立阻断；超窗基于真实窗口）、`step04_merge/audio_fit.py`、`step04_merge/timeline.py`（atempo 计入验收有效时长）、`step04_merge/backends/ffmpeg.py`、`step04_merge/main.py`（pad 只经 `clip_pads` 一次生效；预期总长含补齐）、`tests/step04_merge/test_s05_audio_fit.py`、`tests/step04_merge/test_s05_policy_through_main.py`、`tests/integration/test_s05_duration_audit.py` | **已整改待复验** | `pytest tests/integration/test_s05_duration_audit.py` `10 passed`（身份不符拒用、旁白跨镜不折进单镜、候选产物路径实测）；`pytest tests/step04_merge/test_s05_policy_through_main.py` `2 passed`（**主入口**：2.0s+2.8s 补齐后 ≈2.8s 而非 3.58s；2.2s 音频 1.1x 加速后验收通过、成片仍 2.0s）；`test_s05_audio_fit.py` `11 passed` |
+| S06 媒体检查与混音 | `step02_video_gen/video_qc.py`（0 元探针；黑场/静帧/首帧**默认影子评估**，`VIDEO_MEDIA_ENFORCE=1` 才硬拦）、`step02_video_gen/submit_poll.py`（探针先于视觉 QC）、`step04_merge/backends/ffmpeg.py`（切点淡变/48kHz/faststart）、`step04_merge/quality_gate.py`（终检：`PASS/UNVERIFIED/BLOCK`；未校准项默认告警；黑场按覆盖扣减）、`step04_merge/main.py`（**先渲染临时文件→全部检查→原子发布**；`step04_quality.json.media_check`）、`tests/step02_video_gen/test_s06_media_probe.py`、`tests/step04_merge/test_s06_merge_quality.py` | **已整改待复验** | `pytest tests/step02_video_gen/test_s06_media_probe.py` `10 passed`（影子默认 + enforce 拦截 + 视觉 QC 0 调用）；`pytest tests/step04_merge/test_s06_merge_quality.py` `10 passed`（正常 PASS；必要检测不可用 ⇒ `UNVERIFIED`；确定缺陷 BLOCK；黑场部分声明仍报；未校准项 enforce 才 BLOCK） |
+| S07 完整离线交付 | `tests/integration/test_downstream_safe_delivery_s07.py`、干净副本复跑（`git archive` 到 `.tmp/s07-clean`） | **已整改待复验** | `pytest tests/integration/test_downstream_safe_delivery_s07.py` `1 passed`（62s）：三阶段真实入口；第二次 Step02b **零新增 POST**；成片按镜窗口实测到各镜桩频率；**编码后终检 BLOCK** 时旧成片/旧质量报告原样保留 |
 
 ## 三、S04 证据：角色分级、龙套共享池与音色容量
 
@@ -190,14 +191,14 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 
 | 长期计划模块 | 本包落点 | 状态 |
 |---|---|---|
-| Stage 1 · A1 音色池扩容与角色分级 | S04 | 已完成（离线；扩容通道靠显式配置，未切换 provider） |
-| Stage 1 · A2 实测时长对账与前置反哺 | S05（A2 部分） | 已完成（`step03_duration_audit.json` → Step02b 前置拦截） |
+| Stage 1 · A1 音色池扩容与角色分级 | S04 | **部分整改**：默认严格 1:1 合同保持；分级共享仅在 `VOICE_TIER_POLICY=tiered` 下启用；**扩容通道撤回**（未核 provider 真实性，不作为已交付能力） |
+| Stage 1 · A2 实测时长对账与前置反哺 | S05（A2 部分） | 已完成（`step03_duration_audit.json` → Step02b 身份校验后消费；旁白按承载窗口） |
 | Stage 1 · V1 单命令逐镜混合策略 | S03 | 已完成（`--media-policy-source step02a`；`plan_key`/`submit_key` 同源由 S02 证据覆盖） |
 | Stage 1 · V2/V4 断点续查、计量与报告 | S02 | 已完成 |
-| Stage 1 · M1 禁止 `atrim` 静默切字 | S05（M1 部分） | 已完成（fail/pad/atempo/trim 四策略 + 留痕） |
-| Stage 2 · V3 0 元媒体硬探针 | S06（V3 部分） | 已完成（codes 进 `VideoCheckReport`/`reroll_decision`） |
-| Stage 2 · M2 `loudnorm` 与切点处理 | S06（M2 部分） | 已完成（−16 LUFS、20ms 切点淡变、48kHz、faststart） |
-| Stage 2 · M3 成片终检门 | S06（M3 部分） | 已完成（`step04_media_quality.json` + `step04_quality.json.media_check`） |
+| Stage 1 · M1 禁止 `atrim` 静默切字 | S05（M1 部分） | 已完成（fail/pad/atempo/trim 四策略 + 留痕）；pad/atempo 已从主入口验证 |
+| Stage 2 · V3 0 元媒体硬探针 | S06（V3 部分） | **已整改**：确定损坏硬拦；黑场/静帧/首帧默认影子评估（`VIDEO_MEDIA_ENFORCE=1` 才硬拦） |
+| Stage 2 · M2 `loudnorm` 与切点处理 | S06（M2 部分） | 已完成（−16 LUFS、20ms 切点淡变、48kHz、faststart）；响度判据默认告警 |
+| Stage 2 · M3 成片终检门 | S06（M3 部分） | **已整改**：先检查后发布；`PASS/UNVERIFIED/BLOCK`；未校准项默认告警 |
 | Stage 2 · 首章真实出片同步验收 | — | **未开始**：需要真实 Step02b/Step03 付费调用与人工确认 |
 | Stage 3 · SFX/BGM 与自适应视频策略 | — | **未开始**：依赖首章真实成片体感 |
 | Stage 4 · 巨石模块拆分与看板 | — | **未开始**：计划要求多章连跑稳定后再做 |
@@ -210,3 +211,42 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 - **正式未采纳**：未修改主仓库或正式 `output/` 下的任何章节产物；
 - **新判据待校准**：0 元探针的黑场/静帧/首帧阈值、成片终检响度判据、龙套分级的结构派生规则
   目前只有合成片与匿名单测证据，真实首章出片时应先看读数再决定是否收紧或放宽。
+
+## 九、2026-11-27 复核整改记录（P1/P2 逐项）
+
+复核结论为"暂不接受全部完成、不建议合并或进入付费验证"。以下按复核条目整改，
+**未修改任何正式产物、未调用任何模型**；整改后工程轴与规格轴证据见各条。
+
+### 工程轴
+
+| 条目 | 整改 | 验证 |
+|---|---|---|
+| P1-1 终检拒收时正式成片已被覆盖 | Step04 主入口改为**先渲染到 `TEMP_DIR/final_publish_candidate.*` → 合成后复核 → 全部终检 → `os.replace` 发布 → 再写质量报告**；BLOCK/UNVERIFIED/发布失败都只丢临时文件，旧成片与旧报告保留 | S07 新增"编码后拒收"用例：`MERGE_QUALITY_EXPECT_VIDEO_CODEC=h265` 令终检 BLOCK，断言 `final.mp4` sha256 与 `step04_quality.json` 原样、`step04_media_quality.json` 为 BLOCK |
+| P1-2 候选时长审计不会成功生成 | 删除未定义的 `only_indices`；候选审计按 **attempt 产物路径**（`audio_paths={unit_id: artifact}`）实测；正式路径在合成**前**先落估算审计（prepared），合成后再写实测，失败分支也有可读审计；plan-only 同样落审计 | `tests/integration/test_s05_duration_audit.py::test_candidate_audit_reads_artifact_paths` 断言从产物路径测得 3.0s；`ruff check` 无新增 F821 |
+| P1-3 Step02b 接受未核身份的审计 | `_load_duration_audit` 增加身份校验：schema / scope 五字段 / `script_revision` / 每单元 `audio_sha256`；不符即**拒用**并在 plan `audio_audit.rejected` 列原因，不再静默当"没有审计" | `test_step02b_plan_rejects_foreign_audit_identity`（第 999 章 + 旧 revision 被拒，无超窗裁决）；身份一致用例仍正常阻断 |
+| P1-4 旁白序号当镜头号 | `build_duration_audit` 旁白只记 `shot_indexes`（真实承载）与 `carrier_window_sec`，**不折进任何单镜 `audio_need`**；`_write_duration_audit` 用 `voice_units(...).shot_indexes` 映射；Step02b 新增 `_narration_overflows` 按整段窗口阻断 | `test_narration_uses_carrier_shots_not_index_number`、`test_step02b_plan_blocks_narration_overflow` |
+| P1-5 补尾/加速未过完整主链 | 修 pad **重复计长**（不再把 `clip_durations` 赋给 `target_durations`，只走 `clip_pads`）；预期总长显式加上补齐；验收对 `shot_tts` 用 `实测/atempo` 的**有效时长**比对 | `test_s05_policy_through_main.py`：pad 2.0+0.8 ⇒ 成片 ≈2.8s（非 3.58s）、音频完整；atempo 1.1x ⇒ 验收通过、成片仍 2.0s |
+| P1-6 必要检测不可用仍 PASS | 终检状态改为 `BLOCK / UNVERIFIED / PASS`；`required_checks` 覆盖视频/音频流、音画差、黑场、静帧、响度（字幕给定时含字幕）；有未验证项 ⇒ `UNVERIFIED`，Step04 以 `final_quality_unverified` 拒绝发布 | `test_unavailable_required_check_is_unverified_not_pass`；S06 正常片仍 PASS |
+| P2-7 黑场"相交即豁免" | 改为**区间扣减**：只豁免已声明且完整覆盖的部分，未覆盖时长 ≥0.5s 仍报 | `test_unexpected_black_is_shadow_by_default_and_blocks_when_enforced` 中 `[0,9]` 黑场 + 只声明 `[0,0.5]` 仍报；`[2,3.2]` 全覆不报 |
+
+### 规格轴
+
+| 条目 | 整改 | 验证 |
+|---|---|---|
+| P1 默认声音合同被改变 | 新增 `VOICE_TIER_POLICY`，**默认 `strict`**：不读声明/历史/结构，所有角色独占、`shared_roles=[]`；只有显式 `tiered` 才分级共享。`TTS_EXTRA_VOICES`/`TTS_EXTRA_SPEAKERS` 并入池/白名单的通道**撤回**（未核 provider 真实性，不宣称扩容） | `test_default_strict_contract_keeps_one_voice_per_character`、`test_unverified_expansion_env_channels_do_not_change_pool`、`test_shared_pool_only_when_tiered_and_strict_exhausts` |
+| P1 未校准媒体判据已硬生效 | Step02b 探针：黑场/静帧/首帧默认 **warning**（进报告/重抽判据），`VIDEO_MEDIA_ENFORCE=1` 才 critical；确定损坏（无流/不可解码/时长严重不符）始终 critical。Step04 终检：黑场/静帧/响度默认 warning，`MERGE_QUALITY_ENFORCE=1` 才 BLOCK；编码/分辨率/音画差/缺音轨/字幕越界仍硬拦 | `test_black_clip_is_shadow_warned_by_default`、`test_black_clip_is_critical_when_enforced`、`test_quiet_final_flags_loudness_when_enforced` |
+| P2 S07 断言不足 | 第二次 Step02b 由桩服务写**POST 计数**，断言 `posts==0`；"声音完整"改为在成片按镜窗口用 `bandpass+volumedetect` 实测该镜桩频率并显著高于无关频率；新增编码后拒收保旧 | S07 三处断言均在 `test_downstream_safe_delivery_s07.py` 内 |
+
+### 整改后读数
+
+- `pytest tests/tts tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/integration/test_s01_isolation_baseline.py tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py`
+  → **`299 passed / 6 skipped`**（skip 均为缺正式 `output/` 的既有用例）。
+- 单独：`tests/tts/test_s04_voice_tiers.py` 10、`tests/integration/test_s05_duration_audit.py` 10、
+  `tests/step04_merge/test_s05_policy_through_main.py` 2、`tests/step02_video_gen/test_s06_media_probe.py` 10、
+  `tests/step04_merge/test_s06_merge_quality.py` 10、S07 1。
+- 另修一处**既有测试隔离缺陷**（非本包功能）：`tests/step03_tts_audio` 的注册表夹具把章目录
+  指向共享 `.pytest_tmp`，其它用例留下的正式 `step03.log` 会让"候选不写正式目录"断言误报；
+  现按用例隔离 `OUTPUT_BASE`（属测试夹具修复，不改变生产行为）。
+- 主线 `507ccea` 已合入本分支（`qc_http_attempt`、Step02a Phase 2B 修复与测试白名单保留），
+  合并后 `tests/step02a_frame_gen tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/tts` `466 passed / 10 skipped`。
+- 仍**未**执行：真实 Step02b/Step03 付费调用、首章真实出片验收、Stage 3/4；合并预演无文本冲突不代表合并后行为已验证，需在合并后用同一组入口证据复验。

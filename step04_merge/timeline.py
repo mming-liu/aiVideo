@@ -741,16 +741,22 @@ def build_timeline_acceptance(timeline: MergeTimeline, *,
                            "message": "音轨实测时长不可得"})
         elif track.kind == "shot_tts" and track.clip_index is not None:
             window = windows[int(track.clip_index)]
-            if actual > window.duration_sec + 1.0 / fps:
-                row["overflow_sec"] = round(actual - window.duration_sec, 6)
+            # 加速音轨的**有效**成片时长 = 实测 / atempo；不按原始时长误判超窗。
+            _atempo = float(getattr(track, "atempo", 1.0) or 1.0)
+            _effective = (actual / _atempo) if _atempo > 0 else actual
+            if _atempo != 1.0:
+                row["atempo"] = _atempo
+                row["effective_sec"] = round(_effective, 6)
+            if _effective > window.duration_sec + 1.0 / fps:
+                row["overflow_sec"] = round(_effective - window.duration_sec, 6)
                 issues.append({
                     "code": "audio_window_overflow", "stable_id": track.stable_id,
                     "clip_index": int(track.clip_index),
                     "shot_index": timeline.clips[int(track.clip_index)].shot_index,
                     "path": str(track.path),
-                    "message": f"逐镜音轨 {actual:.3f}s 超过镜头窗口 "
-                               f"{window.duration_sec:.3f}s",
-                    "overflow_sec": round(actual - window.duration_sec, 6)})
+                    "message": f"逐镜音轨 {_effective:.3f}s（atempo={_atempo:g}，实测 "
+                               f"{actual:.3f}s）超过镜头窗口 {window.duration_sec:.3f}s",
+                    "overflow_sec": round(_effective - window.duration_sec, 6)})
         elif track.kind == "narration":
             start = float(track.start_sec or 0.0)
             declared_end = float(track.end_sec or 0.0)

@@ -145,7 +145,7 @@ def test_missing_audio_blocks(tmp_path):
     assert "audio_stream_missing" in {d["code"] for d in report["defects"]}
 
 
-def test_unexpected_black_blocks_unless_declared(tmp_path):
+def test_unexpected_black_is_shadow_by_default_and_blocks_when_enforced(tmp_path):
     # 2s 绿 → 1s 黑 → 2s 绿，用 concat 拼
     parts = []
     for name, color, secs in (("a", "darkgreen", 2.0), ("b", "black", 1.0),
@@ -165,15 +165,30 @@ def test_unexpected_black_blocks_unless_declared(tmp_path):
                     "sine=frequency=440:duration=5.0", "-c:a", "aac", "-ar", "48000",
                     str(audio)], check=True)
     final = _mux(silent, audio, tmp_path / "black_mid.mp4")
-    report = evaluate_final(final, audio_required=True, check_loudness=False)
-    assert "unexpected_black" in {d["code"] for d in report["defects"]}
 
-    declared = evaluate_final(final, audio_required=True, check_loudness=False,
-                              declared_black_windows=[[2.0, 3.1]])
-    assert "unexpected_black" not in {d["code"] for d in declared["defects"]}
+    # 默认：影子评估（warn），不 BLOCK
+    shadow = evaluate_final(final, audio_required=True, check_loudness=False)
+    codes = {d["code"] for d in shadow["defects"]}
+    assert "unexpected_black" in codes
+    assert all(d["severity"] == "warn" for d in shadow["defects"]
+               if d["code"] == "unexpected_black")
+
+    # enforce：升级为 BLOCK
+    enforced = evaluate_final(final, audio_required=True, check_loudness=False,
+                              enforce_uncalibrated=True)
+    assert "unexpected_black" in {d["code"] for d in enforced["defects"]
+                                  if d["severity"] == "block"}
+
+    # 完整覆盖整个黑场窗口 ⇒ 不报；只声明开头 0.5s ⇒ 剩余仍报（不能"相交即豁免"）
+    covered = evaluate_final(final, audio_required=True, check_loudness=False,
+                             declared_black_windows=[[2.0, 3.2]])
+    assert "unexpected_black" not in {d["code"] for d in covered["defects"]}
+    partial = evaluate_final(final, audio_required=True, check_loudness=False,
+                             declared_black_windows=[[0.0, 0.5]])
+    assert "unexpected_black" in {d["code"] for d in partial["defects"]}
 
 
-def test_frozen_final_blocks(tmp_path):
+def test_frozen_final_blocks_when_enforced(tmp_path):
     video = _clip(tmp_path / "v.mp4", 3.0, color="navy", audio=False,
                   source="color")
     audio = tmp_path / "a.m4a"
@@ -181,8 +196,22 @@ def test_frozen_final_blocks(tmp_path):
                     "sine=frequency=440:duration=3.0", "-c:a", "aac", "-ar", "48000",
                     str(audio)], check=True)
     final = _mux(video, audio, tmp_path / "frozen.mp4")
-    report = evaluate_final(final, audio_required=True, check_loudness=False)
+    report = evaluate_final(final, audio_required=True, check_loudness=False,
+                            enforce_uncalibrated=True)
     assert "final_frozen" in {d["code"] for d in report["defects"]}
+
+
+def test_unavailable_required_check_is_unverified_not_pass(tmp_path, monkeypatch):
+    """必要检测跑不了 ⇒ `UNVERIFIED`（不是 PASS），调用方不得据此发布."""
+    import step04_merge.quality_gate as qg
+
+    timeline = _timeline(tmp_path)
+    final = _render(timeline, tmp_path / "final.mp4")
+    monkeypatch.setattr(qg, "_ffmpeg", lambda: None)
+    report = evaluate_final(final, expected_duration=timeline.total_duration_sec,
+                            width=320, height=240, fps=24, audio_required=True)
+    assert report["status"] == "UNVERIFIED"
+    assert {"black_detect", "freeze_detect", "loudness"} <= set(report["unverified"])
 
 
 def test_subtitle_beyond_duration_blocks(tmp_path):
@@ -196,7 +225,7 @@ def test_subtitle_beyond_duration_blocks(tmp_path):
     assert "subtitle_beyond_duration" in {d["code"] for d in report["defects"]}
 
 
-def test_quiet_final_flags_loudness(tmp_path):
+def test_quiet_final_flags_loudness_when_enforced(tmp_path):
     video = _clip(tmp_path / "v.mp4", 2.0, audio=False)
     audio = tmp_path / "quiet.m4a"
     # 明显偏小但仍可测（约 -30 LUFS）：低于"整轨静音"判据，应命中响度缺陷
@@ -204,8 +233,12 @@ def test_quiet_final_flags_loudness(tmp_path):
                     "sine=frequency=440:duration=2.0", "-af", "volume=0.05",
                     "-c:a", "aac", "-ar", "48000", str(audio)], check=True)
     final = _mux(video, audio, tmp_path / "quiet.mp4")
-    report = evaluate_final(final, audio_required=True)
+    report = evaluate_final(final, audio_required=True, enforce_uncalibrated=True)
     assert "loudness_out_of_range" in {d["code"] for d in report["defects"]}
+    # 默认影子：保留告警但不阻断
+    shadow = evaluate_final(final, audio_required=True)
+    assert shadow["status"] == "PASS"
+    assert "loudness_out_of_range" in {d["code"] for d in shadow["defects"]}
 
 
 def test_silent_track_is_not_a_loudness_defect(tmp_path):

@@ -54,7 +54,19 @@ def test_normal_clip_passes_probe(tmp_path):
     assert probe.metrics["width"] == 320 and probe.metrics["height"] == 240
 
 
-def test_black_clip_is_critical(tmp_path):
+def test_black_clip_is_shadow_warned_by_default(tmp_path, monkeypatch):
+    """未校准判据默认只做影子评估（warning），不拦生成."""
+    monkeypatch.delenv("VIDEO_MEDIA_ENFORCE", raising=False)
+    clip = _clip(tmp_path / "black.mp4", source="color", color="black")
+    probe = probe_video_media(clip)
+    codes = {i["code"] for i in probe.issues}
+    assert "media_black_whole" in codes
+    assert probe.critical == []
+    assert {i["severity"] for i in probe.issues if i["code"] == "media_black_whole"} == {"warning"}
+
+
+def test_black_clip_is_critical_when_enforced(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIDEO_MEDIA_ENFORCE", "1")
     clip = _clip(tmp_path / "black.mp4", source="color", color="black")
     probe = probe_video_media(clip)
     codes = {i["code"] for i in probe.critical}
@@ -62,7 +74,8 @@ def test_black_clip_is_critical(tmp_path):
     assert probe.status == "critical"
 
 
-def test_static_clip_is_reported_as_freeze(tmp_path):
+def test_static_clip_is_reported_as_freeze(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIDEO_MEDIA_ENFORCE", "1")
     clip = _clip(tmp_path / "static.mp4", source="color", color="navy")
     probe = probe_video_media(clip)
     codes = {i["code"] for i in probe.critical}
@@ -116,8 +129,9 @@ def test_flat_input_frame_is_not_comparable(tmp_path):
 
 
 def test_zero_cost_probe_blocks_before_any_vision_qc(tmp_path, monkeypatch):
-    """探针判 critical ⇒ QC 直接失败，且**没有**进入视觉 QC 分支（0 模型调用）."""
+    """确定损坏（黑场 + enforce）⇒ QC 直接失败，且**没有**进入视觉 QC（0 模型调用）."""
     monkeypatch.setenv("VIDEO_QC_ENABLED", "1")
+    monkeypatch.setenv("VIDEO_MEDIA_ENFORCE", "1")
     called = {"visual": 0}
 
     def _boom(*args, **kwargs):  # 视觉 QC 一旦被调用就失败
