@@ -423,6 +423,7 @@ tests/step02a_frame_gen/*
 !tests/step02a_frame_gen/test_stage1_closure.py
 !tests/step02a_frame_gen/test_phase2a_governance.py
 !tests/step02a_frame_gen/test_phase2a_fix_f1_f7.py
+!tests/step02a_frame_gen/test_phase2b_qc_budget_and_refs.py
 !tests/step04_merge/
 tests/step04_merge/*
 !tests/step04_merge/test_step04_shots_subset.py

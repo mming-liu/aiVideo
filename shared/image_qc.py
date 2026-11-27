@@ -168,7 +168,8 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
                     kf_index: int | None = None,
                     *,
                     frame_path: str | Path | None = None,
-                    request_snapshot: dict | None = None) -> str:
+                    request_snapshot: dict | None = None,
+                    generation_prompt: str | None = None) -> str:
     """构建质检 prompt（中文，要求视觉模型只返回严格 JSON）.
 
     prompt 不含字面双引号或 $（PowerShell -File 参数引号安全），中文安全。
@@ -185,15 +186,18 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         read_frame_request_snapshot(frame_path) if frame_path else None
     )
     snap_prompt = str((snap or {}).get("prompt") or "").strip() if isinstance(snap, dict) else ""
-    # 实际生成图片的最终 prompt（落盘请求快照 > 运行时挂载 > 原始 desc）
+    gen_override = str(generation_prompt or "").strip()
+    # 实际生成图片的最终 prompt（显式传入生成提示 > 落盘请求快照 > 运行时挂载 > 原始 desc）
     desc = (
-        snap_prompt
+        gen_override
+        or snap_prompt
         or shot.get("ff_desc_final") or shot.get("ff_desc")
         or shot.get("lf_desc") or shot.get("motion_desc") or ""
     )
     if frame_kind == "last_frame":
         desc = (
-            snap_prompt
+            gen_override
+            or snap_prompt
             or shot.get("lf_desc_final") or shot.get("lf_desc")
             or shot.get("ff_desc") or shot.get("motion_desc") or desc
         )
@@ -201,7 +205,8 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         _kf_final = (shot.get(f"kf_{kf_index}_desc_final")
                      if kf_index is not None else None)
         desc = (
-            snap_prompt
+            gen_override
+            or snap_prompt
             or _kf_final or shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
             or shot.get("ff_desc_final") or shot.get("ff_desc")
             or shot.get("lf_desc") or shot.get("motion_desc") or desc
@@ -261,7 +266,7 @@ def build_qc_prompt(shot: dict, frame_kind: str, characters: list | None = None,
         f"应出现人物：{chars}",
         f"应出现道具或关键词：{_truncate(core_keywords or '无', 100)}",
         f"剧情文字合同：{_truncate(allowed_desc, 160)}",
-        f"画面描述：{_truncate(desc, 500)}",
+        f"画面描述：{_truncate(desc, 1200)}",
         "",
         "检查以下问题类别，只看图里实际存在、明显的问题，不要吹毛求疵：",
         "1. face_consistency 人物五官/脸型异常、扭曲、模糊不清",
@@ -448,43 +453,104 @@ def parse_verdict(text: str) -> QcResult:
     except Exception:
         pass
 
-    # 4. 对话式响应守卫（v6.50，08-29）：视觉模型把质检当成了生成任务、
-    #    返回"重新生成/如需调整"式聊天文本——此时没有质检结论可言。
-    #    旧行为是在散文上做关键词回退扫描：碰巧含触发词→critical、
-    #    碰巧没有→clean sidecar——同一张图两次结果相反（非确定性根源）。
-    #    改为：一律判质检失败（ok=False），调用方日志可见、不写 clean sidecar，
-    #    下次重新质检。
+    # 4. 对话式响应守卫（v6.50）：视觉模型把质检当成了生成任务、
+    #    返回聊天文本——一律判质检失败（ok=False）。
     _CHAT_MARKERS = ("如需调整", "重新生成", "我将继续", "根据您描述", "请提供", "可以告知")
     if any(k in text for k in _CHAT_MARKERS):
         return QcResult(has_hallucination=False, issues=[], ok=False,
                         raw_result=text, error="视觉模型返回对话式响应而非质检 JSON（已拒收）")
 
-    # 5. 关键词回退（仅对非对话式纯文本判定）
-    text_lower = text.lower()
-    has = any(k in text_lower for k in _FALLBACK_KEYWORDS)
-    issues = []
-    if has:
-        severity = "critical" if any(k in text_lower for k in
-                                     ("漂浮", "半透明", "光束", "融合", "穿透", "多指", "畸形")) else "warning"
-        issues.append(QcIssue(
-            category="unexpected_object",
-            description="检测到潜在视觉问题（解析失败，关键词匹配）",
-            severity=severity,
-        ))
-    return QcResult(has_hallucination=has, issues=issues, ok=True, raw_result=text,
-                    error="" if has else "未检出问题（解析失败但无关键词命中）")
+    # 5. 非 JSON 响应一律失败（fail-closed：不得把解析失败回退伪装成 ok=True）
+    return QcResult(
+        has_hallucination=False,
+        issues=[],
+        ok=False,
+        raw_result=text,
+        error="视觉模型返回非 JSON 质检响应（解析失败）",
+    )
 
 
 def _result_from_json(data: dict, raw: str) -> QcResult:
-    """从已解析的 JSON dict 构建 QcResult."""
+    """从已解析的 JSON dict 构建 QcResult，并对字段契约做严格校验."""
+    if not any(k in data for k in ("has_hallucination", "issues", "has_unwanted_text")):
+        return QcResult(
+            has_hallucination=False,
+            issues=[],
+            ok=False,
+            raw_result=raw,
+            error="视觉模型返回无效质检 JSON 结构（缺少判定字段）",
+        )
+    if "has_hallucination" in data and not isinstance(data.get("has_hallucination"), bool):
+        return QcResult(
+            has_hallucination=False,
+            issues=[],
+            ok=False,
+            raw_result=raw,
+            error="视觉模型返回无效 has_hallucination 类型",
+        )
+    raw_issues = data.get("issues") if "issues" in data and data.get("issues") is not None else []
+    if not isinstance(raw_issues, list):
+        return QcResult(
+            has_hallucination=False,
+            issues=[],
+            ok=False,
+            raw_result=raw,
+            error="视觉模型返回无效 issues 列表结构",
+        )
+    if (
+        "has_unwanted_text" in data
+        and data.get("has_unwanted_text") is not None
+        and not isinstance(data.get("has_unwanted_text"), bool)
+    ):
+        return QcResult(
+            has_hallucination=False,
+            issues=[],
+            ok=False,
+            raw_result=raw,
+            error="视觉模型返回无效 has_unwanted_text 类型",
+        )
+
     issues: list[QcIssue] = []
 
-    for item in data.get("issues", []) or []:
+    for idx_i, item in enumerate(raw_issues):
         if not isinstance(item, dict):
-            continue
-        category = _map_category(item.get("category", ""))
-        description = str(item.get("description", "") or "")
-        severity = _severity_of(category, description, str(item.get("severity", "warning")))
+            return QcResult(
+                has_hallucination=False,
+                issues=[],
+                ok=False,
+                raw_result=raw,
+                error=f"视觉模型返回无效 issue[{idx_i}] 非对象结构",
+            )
+        raw_cat = item.get("category")
+        raw_desc = item.get("description")
+        raw_sev = item.get("severity")
+        if not isinstance(raw_cat, str) or not raw_cat.strip():
+            return QcResult(
+                has_hallucination=False,
+                issues=[],
+                ok=False,
+                raw_result=raw,
+                error=f"视觉模型返回无效 issue[{idx_i}].category 缺失或空白",
+            )
+        if not isinstance(raw_desc, str) or not raw_desc.strip():
+            return QcResult(
+                has_hallucination=False,
+                issues=[],
+                ok=False,
+                raw_result=raw,
+                error=f"视觉模型返回无效 issue[{idx_i}].description 缺失或空白",
+            )
+        if raw_sev is not None and not isinstance(raw_sev, str):
+            return QcResult(
+                has_hallucination=False,
+                issues=[],
+                ok=False,
+                raw_result=raw,
+                error=f"视觉模型返回无效 issue[{idx_i}].severity 类型",
+            )
+        category = _map_category(raw_cat)
+        description = raw_desc.strip()
+        severity = _severity_of(category, description, raw_sev or "warning")
         issues.append(QcIssue(category=category, description=description, severity=severity))
 
     if bool(data.get("has_unwanted_text", False)) and not any(i.category == "text_watermark" for i in issues):
@@ -554,7 +620,7 @@ def read_sidecar(frame_path: str | Path) -> dict | None:
 
 
 QC_CONTRACT_VERSION = 3
-QC_PROMPT_VERSION = "2026-11-26.f1"
+QC_PROMPT_VERSION = "2026-11-27.f2"
 REQUEST_SNAPSHOT_SCHEMA = 1
 
 
@@ -1114,20 +1180,45 @@ def write_sidecar(frame_path: Path, result: QcResult, *,
 # 第 3 层：通用语义 QC（OpenCode Go 直接看图）
 # ============================================================================
 
+def _is_prebuilt_qc_prompt(prompt: str | None) -> bool:
+    """Detect whether caller already supplied a complete QC instruction prompt."""
+    s = str(prompt or "")
+    return (
+        "你是专业图片质检员" in s
+        and "has_hallucination" in s
+        and "只返回一个 JSON 对象" in s
+    )
+
+
 def _semantic_qc(frame_path: str | Path, prompt: str | None, shot: dict | None,
                  frame_kind: str, characters: list | None, empty_scene: bool,
                  kf_index: int | None) -> QcResult:
-    """整体语义质检：画面 vs 实际生成 prompt。失败抛异常（由 maybe_qc_sync 记 ok=False）.
+    """整体语义质检：将生图内容与审查指令/JSON 协议组装后送检。
 
-    调用方传了实际生成 prompt 就直接采用；未传时按本帧内容合同 + 磁盘请求快照重建。
+    只有当调用方显式传入已含审查指令与 JSON 协议的完整质检 prompt 时才直发；
+    其余情况下一律走 build_qc_prompt(...) 组装审查规范与预期画面描述。
     """
-    if prompt and str(prompt).strip():
-        qc_prompt = str(prompt)
+    raw_prompt = str(prompt or "").strip()
+    if raw_prompt and _is_prebuilt_qc_prompt(raw_prompt):
+        qc_prompt = raw_prompt
     else:
-        qc_prompt = build_qc_prompt(
-            shot or {}, frame_kind, characters, empty_scene, kf_index=kf_index,
-            frame_path=frame_path,
-        )
+        build_kwargs: dict = {
+            "kf_index": kf_index,
+            "frame_path": frame_path,
+        }
+        if raw_prompt:
+            build_kwargs["generation_prompt"] = raw_prompt
+        try:
+            qc_prompt = build_qc_prompt(
+                shot or {}, frame_kind, characters, empty_scene, **build_kwargs,
+            )
+        except TypeError:
+            # Backward compatibility with tests monkeypatching build_qc_prompt(shot, fk, chars, empty, kf_index=...)
+            build_kwargs.pop("generation_prompt", None)
+            build_kwargs.pop("frame_path", None)
+            qc_prompt = build_qc_prompt(
+                shot or {}, frame_kind, characters, empty_scene, **build_kwargs,
+            )
     return parse_verdict(_opencode_vision_chat(frame_path, qc_prompt))
 
 
@@ -1167,6 +1258,29 @@ _QC_HTTP_RETRY_BACKOFF = (2.0, 5.0)
 _QC_SESSION_LOCK = __import__("threading").Lock()
 _QC_SESSION = None
 _QC_SESSION_DIRTY = False
+_QC_HTTP_ATTEMPTS_LOCK = __import__("threading").Lock()
+_QC_HTTP_ATTEMPTS = 0
+
+
+def reset_qc_http_attempts() -> None:
+    """Reset process-local vision QC HTTP attempt counter."""
+    global _QC_HTTP_ATTEMPTS
+    with _QC_HTTP_ATTEMPTS_LOCK:
+        _QC_HTTP_ATTEMPTS = 0
+
+
+def get_qc_http_attempts() -> int:
+    """Return number of vision QC HTTP POST attempts sent in this process since reset."""
+    with _QC_HTTP_ATTEMPTS_LOCK:
+        return int(_QC_HTTP_ATTEMPTS)
+
+
+def _qc_max_http_attempts() -> int:
+    raw = os.getenv("QC_VISION_MAX_HTTP_ATTEMPTS", "0")
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _get_qc_session():
@@ -1231,6 +1345,27 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
     retries = _qc_http_retries()
     last_err = ""
     for attempt in range(retries + 1):
+        global _QC_HTTP_ATTEMPTS
+        with _QC_HTTP_ATTEMPTS_LOCK:
+            cap = _qc_max_http_attempts()
+            if cap > 0 and _QC_HTTP_ATTEMPTS >= cap:
+                raise RuntimeError(
+                    f"opencode 视觉质检达到 HTTP 发送上限（{_QC_HTTP_ATTEMPTS}/{cap}），发送前阻断"
+                )
+            _QC_HTTP_ATTEMPTS += 1
+            seq_attempt = _QC_HTTP_ATTEMPTS
+        try:
+            from shared import request_events as _req_ev
+            _req_ev.emit(
+                "qc_http_attempt",
+                kind="image_qc",
+                attempt=attempt + 1,
+                vision_http_seq=seq_attempt,
+                model=QC_OPENCODE_MODEL,
+                frame_path=str(frame_path),
+            )
+        except Exception:
+            pass
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
@@ -2391,8 +2526,9 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
     任一层调用失败 → ok=False（不写成 clean）。QC_PROVIDER=off → 跳过；
     其余取值（旧的 auto / ark / router）→ ok=False 显式失败。
 
-    prompt: 自定义质检 prompt（v1.1 传实际生成图片的最终 prompt；None 则由
-    build_qc_prompt 自动构建，内部优先取 shot["ff_desc_final"]/["lf_desc_final"]）。
+    prompt: 实际生成图片的最终生成 prompt（将作为预期内容拼入 build_qc_prompt
+    的质检指令与 JSON 输出协议中）；None 时由 build_qc_prompt 自动读取磁盘快照
+    或 shot["ff_desc_final"]/["lf_desc_final"]）。
 
     v6.55 D 方案：第 2 层判定走 _claim_severity 纯函数。
     - reliability 标由 build_claim_checks 出口打定（生成期一次完成）
@@ -2408,10 +2544,6 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
         build_qc_frame_meta(shot, frame_kind, characters, kf_index=kf_index, frame_path=frame_path)
         if isinstance(shot, dict) else None
     )
-    if (not prompt or not str(prompt).strip()) and frame_path:
-        _disk_snap = read_frame_request_snapshot(frame_path)
-        if isinstance(_disk_snap, dict) and str(_disk_snap.get("prompt") or "").strip():
-            prompt = str(_disk_snap["prompt"])
     try:
         _run_qc = should_run_qc(frame_path, expected_frame=_expected_frame)
     except TypeError:
@@ -2433,6 +2565,14 @@ def maybe_qc_sync(frame_path: str | Path, shot: dict, frame_kind: str,
     except Exception as e:
         return QcResult(has_hallucination=False, issues=[], ok=False,
                         raw_result="", error=f"opencode QC 调用失败: {e}")
+    if not getattr(semantic_result, "ok", True):
+        return QcResult(
+            has_hallucination=False,
+            issues=[],
+            ok=False,
+            raw_result=str(getattr(semantic_result, "raw_result", "") or ""),
+            error=str(getattr(semantic_result, "error", "") or "opencode 语义质检解析失败"),
+        )
 
     all_issues: list[QcIssue] = []
     person_count: int | None = None

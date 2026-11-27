@@ -1773,7 +1773,8 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
                                  limit: int = 5, for_frame: str = "首帧",
                                  return_buckets: bool = False,
                                  kf_index: int | None = None,
-                                 apply_head_crop: bool | None = None):
+                                 apply_head_crop: bool | None = None,
+                                 create_head_crop: bool = True):
     """为 step02a 首帧/尾帧/关键帧图生图收集参考图（场景 → 角色 → 道具）.
 
     for_frame: "首帧"/"尾帧"/"关键帧"；当 for_frame=="关键帧" 且传入 kf_index 时，
@@ -1849,6 +1850,7 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
         shot, characters, limit=max(2, limit - 1), frame_desc=frame_desc,
         roster=_roster, return_details=True, closeup=_closeup,
         apply_head_crop=_do_crop,
+        create_head_crop=create_head_crop,
     )
     if isinstance(portrait_details, dict):
         portrait_refs = list(portrait_details.get("refs") or [])
@@ -1947,7 +1949,7 @@ def _detect_action_subject(shot: dict, characters: list | None = None) -> str:
     return best
 
 
-def _head_portrait_path(src: str) -> str:
+def _head_portrait_path(src: str, create_if_missing: bool = True) -> str:
     """把角色立绘转换为头肩胸像缓存（v6.52 参考图防姿态/持物泄漏）.
 
     全身站姿会被图生图照抄成画面构图（hook ff 要「半身探出水面」画出站立
@@ -1962,16 +1964,18 @@ def _head_portrait_path(src: str) -> str:
     if Path(src).stem in ("base", "front", "front_no_weapon") and face.is_file():
         return str(face)
     try:
-        from shared.portrait_stitch import crop_head_portrait
         sp = Path(src)
         if not sp.exists():
             return src
         from shared.paths import vimax_working_dir
         out_dir = vimax_working_dir() / "portrait_crops"
-        out_dir.mkdir(parents=True, exist_ok=True)
         out = out_dir / f"{sp.parent.name}_{sp.stem}.png"
         if out.exists() and out.stat().st_mtime >= sp.stat().st_mtime:
             return str(out)
+        if not create_if_missing:
+            return src
+        from shared.portrait_stitch import crop_head_portrait
+        out_dir.mkdir(parents=True, exist_ok=True)
         from PIL import Image as _PILImage
         img = _PILImage.open(sp).convert("RGB")
         crop_head_portrait(img).save(out, "PNG")
@@ -2381,7 +2385,8 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                                     roster: set[str] | None = None,
                                     return_details: bool = False,
                                     closeup: bool = False,
-                                    apply_head_crop: bool = True):
+                                    apply_head_crop: bool = True,
+                                    create_head_crop: bool = True):
     """为本镜头出镜角色收集肖像参考图（与 pre-shot 门禁共享 resolve_character_portrait_assets）.
 
     S04/F5：当 roster 非 None 时，按结构化名册与唯一别名解析，统一消费只读
@@ -2515,7 +2520,13 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                     picked = str(_nw)
                     _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: {ident} 使用无武器版立绘 {_nw.name}")
             if picked and apply_head_crop:
-                picked = _head_portrait_path(picked)
+                if create_head_crop:
+                    picked = _head_portrait_path(picked)
+                else:
+                    try:
+                        picked = _head_portrait_path(picked, create_if_missing=False)
+                    except TypeError:
+                        picked = _head_portrait_path(picked)
             if picked and picked not in refs:
                 if len(refs) >= limit:
                     omissions.append({"kind": "chars", "entity": ident, "reason": "portrait_limit"})
@@ -6055,7 +6066,8 @@ async def gen_shot_frames(
         # 尾帧参考图按**类别**组合：首帧整图（环境/服饰基底）+ 场景 + 人物 + 道具，
         # 一次压缩到上限；每张拼合表都带 refmap（成员区域），身份不再靠文件名。
         _lf = _collect_frame_refs_for_shot(
-            shot, characters, limit=5, for_frame="尾帧", return_buckets=True)
+            shot, characters, limit=5, for_frame="尾帧",
+            return_buckets=True, apply_head_crop=True)
         lf_buckets = [("frame", [str(ff_path)])] + list(_lf["buckets"])
         lf_refs = fit_refs(lf_buckets, active_image_ref_limit(), shot_dir,
                            f"shot{idx}_lf", omissions=_lf.get("omissions"))
