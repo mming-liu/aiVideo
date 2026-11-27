@@ -56,7 +56,7 @@ def _extract_keywords(shot: dict) -> list[str]:
             parts.append(keyword)
         if len(parts) >= 5:
             break
-    return parts or ["古风", "短剧", "镜头叙事"]
+    return parts or ["短剧", "镜头叙事"]
 
 
 def _bridge_from_prev(prev_shot: dict | None) -> str:

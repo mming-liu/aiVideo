@@ -74,12 +74,20 @@ IMAGE_HALLUCINATION_LOCK_PROMPT_CN = "面部锁定，统一五官，固定服装
 IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT_CN = "面部锁定，统一五官，固定服装，无多余杂物"
 
 
-# 与画风无关的通用负向词（现代物件 / 文字水印）：所有画风共用。
-# 刻意不并进 STYLE_PRESETS——它们不是画风特征，切换画风时仍须保留。
-STYLE_NEUTRAL_NEGATIVE = (
+# 与画风无关的通用负向词（文字/水印）：所有画风共用。
+# 现代物件禁令**不属于**通用词（2026-11-27 复核）：切现代真人剧时，
+# 通用词里禁现代服装/建筑/汽车会把题材本身压掉。
+STYLE_NEUTRAL_NEGATIVE = "画面字幕、中文文字、水印"
+
+# 古代/古风题材专用负向词：只并进古风类预设（gufeng 等）的 negative，
+# 现代真人/现代题材预设不得使用。
+_ANCIENT_SETTING_NEGATIVE = (
     "现代服装、现代建筑、现代楼房、水泥建筑、玻璃幕墙、电线杆、汽车、摩托车、"
-    "现代设施、画面字幕、中文文字、水印"
+    "现代设施、西式建筑、机械齿轮"
 )
+
+# 与题材无关的画质类负向词：供 script 顶层 negative_prompt 元数据使用。
+_GLOBAL_QUALITY_NEGATIVE = "过曝高光、赛博荧光"
 
 # 英文文字水印负向词：仅英文向 provider（Agnes）需要
 _EN_TEXT_NEGATIVE = "English text, watermark, logo, English speech"
@@ -148,12 +156,15 @@ _GLOBAL_RENDER_DEFAULTS = {
     "resolution": "1080*1920",
     "ratio": "9:16",
     "fps": 24,
-    "render_style": "古风真人",
+    # render_style / negative_prompt 由 get_global_render_config() 按当前
+    # VIDEO_STYLE 动态派生（2026-11-27 复核：写死古风会让切画风时元数据不跟随）。
+    "render_style": "",
     "global_lighting": "电影质感，暗调低饱和，光源随场景（白天日光/夜晚烛火灯笼）",
     "global_camera_base": "浅景深，支持缓慢向前推镜，推镜速度约 0.3 倍常规",
-    "global_weather": "酷暑燥热",
-    "global_atmosphere": "燥热慵懒感，空气蒸腾扭曲，金色扬尘弥漫",
-    "negative_prompt": NEGATIVE_PROMPT + "、过曝高光、赛博荧光、西式建筑、机械齿轮",
+    # 题材性天气/氛围不设全局兜底：由具体剧本或输入决定。
+    "global_weather": "",
+    "global_atmosphere": "",
+    "negative_prompt": "",
 }
 
 # ===========================================================================
@@ -164,7 +175,10 @@ STYLE_PRESETS = {
     # 1. 古风真人（默认）
     "gufeng": {
         "prefix": "古风真人影视剧，9:16竖屏，电影质感，暗调低饱和， 光影随场景自然变化，浅景深缓慢推镜，写实古风风格，高清1080P， 轻微电影胶片颗粒，真实镜头微反差，轻微自然暗角",
-        "negative": "动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、 动漫脸、画风突变、畸形五官、异形船只、四叶草、现代服装、3D渲染、 塑料质感、English text, watermark, logo, English speech",
+        "negative": ("动漫风格、动画、2D渲染、卡通脸、卡通人物、三头身、Q版、 动漫脸、"
+                     "画风突变、畸形五官、异形船只、四叶草、3D渲染、 塑料质感、"
+                     "English text, watermark, logo, English speech、"
+                     + _ANCIENT_SETTING_NEGATIVE),
         "ratio": "9:16",
         # v6.23：技术参数（seedance-storyboard/Micro-Drama 吸收，古风化适配）
         "camera": "中长焦镜头（约50mm人像焦段），浅景深",
@@ -404,6 +418,11 @@ def get_global_render_config() -> dict:
     VIDEO_SIZE 才是真值（与 step04 MERGE_RESOLUTION 一致）。
     """
     config = dict(_GLOBAL_RENDER_DEFAULTS)
+    # 画风相关元数据跟随当前 VIDEO_STYLE 动态派生（不再写死古风口径）。
+    profile = style_profile()
+    config["render_style"] = profile.label
+    config["negative_prompt"] = _merge_negative(
+        profile.negative, STYLE_NEUTRAL_NEGATIVE, _GLOBAL_QUALITY_NEGATIVE)
     # 允许 .env.content 选择性覆盖
     env_overrides = {
         "resolution": os.getenv("RENDER_RESOLUTION") or os.getenv("VIDEO_SIZE"),
