@@ -1,8 +1,9 @@
 # 清理清单（M07）— 2026-11-27
 
 范围仅限 `downstream-safe-delivery` 任务创建/使用的对象。**不属于清理范围**：
-主仓库 `output/`、`baselines/`、用户未跟踪文档、`.tmp/s14a`、`aiVideo-s14base`、
-主仓库 `.tmp/phase2b_*` 及其他历史试验目录。
+主仓库 `output/`、`baselines/`、用户未跟踪文档、主仓库 `.tmp/phase2b_*` 及其他历史试验目录。
+（`.tmp/s14a` 与 `aiVideo-s14base` 原不在本清单范围，2026-11-27 晚经用户指令单独归档后删除，
+见文末「后续清理」。）
 
 | # | 绝对路径 | 用途 | 可再生 | 删除前保留证据 | 删除条件 |
 |---|---|---|---|---|---|
@@ -34,7 +35,21 @@
 | `C:/myFloders/git/aiVideo/.tmp/downstream-safe-delivery-verify-482676b` | 已删除 |
 | `C:/myFloders/git/aiVideo/.tmp/downstream-safe-delivery-verify-631e269`（第三轮修复后的干净副本） | 已删除（62 passed 已归档） |
 | `C:/myFloders/git/aiVideo/.tmp/downstream-safe-delivery-verify-1f16fcb`（第四轮恢复状态机修复后的干净副本） | 已删除（46 passed 已归档） |
-| 保留 | 主仓库 `output/`（3191 文件 / 989,104,390 字节，未变）、8 项用户未跟踪文件（SHA 未变）、`.tmp/s14a`、`aiVideo-s14base`、本证据目录、主仓库其他历史 `.tmp/phase2b_*` |
+| 保留 | 主仓库 `output/`（3191 文件 / 989,104,390 字节，未变）、8 项用户未跟踪文件（SHA 未变）、本证据目录、主仓库其他历史 `.tmp/phase2b_*` |
+
+## 后续清理（2026-11-27 晚，用户指令）
+
+两个 s14 worktree 与三个已合并分支按要求"先保留独有文件，再删除"处理：
+
+- 归档：仓库外 `C:\myFloders\git\aiVideo-archive\2026-11-27-worktree-unique\`
+  （`s14a/` 355 个文件 15,772,142 字节；`s14base/` 442 个文件 16,134,552 字节；
+  共 797 个文件、0 个摘要不符；含 `.env.keys` 等仅存仓库外，未进 Git）。
+  只归档未跟踪/被忽略文件；已在 Git 历史中的内容不重复归档；缓存未归档。
+- 删除：`git worktree remove` 两个 worktree（先用 `git clean -xfd` 清未跟踪/忽略文件，
+  未使用 `--force`）；`git branch -d` 删除 `fix/s14-lw-verify-speaker-menu`、
+  `s14-mainline-a`、`s14b`。
+- 结果：`git worktree list` 只剩主仓库；本地分支只剩 `master`；用户 8 项未跟踪文件未变。
+- 归档清单：该目录 `README.md` + 各工作区 `manifest.json` + `inventory/`。
 
 删除前逐项校验了绝对路径位于本任务 worktree 内、非符号链接/junction；未使用 `cmd /c`、
 未递归删除主仓库 `.tmp` 整体、未对含用户工作的仓库执行 `reset`。

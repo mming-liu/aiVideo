@@ -94,7 +94,9 @@ skip 均为缺少正式 `output/` 章节产物的既有用例，已逐项核对�
   （清单文件 SHA-256 `a63b8255…a7f4b9`，见 `output-baseline.json`）。
   说明：M06 当时只有数量/总字节，**不能回溯证明历史内容未变**；逐文件清单是本次补充的
   前向基线，可证明此后未变。
-- 未触碰 `.tmp/s14a`、`aiVideo-s14base`。
+- `.tmp/s14a` 与 `aiVideo-s14base` 原样保留；2026-11-27 晚经用户指令，先归档其独有未跟踪/
+  被忽略文件（仓库外 `C:\myFloders\git\aiVideo-archive\2026-11-27-worktree-unique\`，
+  797 文件 / 0 摘要不符），再删除两个 worktree 与三个已合并分支；详见 `cleanup-manifest.md`。
 
 ## 5.1 样片重建（新验证，非原运行产物）
 

@@ -281,14 +281,16 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 - 验收代码提交 `482676b` 已 `git merge --ff-only` 到 master（master 合并前为 `507ccea`；
   合并后 HEAD `c55cc4c`，与分支 tree 一致；`482676b..HEAD` 仅新增本账本与证据目录）。
 - 合并后保护复核：主仓库 8 项未跟踪文件路径与 SHA-256 与 `baseline.json` 完全一致；
-  正式 `output/` 仍为 3191 个文件 / 989,104,390 字节；未触碰 `.tmp/s14a` 与 `aiVideo-s14base`。
+  正式 `output/` 仍为 3191 个文件 / 989,104,390 字节；当时未触碰 `.tmp/s14a` 与
+  `aiVideo-s14base`（其后续归档删除见本节 M07 与 `cleanup-manifest.md`）。
 - 原始测试日志归档在 `docs/downstream-safe-delivery-evidence/2026-11-27/`
   （`s07-end-to-end.log`、`fault-and-identity-tests.log`）。
 - 真实模型调用、正式媒体采纳、生产章节重跑、远端推送、Stage 3/4 均未执行。
 - **临时对象清理（M07）**：本任务 worktree、验证副本、pytest/ruff/Python 缓存、worktree
-  `output/`（1 个测试泄漏文件）、快照 zip 与已合并分支均已按 `cleanup-manifest.md` 移除；
-  `git worktree list` 只剩主仓库、`.tmp/s14a` 与 `aiVideo-s14base`。清理前后用户未跟踪
-  文件与正式 `output/` 摘要不变。
+  `output/`（1 个测试泄漏文件）、快照 zip 与已合并分支均已按 `cleanup-manifest.md` 移除。
+  2026-11-27 晚另按用户指令先归档、后删除 `.tmp/s14a` 与 `aiVideo-s14base` 两个 worktree
+  及三个已合并分支；`git worktree list` 与本地分支现只剩主仓库与 `master`。清理前后用户
+  未跟踪文件与正式 `output/` 摘要不变。
 
 ### 九·补二：M01 崩溃窗口与并发恢复（2026-11-27 第三轮复核后，`631e269`）
 
