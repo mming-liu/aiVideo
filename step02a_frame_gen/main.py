@@ -386,7 +386,8 @@ def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
             # 与 `_compose_frame_refs_by_category`（生成链首帧）同一组合：分类
             # buckets + fit_refs(tag="ff")；dry_run 只预测路径、不拼图不写报告。
             _ff = _collect_frame_refs_for_shot(
-                unit, characters, limit=5, for_frame="首帧", return_buckets=True)
+                unit, characters, limit=5, for_frame="首帧",
+                return_buckets=True, apply_head_crop=True, create_head_crop=False)
             refs = fit_refs(_ff["buckets"], limit, shot_dir, "ff",
                             omissions=_ff.get("omissions"), dry_run=True)
         else:
@@ -397,7 +398,8 @@ def _plan_frame_state(unit: dict, shot_dir: Path, characters: list,
             # dry_run 只预测路径、不拼图不落盘；上一轮生成留下的参考表仍在时，
             # 路径与字节摘要与实跑同源，缓存判据不会因组合方式不同而漂移。
             _lf = _collect_frame_refs_for_shot(
-                unit, characters, limit=5, for_frame="尾帧", return_buckets=True)
+                unit, characters, limit=5, for_frame="尾帧",
+                return_buckets=True, apply_head_crop=True, create_head_crop=False)
             buckets = [("frame", [str(ff)])] + list(_lf["buckets"])
             refs = fit_refs(buckets, limit, shot_dir, f"shot{idx}_lf",
                             omissions=_lf.get("omissions"), dry_run=True)

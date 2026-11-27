@@ -29,6 +29,7 @@ from pathlib import Path
 REQUEST_EVENTS = (
     "request_sent", "http_attempt", "response_received", "account_refused", "transport_failed",
     "image_saved", "image_download_failed",
+    "qc_http_attempt",
     "qc_passed", "qc_rejected", "qc_call_failed", "qc_not_run", "qc_stale",
     "decision_ledger",
 )

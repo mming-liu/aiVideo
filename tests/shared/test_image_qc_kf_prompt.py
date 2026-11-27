@@ -66,6 +66,7 @@ def test_shot_characters_accepts_keyframe_index():
 
 
 def test_maybe_qc_sync_uses_explicit_generation_prompt(monkeypatch, tmp_path):
+    """Passing raw generation prompt must wrap it into build_qc_prompt inspection + JSON protocol."""
     import shared.image_qc as iq
     from PIL import Image
 
@@ -79,19 +80,20 @@ def test_maybe_qc_sync_uses_explicit_generation_prompt(monkeypatch, tmp_path):
         return '{"has_hallucination": false, "issues": []}'
 
     monkeypatch.setenv("QC_PROVIDER", "opencode")
-    monkeypatch.setattr(iq, "should_run_qc", lambda p: True)
+    monkeypatch.setattr(iq, "should_run_qc", lambda *a, **k: True)
     monkeypatch.setattr(iq, "_opencode_vision_chat", _chat)
-    monkeypatch.setattr(iq, "_detect_entities", lambda p: [])
+    monkeypatch.setattr(iq, "_detect_entities", lambda p: [{"label": "person", "desc": "char", "bbox": [0, 0, 100, 100]}])
+    monkeypatch.setattr(iq, "build_targeted_questions", lambda *a, **k: [])
 
-    def _no_build(*a, **k):
-        raise AssertionError("显式 prompt 存在时不应重建 QC prompt")
-
-    monkeypatch.setattr(iq, "build_qc_prompt", _no_build)
     shot = {"index": 1, "frame_layouts": {"kfs": [[{"name": "甲", "on_screen": True}]]}}
-    res = iq.maybe_qc_sync(str(frame), shot, "keyframe", [], True,
+    res = iq.maybe_qc_sync(str(frame), shot, "keyframe", [], False,
                            prompt="KF1实际生成提示", kf_index=0)
     assert res.ok is True
-    assert seen == ["KF1实际生成提示"]
+    assert len(seen) == 1
+    assert "你是专业图片质检员" in seen[0]
+    assert '{"has_hallucination":' in seen[0]
+    assert "KF1实际生成提示" in seen[0]
+    assert "甲" in seen[0]
 
 
 def test_maybe_qc_sync_builds_prompt_with_keyframe_index(monkeypatch, tmp_path):
@@ -115,6 +117,7 @@ def test_maybe_qc_sync_builds_prompt_with_keyframe_index(monkeypatch, tmp_path):
     monkeypatch.setattr(iq, "should_run_qc", lambda p: True)
     monkeypatch.setattr(iq, "_opencode_vision_chat", _chat)
     monkeypatch.setattr(iq, "_detect_entities", lambda p: [])
+    monkeypatch.setattr(iq, "build_targeted_questions", lambda *a, **k: [])
     monkeypatch.setattr(iq, "build_qc_prompt", _build)
     shot = {"index": 1, "frame_layouts": {"kfs": [[], [], [{"name": "乙", "on_screen": True}]]}}
     res = iq.maybe_qc_sync(str(frame), shot, "keyframe", [], True,

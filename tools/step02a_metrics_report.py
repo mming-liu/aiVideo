@@ -79,10 +79,16 @@ def summarize_step02a_events(events: Iterable[dict]) -> dict:
     """Aggregate correlated HTTP attempts & terminal frame states by bucket."""
     ev_list = list(events)
     ledgers = [e for e in ev_list if e.get("event") == "decision_ledger"]
-    raw_http_attempts = [e for e in ev_list if e.get("event") == "http_attempt"]
+    qc_http_attempts = [e for e in ev_list if e.get("event") == "qc_http_attempt"]
+    raw_http_attempts = [
+        e for e in ev_list
+        if e.get("event") == "http_attempt" and e.get("kind") != "image_qc"
+    ]
     raw_request_sent = [
         e for e in ev_list
-        if e.get("event") == "request_sent" and not e.get("pre_send_failed")
+        if e.get("event") == "request_sent"
+        and not e.get("pre_send_failed")
+        and e.get("kind") != "image_qc"
     ]
     review_events = [e for e in ev_list if e.get("event") == "human_review"]
 
@@ -360,6 +366,7 @@ def summarize_step02a_events(events: Iterable[dict]) -> dict:
         "total_events": len(ev_list),
         "request_sent_events": preferred_total_events,
         "http_attempt_events": len(dedup_attempt),
+        "vision_qc_http_attempts": len(qc_http_attempts),
         "decision_ledger_entries": len(ledgers),
         "unique_frames_total": len(frames_history),
         "buckets": bucket_stats,
