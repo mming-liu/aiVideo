@@ -266,7 +266,12 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 
 - 受影响全量（tts / step02 / step02b / step03 / step04 / S01 / S05 audit / S07）：
   **`313 passed / 6 skipped`**（skip 均为缺正式 `output/` 的既有用例）。
-- 交叉回归（含 Step02a 与主线 `507ccea` 的合并范围）与干净副本读数见
-  `docs/downstream-safe-delivery-evidence/2026-11-27/README.md`（随 M04 归档）。
+- 合并交叉（加 `tests/step02a_frame_gen`）：**`501 passed / 10 skipped`**。
+- 干净副本（`git archive 482676b`，无 `.env.keys`、无 `output/`）：
+  `tests/step02b…test_s03 / test_s02 / s05_audio_fit / s05_policy_through_main /
+  s06_merge_quality / s07_publication / s06_media_probe / s04_voice_tiers /
+  S01 / S05 audit / S07` → **`85 passed`**。
+- 证据与保护清单：`docs/downstream-safe-delivery-evidence/2026-11-27/`
+  （`README.md`、`baseline.json`、`config.json`、`cleanup-manifest.md`）。
 - 故障注入开关 `STEP04_PUBLISH_FAULT`（`final`/`srt`/`quality`/`rollback`）**仅用于离线
   故障验收**，默认不设置、不影响生产路径；journal 与备份位于 `stretched/` 下，恢复成功即清理。

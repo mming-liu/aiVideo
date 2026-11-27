@@ -1,0 +1,78 @@
+﻿{
+    "captured_at":  "2026-11-27T17:57:09+08:00",
+    "master_head":  "507cceaf74bef6461983a387fc71a1ce55642568",
+    "branch_head":  "623e1227609f57463b7ece8e141105f9ed525a1f",
+    "master_is_ancestor":  true,
+    "main_untracked":  {
+                           "value":  [
+                                         {
+                                             "path":  "baselines/2026-11-12-pre-layered/s06_ab/tools/__pycache__/",
+                                             "kind":  "dir",
+                                             "sha256":  ""
+                                         },
+                                         {
+                                             "path":  "docs/dsh-handoff/offline_dispatch_20261118.md",
+                                             "kind":  "file",
+                                             "sha256":  "00E09DCCC5C0632454D7C705F521A65D139F7E9AC7E4084453E28C6EA74C62C1"
+                                         },
+                                         {
+                                             "path":  "docs/dsh-handoff/session-reuse-lock-screen-decision-20261116.md",
+                                             "kind":  "file",
+                                             "sha256":  "B0EEDF83AAA247F4C637A6CF126FFF49CDA9B56C43C8D7FA32833A25E670ADF3"
+                                         },
+                                         {
+                                             "path":  "docs/dsh-handoff/shot2_lf_redraw_20261121.md",
+                                             "kind":  "file",
+                                             "sha256":  "D30DFEDA8168E1D3E38DDF78B6CD793F3E54145AA906EEC0B4E6A6C921AE634B"
+                                         },
+                                         {
+                                             "path":  "docs/step01-layered-execution/R7.2-offline-projection-20261121.md",
+                                             "kind":  "file",
+                                             "sha256":  "582FFA30ABBE6559776BD6F5CC7A7CFAD110F35C83954CA2AAFD53865BFDFAC8"
+                                         },
+                                         {
+                                             "path":  "docs/step01-layered-execution/coordination-2026-11-22.md",
+                                             "kind":  "file",
+                                             "sha256":  "32942BE59FCC80180517638A91289F5FD0BB84F5D454AAE5492C1AABF50F4F2A"
+                                         },
+                                         {
+                                             "path":  "docs/step01-layered-execution/shot2-lf-redraw-20261121.md",
+                                             "kind":  "file",
+                                             "sha256":  "D992D1D1614D074FDF6B9CC2E1B6E3D703D0323F239AB3E4633E944C65AF4B6F"
+                                         },
+                                         {
+                                             "path":  "docs/step02a-frame-contract/experiments.md",
+                                             "kind":  "file",
+                                             "sha256":  "2F75E3EFB9C0E71EA8AF4630D68F1719AD60DA4E04D785D9DE6B9A6FC3DFB926"
+                                         }
+                                     ],
+                           "Count":  8
+                       },
+    "main_output":  {
+                        "path":  "C:\\myFloders\\git\\aiVideo\\output",
+                        "files":  3191,
+                        "bytes":  989104390
+                    },
+    "worktree_tmp":  [
+                         {
+                             "name":  "fresh_pytest",
+                             "last_write":  "2026-11-27T13:30:32"
+                         },
+                         {
+                             "name":  "s04-real",
+                             "last_write":  "2026-11-27T15:56:06"
+                         },
+                         {
+                             "name":  "s07-clean",
+                             "last_write":  "2026-11-27T17:11:26"
+                         },
+                         {
+                             "name":  "s07-debug",
+                             "last_write":  "2026-11-27T17:47:09"
+                         },
+                         {
+                             "name":  "head.zip",
+                             "last_write":  "2026-11-27T17:09:32"
+                         }
+                     ]
+}

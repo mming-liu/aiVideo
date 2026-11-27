@@ -1,0 +1,13 @@
+﻿{
+    "commit":  "482676b223d5fc40af1d837739b54e0501bb3ba5",
+    "python":  "Python 3.14.2",
+    "ffmpeg":  "C:\\Users\\ee54\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1.2-full_build\\bin\\ffmpeg.exe",
+    "ffmpeg_version":  "ffmpeg version 8.1.2-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+    "VOICE_TIER_POLICY":  "strict (default；未显式设置；显式 tiered 的用例另测)",
+    "VIDEO_MEDIA_ENFORCE":  "0 (default)",
+    "MERGE_QUALITY_ENFORCE":  "0 (default)",
+    "MERGE_AUDIO_OVERFLOW_POLICY":  "fail (default)",
+    "MERGE_AUDIO_MODE":  "tts_mix (S07 显式设置；表示下游合成合同，不是产品默认)",
+    "provider_calls":  0,
+    "note":  "全部测试使用本地桩 provider + FFmpeg 合成媒体；未运行真实 TTS/视频模型"
+}
