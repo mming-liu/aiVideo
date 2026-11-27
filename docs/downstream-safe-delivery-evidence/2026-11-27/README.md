@@ -59,6 +59,7 @@
 | 干净副本（`git archive 482676b`） | 相关 10 份测试 | **85 passed** |
 | M01 修复后 step04+integration | `pytest tests/step04_merge tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **117 passed / 2 skipped** |
 | 恢复状态机修复后 step04+integration | 同上 | **121 passed / 2 skipped**（发布单测 `16 passed`） |
+| 恢复状态机干净副本（`git archive 1f16fcb`） | 发布/质量/策略/身份/S07 相关 5 份测试 | **46 passed** |
 | M01 修复后合并交叉（主仓库，`output/` 在场） | `pytest tests/step02a_frame_gen tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/tts` + S01/S05/S07 | **626 passed / 10 skipped** |
 | 干净副本（`git archive 631e269`，无 `.env.keys`/`output/`） | 发布/质量/身份/策略/样片相关 7 份测试 | **62 passed** |
 

@@ -33,6 +33,7 @@
 | 分支 `codex/downstream-safe-delivery` | `git branch -d` 成功（marker: 已合并） |
 | `C:/myFloders/git/aiVideo/.tmp/downstream-safe-delivery-verify-482676b` | 已删除 |
 | `C:/myFloders/git/aiVideo/.tmp/downstream-safe-delivery-verify-631e269`（第三轮修复后的干净副本） | 已删除（62 passed 已归档） |
+| `C:/myFloders/git/aiVideo/.tmp/downstream-safe-delivery-verify-1f16fcb`（第四轮恢复状态机修复后的干净副本） | 已删除（46 passed 已归档） |
 | 保留 | 主仓库 `output/`（3191 文件 / 989,104,390 字节，未变）、8 项用户未跟踪文件（SHA 未变）、`.tmp/s14a`、`aiVideo-s14base`、本证据目录、主仓库其他历史 `.tmp/phase2b_*` |
 
 删除前逐项校验了绝对路径位于本任务 worktree 内、非符号链接/junction；未使用 `cmd /c`、
