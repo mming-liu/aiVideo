@@ -127,6 +127,99 @@ def test_recover_does_not_delete_when_old_and_new_bytes_identical(tmp_path):
     assert target.read_text(encoding="utf-8") == "SAME"
 
 
+def test_backup_intent_persisted_before_move_is_recoverable(tmp_path):
+    """崩溃窗口：备份已移动、journal 仍是 backup_pending——恢复须按摘要还原."""
+    import hashlib
+
+    work = tmp_path / "work"
+    target = tmp_path / "deliver" / "final.mp4"          # 目标已不在原位
+    backup = _file(work / "backup-1" / "final.mp4", "OLD")
+    staged = _file(work / "staged_final", "NEW")
+    before = hashlib.sha256(b"OLD").hexdigest()
+    staged_sha = hashlib.sha256(b"NEW").hexdigest()
+    journal = {"schema": pub.SCHEMA, "status": pub.STATUS_PUBLISHING, "entries": [{
+        "role": "final", "staged": str(staged), "target": str(target),
+        "backup": str(backup), "staged_sha": staged_sha,
+        "target_sha_before": before, "state": pub.STATE_BACKUP_PENDING,
+    }]}
+    (work / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    result = pub.recover_pending(work / "journal.json", work_dir=work)
+    assert result["action"] == "restored"
+    assert target.read_text(encoding="utf-8") == "OLD"
+    assert not (work / "journal.json").exists()
+
+
+def test_recover_refuses_when_backup_missing(tmp_path):
+    """目标缺失且备份不存在 ⇒ 不得宣布恢复成功，journal 保留."""
+    import hashlib
+
+    work = tmp_path / "work"
+    target = tmp_path / "deliver" / "final.mp4"
+    staged = _file(work / "staged_final", "NEW")
+    journal = {"schema": pub.SCHEMA, "status": pub.STATUS_PUBLISHING, "entries": [{
+        "role": "final", "staged": str(staged), "target": str(target),
+        "backup": str(work / "backup-1" / "final.mp4"), "staged_sha": "",
+        "target_sha_before": hashlib.sha256(b"OLD").hexdigest(),
+        "state": pub.STATE_BACKUP_PENDING,
+    }]}
+    (work / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    with pytest.raises(pub.PublicationError) as exc:
+        pub.recover_pending(work / "journal.json", work_dir=work)
+    assert exc.value.code == pub._CODE_UNCONFIRMED
+    assert (work / "journal.json").is_file()          # 未解决不得删 journal
+
+
+def test_recover_refuses_corrupt_backup(tmp_path):
+    import hashlib
+
+    work = tmp_path / "work"
+    target = tmp_path / "deliver" / "final.mp4"
+    staged = _file(work / "staged_final", "NEW")
+    backup = _file(work / "backup-1" / "final.mp4", "TAMPERED")
+    journal = {"schema": pub.SCHEMA, "status": pub.STATUS_PUBLISHING, "entries": [{
+        "role": "final", "staged": str(staged), "target": str(target),
+        "backup": str(backup), "staged_sha": "",
+        "target_sha_before": hashlib.sha256(b"OLD").hexdigest(),
+        "state": pub.STATE_BACKED_UP,
+    }]}
+    (work / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    with pytest.raises(pub.PublicationError) as exc:
+        pub.recover_pending(work / "journal.json", work_dir=work)
+    assert exc.value.code == pub._CODE_UNCONFIRMED
+    assert (work / "journal.json").is_file()
+
+
+def test_crash_after_backup_move_is_recoverable(tmp_path, monkeypatch):
+    """真实发布函数在"备份已移动、状态未落盘"处崩溃后，下一次恢复能还原."""
+    work, targets, staged, moves = _batch(tmp_path)
+    monkeypatch.setenv(pub.ENV_FAULT, "crash")
+    with pytest.raises(SystemExit) as exc:
+        pub.publish_batch(moves, work_dir=work,
+                          journal_path=work / "journal.json", batch_id="crash")
+    assert exc.value.code == 99
+    data = json.loads((work / "journal.json").read_text(encoding="utf-8"))
+    entry = data["entries"][0]
+    assert entry["state"] == pub.STATE_BACKUP_PENDING
+    assert entry["backup"] and Path(entry["backup"]).is_file()
+    assert not targets["final"].exists()               # 已移走，尚未发布
+    monkeypatch.delenv(pub.ENV_FAULT)
+    pub.recover_pending(work / "journal.json", work_dir=work)
+    assert targets["final"].read_text(encoding="utf-8") == "OLD-FINAL"
+    assert not (work / "journal.json").exists()
+
+
+def test_recover_busy_when_another_writer_holds_lock(tmp_path):
+    work, targets, staged, moves = _batch(tmp_path)
+    journal = work / "journal.json"
+    journal.write_text(json.dumps({"schema": pub.SCHEMA,
+                                   "status": pub.STATUS_PUBLISHED,
+                                   "entries": []}), encoding="utf-8")
+    with pub.publish_lock(work):
+        with pytest.raises(pub.PublicationError) as exc:
+            pub.recover_pending(journal, work_dir=work)
+        assert exc.value.code == pub._CODE_BUSY
+
+
 def test_publish_busy_when_same_target_locked(tmp_path):
     from shared.enhancement_io import AttemptLock
 

@@ -339,3 +339,72 @@ def test_downstream_offline_pipeline_delivers_playable_final(tmp_path):
     assert recovered_quality["status"] == "PASS"
     assert recovered_quality["media_check"]["status"] == "PASS"
     assert (ch / "final.mp4").is_file() and (ch / "subtitles.srt").is_file()
+
+    # ---- 4e. 崩溃窗口（备份已移动、journal 未落盘）：下次运行先恢复再发布 ----
+    broken = dict(env)
+    broken["STEP04_PUBLISH_FAULT"] = "crash"
+    path = tmp_path / "stage_step04_crash.py"
+    path.write_text(_STEP04_SCRIPT % {"repo": str(REPO)}, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(path)], cwd=str(REPO), env=broken,
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=900)
+    assert proc.returncode == 99, (proc.stdout[-800:], proc.stderr[-800:])
+    crashed = json.loads(journal.read_text(encoding="utf-8"))
+    first = crashed["entries"][0]
+    assert crashed["status"] == "publishing"
+    assert first["state"] == "backup_pending"
+    assert first["backup"] and Path(first["backup"]).is_file()
+    assert not final.exists()                    # 旧成片已移入备份，尚未恢复
+    _run_stage(_STEP04_SCRIPT % {"repo": str(REPO)}, env, tmp_path, "step04_uncrash")
+    assert not journal.exists()
+    assert final.is_file() and (ch / "step04_quality.json").is_file()
+    assert json.loads((ch / "step04_quality.json").read_text(
+        encoding="utf-8"))["status"] == "PASS"
+
+    # ---- 4f. 并发：另一个进程持锁时，本入口拒绝发布且不动既有产物 ----
+    from shared.enhancement_io import AttemptLock
+
+    busy_sha = _sha(final)
+    lock = AttemptLock(ch / "stretched" / "publish" / ".publish.lock",
+                       purpose="test-concurrency").acquire()
+    try:
+        path = tmp_path / "stage_step04_busy.py"
+        path.write_text(_STEP04_SCRIPT % {"repo": str(REPO)}, encoding="utf-8")
+        busy = subprocess.run([sys.executable, str(path)], cwd=str(REPO), env=env,
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=900)
+    finally:
+        lock.release()
+    assert busy.returncode != 0
+    combined = (busy.stdout or "") + (busy.stderr or "")
+    assert "publish_busy" in combined or "发布/恢复进程" in combined, combined[-1200:]
+    assert _sha(final) == busy_sha
+
+    # ---- 5. 可选：把本次成功样片复制到外部归档目录（新验证，非原运行产物） ----
+    sample_dir = os.getenv("S07_SAMPLE_DIR", "").strip()
+    if sample_dir:
+        out = Path(sample_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        artifacts = {}
+        for name, path in (("final.mp4", final),
+                           ("subtitles.srt", ch / "subtitles.srt"),
+                           ("step04_quality.json", ch / "step04_quality.json"),
+                           ("step04_media_quality.json", ch / "step04_media_quality.json"),
+                           ("step03_duration_audit.json", ch / "step03_duration_audit.json"),
+                           ("voice_state.json", ch / "voice_state.json"),
+                           ("step02b_quality.json", ch / "step02b_quality.json")):
+            if path.is_file():
+                shutil.copy2(path, out / name)
+                artifacts[name] = {"sha256": _sha(path), "bytes": path.stat().st_size}
+        manifest = {
+            "label": "S07 重建样片（新验证，非 2026-11-27 原运行产物）",
+            "source_commit": subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=str(REPO), capture_output=True,
+                text=True).stdout.strip(),
+            "generator": "tests/integration/test_downstream_safe_delivery_s07.py",
+            "model_calls": 0,
+            "final_duration_sec": _probe_duration(final),
+            "artifacts": artifacts,
+        }
+        (out / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -1138,18 +1138,37 @@ def main(options=None):
   if attempt is not None:
     from shared.enhancement_io import AttemptLock
     lock = AttemptLock(attempt.root / ".lock", purpose="step04-merge").acquire()
+  # P1（2026-11-27 复核）：恢复、旧状态读取、发布、确认与 journal 清理必须处于
+  # **同一目标锁**；这里在进入合并前取得发布锁，并把它一路传给 recover/publish。
+  from step04_merge.publication import publish_lock as _publish_lock
+  from shared.enhancement_io import BusyError as _BusyError
+  pub_ctx = _publish_lock(Path(TEMP_DIR) / "publish")
   try:
-    return _run_merge(opts, attempt)
+    try:
+      pub_lock = pub_ctx.__enter__()
+    except _BusyError as exc:
+      raise RenderError("publish_busy", "publish",
+                        "另一个发布/恢复进程正在写入同一目标: %s" % exc,
+                        exit_code=5) from exc
+  except Exception:
+    if lock is not None:
+      lock.release()
+    raise
+  try:
+    return _run_merge(opts, attempt, publish_lock=pub_lock)
   except Exception as exc:
     if attempt is not None:
       _record_failure(attempt, exc)
     raise
   finally:
-    if lock is not None:
-      lock.release()
+    try:
+      pub_ctx.__exit__(None, None, None)
+    finally:
+      if lock is not None:
+        lock.release()
 
 
-def _run_merge(options, attempt):
+def _run_merge(options, attempt, publish_lock=None):
   global FINAL_OUT, SRT_OUT
   import time as _time
   _started = _time.perf_counter()
@@ -1171,7 +1190,9 @@ def _run_merge(options, attempt):
     from step04_merge.publication import JOURNAL_FILENAME as _PUB_JOURNAL
     from step04_merge.publication import PublicationError as _PubErr
     from step04_merge.publication import recover_pending as _recover_publish
-    _recover_publish(Path(TEMP_DIR) / _PUB_JOURNAL, logger=_logger)
+    _recover_publish(Path(TEMP_DIR) / _PUB_JOURNAL,
+                     work_dir=Path(TEMP_DIR) / "publish",
+                     lock=publish_lock, logger=_logger)
   except _PubErr as _rec_err:
     raise RenderError(_rec_err.code, "publish", str(_rec_err),
                       exit_code=_rec_err.exit_code) from _rec_err
@@ -1806,7 +1827,7 @@ def _run_merge(options, attempt):
         journal_path=Path(TEMP_DIR) / "publish_journal.json",
         batch_id="%s-%s" % (scope.get("chapter") if isinstance(scope, dict) else "",
                             _time.strftime("%Y%m%d%H%M%S")),
-        logger=_logger)
+        lock=publish_lock, logger=_logger)
   except PublicationError as _pub_err:
     raise RenderError(_pub_err.code, "publish", str(_pub_err),
                       exit_code=_pub_err.exit_code) from _pub_err
