@@ -644,3 +644,4 @@ start_studio.bat
 !tests/integration/test_s01_isolation_baseline.py
 !tests/step02b_video_gen/test_s02_recovery_and_metrics.py
 !tests/step02b_video_gen/test_s03_mixed_shot_policies.py
+!tests/tts/test_s04_voice_tiers.py

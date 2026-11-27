@@ -49,6 +49,139 @@ CHARACTER_VOICES = [v for v in AVAILABLE_VOICES if v["id"] != NARRATOR_VOICE["id
 NARRATOR_ROLE = "Narrator"
 
 
+# ===========================================================================
+# S04/A1：角色分级（primary/recurring 独占音色；minor/extra 共享龙套池）
+# ---------------------------------------------------------------------------
+# 分级只决定“能不能共用声线”，不决定“谁重要”——等级来自**输入声明**或
+# **本次实际发言/出镜结构**，不在代码里写死任何作品的角色。
+# ===========================================================================
+
+VOICE_TIER_PRIMARY = "primary"
+VOICE_TIER_RECURRING = "recurring"
+VOICE_TIER_MINOR = "minor"
+VOICE_TIER_EXTRA = "extra"
+VOICE_TIERS = (VOICE_TIER_PRIMARY, VOICE_TIER_RECURRING,
+               VOICE_TIER_MINOR, VOICE_TIER_EXTRA)
+#: 独占音色等级：全书一个角色一个音色（与旁白互斥）
+UNIQUE_VOICE_TIERS = frozenset({VOICE_TIER_PRIMARY, VOICE_TIER_RECURRING})
+#: 共享音色等级：允许同一 (gender, age_range) 桶内共用，但**不得**撞独占角色/旁白
+SHARED_VOICE_TIERS = frozenset({VOICE_TIER_MINOR, VOICE_TIER_EXTRA})
+
+#: 输入里可声明等级的字段（按顺序取第一个非空值）与常见别名。
+VOICE_TIER_FIELDS = ("voice_tier", "voice_pool", "role_tier")
+_TIER_ALIASES = {
+    "primary": VOICE_TIER_PRIMARY, "main": VOICE_TIER_PRIMARY,
+    "lead": VOICE_TIER_PRIMARY, "protagonist": VOICE_TIER_PRIMARY,
+    "主角": VOICE_TIER_PRIMARY, "主要": VOICE_TIER_PRIMARY,
+    "recurring": VOICE_TIER_RECURRING, "supporting": VOICE_TIER_RECURRING,
+    "support": VOICE_TIER_RECURRING, "配角": VOICE_TIER_RECURRING,
+    "常驻": VOICE_TIER_RECURRING,
+    "minor": VOICE_TIER_MINOR, "小角色": VOICE_TIER_MINOR,
+    "次要": VOICE_TIER_MINOR,
+    "extra": VOICE_TIER_EXTRA, "crowd": VOICE_TIER_EXTRA,
+    "walk_on": VOICE_TIER_EXTRA, "龙套": VOICE_TIER_EXTRA,
+    "群众": VOICE_TIER_EXTRA, "一次性": VOICE_TIER_EXTRA,
+}
+
+
+def normalize_voice_tier(raw) -> str:
+    """把输入里的等级写法归一；无法识别返回 ""（不猜、不默认）。"""
+    text = str(raw or "").strip().lower()
+    if not text:
+        return ""
+    return _TIER_ALIASES.get(text, text if text in VOICE_TIERS else "")
+
+
+def declared_voice_tier(character: dict) -> str:
+    """读角色表里的显式等级声明；没有/非法声明返回 ""。"""
+    if not isinstance(character, dict):
+        return ""
+    for key in VOICE_TIER_FIELDS:
+        tier = normalize_voice_tier(character.get(key))
+        if tier:
+            return tier
+    return ""
+
+
+def is_shared_tier(tier: str) -> bool:
+    return normalize_voice_tier(tier) in SHARED_VOICE_TIERS
+
+
+# ===========================================================================
+# S04/A1：音色容量扩容通道（**显式配置**，不发明 provider 不存在的音色）
+# ---------------------------------------------------------------------------
+# 旧池只有 8 条内置音色（旁白占 1 条），这是 Sambert 通道的物理天花板。扩容只
+# 接受**调用方显式给出**的、该 provider 真实存在的音色/声线：
+# - `TTS_EXTRA_VOICES`：`id|gender|age_range` 逗号分隔（旧池通道，如
+#   DashScope 账号下已开通的 Sambert/自定义音色）；
+# - `TTS_EXTRA_SPEAKERS`：逗号分隔（有独立 speaker 的 provider，如
+#   `voice_design` 创建出来的 voice id、`QWEN3_LOCAL_SPEAKERS` 同口径）。
+# 非法写法**显式报错**（配置错误不静默忽略、不猜 gender/年龄段）。
+# 通道本身零调用：只在规划/分配阶段决定"还有哪些声线可用"。
+# ===========================================================================
+
+EXTRA_VOICES_ENV = "TTS_EXTRA_VOICES"
+EXTRA_SPEAKERS_ENV = "TTS_EXTRA_SPEAKERS"
+_VALID_GENDERS = ("male", "female")
+_VALID_AGES = ("young", "middle", "old")
+
+
+def configured_extra_voices() -> list:
+    """`TTS_EXTRA_VOICES` 解析出的额外旧池音色（形状同 AVAILABLE_VOICES）."""
+    raw = (os.getenv(EXTRA_VOICES_ENV, "") or "").strip()
+    if not raw:
+        return []
+    out = []
+    seen = set()
+    for item in raw.split(","):
+        parts = [p.strip() for p in item.split("|")]
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                "%s 条目 %r 非法；格式应为 `音色id|male|young`（gender=%s，age_range=%s）"
+                % (EXTRA_VOICES_ENV, item, "/".join(_VALID_GENDERS),
+                   "/".join(_VALID_AGES)))
+        voice_id, gender, age = parts[0], parts[1].lower(), parts[2].lower()
+        if gender not in _VALID_GENDERS or age not in _VALID_AGES:
+            raise ValueError(
+                "%s 条目 %r 的 gender/age_range 非法（可选 %s / %s）"
+                % (EXTRA_VOICES_ENV, item, "/".join(_VALID_GENDERS),
+                   "/".join(_VALID_AGES)))
+        if voice_id in seen:
+            raise ValueError("%s 条目 %r 重复" % (EXTRA_VOICES_ENV, voice_id))
+        seen.add(voice_id)
+        out.append({"id": voice_id, "gender": gender, "age_range": age,
+                    "style": "显式配置音色", "rate": "1.0", "volume": "55",
+                    "source": "config"})
+    return out
+
+
+def configured_extra_speakers() -> list:
+    """`TTS_EXTRA_SPEAKERS` 解析出的额外 speaker（去掉空白与重复）."""
+    raw = (os.getenv(EXTRA_SPEAKERS_ENV, "") or "").strip()
+    if not raw:
+        return []
+    return sorted({p.strip() for p in raw.split(",") if p.strip()})
+
+
+def character_voice_pool() -> list:
+    """角色可选音色池 = 内置池 + 显式配置扩容（旁白音色始终排除）."""
+    base = list(CHARACTER_VOICES)
+    known = {v["id"] for v in base}
+    if NARRATOR_VOICE["id"]:
+        known.add(NARRATOR_VOICE["id"])
+    for voice in configured_extra_voices():
+        if voice["id"] not in known:
+            base.append(voice)
+    return base
+
+
+def legal_speakers_for(caps) -> tuple:
+    """provider 声明白名单 + 显式配置扩容（仅取并集；不校验 provider 侧真实性）."""
+    legal = {str(x) for x in (getattr(caps, "legal_speakers", ()) or ())}
+    legal.update(configured_extra_speakers())
+    return tuple(sorted(legal))
+
+
 class VoicePoolExhaustedError(RuntimeError):
     """严格唯一性下无可用音色；禁止静默复用他人/旁白音色."""
 
@@ -121,16 +254,17 @@ class _LegacyVoicePool:
         if strict_unique():
             with self._lock:
                 occupied = dict(self.mapping)
-                remaining = [v for v in CHARACTER_VOICES
+                remaining = [v for v in character_voice_pool()
                              if v["id"] not in self.used_voice_ids]
             raise VoicePoolExhaustedError(
                 "角色 %r 无可用音色（已占用 %d/%d；剩余 %d）——严格唯一性禁止复用他人音色"
-                % (character_name, len(occupied), len(CHARACTER_VOICES), len(remaining)),
+                % (character_name, len(occupied), len(character_voice_pool()), len(remaining)),
                 occupied=occupied, remaining=len(remaining))
         # 非严格兼容：按角色名哈希确定性分配，优先匹配性别
-        # 优先尝试性别匹配
+        # 优先尝试性别匹配（S04：共享桶音色仍不参与独占分配）
+        _blocked = set(self.used_voice_ids) | set(self.shared_voice_ids)
         if gender:
-            candidates = [v for v in CHARACTER_VOICES if v.get("gender") == gender.lower() and v["id"] not in self.used_voice_ids]
+            candidates = [v for v in character_voice_pool() if v.get("gender") == gender.lower() and v["id"] not in _blocked]
             if candidates:
                 idx = int(hashlib.md5(character_name.encode("utf-8")).hexdigest(), 16) % len(candidates)
                 fallback = candidates[idx].copy()
@@ -138,8 +272,9 @@ class _LegacyVoicePool:
                 return fallback
 
         # 兜底：按名哈希全池分配
-        idx = int(hashlib.md5(character_name.encode("utf-8")).hexdigest(), 16) % len(CHARACTER_VOICES)
-        fallback = CHARACTER_VOICES[idx].copy()
+        candidates = [v for v in character_voice_pool() if v["id"] not in _blocked] or list(character_voice_pool())
+        idx = int(hashlib.md5(character_name.encode("utf-8")).hexdigest(), 16) % len(candidates)
+        fallback = candidates[idx].copy()
         print(f"[WARN] 音色池耗尽，角色 '{character_name}' 回退到 {fallback['id']}（按名哈希分配）")
         return fallback
 
@@ -150,22 +285,32 @@ class _LegacyVoicePool:
         1. 精确匹配 gender + age_range
         2. 仅匹配 gender
         3. 随机选一个未使用的（向后兼容）
+
+        S04：**独占角色不得占用龙套桶音色**（`shared_voice_ids`），否则后续龙套
+        会被迫撞独占角色。龙套音色只能在显式共享路径里分配。
         """
+        blocked = set(self.used_voice_ids) | set(self.shared_voice_ids)
+
+        def _free(v: dict) -> bool:
+            return v["id"] not in blocked
+
+        pool = character_voice_pool()
+
         # 尝试精确匹配 gender + age_range
         if gender and age_range:
-            for voice in CHARACTER_VOICES:
-                if voice.get("gender") == gender.lower() and voice.get("age_range") == age_range.lower() and voice["id"] not in self.used_voice_ids:
+            for voice in pool:
+                if voice.get("gender") == gender.lower() and voice.get("age_range") == age_range.lower() and _free(voice):
                     return voice.copy()
 
         # 尝试仅匹配 gender
         if gender:
-            candidates = [v for v in CHARACTER_VOICES if v.get("gender") == gender.lower() and v["id"] not in self.used_voice_ids]
+            candidates = [v for v in pool if v.get("gender") == gender.lower() and _free(v)]
             if candidates:
                 return candidates[0].copy()
 
         # 兜底：返回第一个未使用的音色（向后兼容）
-        for voice in CHARACTER_VOICES:
-            if voice["id"] not in self.used_voice_ids:
+        for voice in pool:
+            if _free(voice):
                 return voice.copy()
         return None
 
@@ -174,6 +319,9 @@ class _LegacyVoicePool:
         self.mapping = {}
         self.used_voice_ids = set()
         self.profiles = {}
+        self.shared_voice_ids = set()
+        self.shared_buckets = {}
+        self.role_tiers = {}
         self.save()
         print("[INFO] 音色注册表已重置")
 
@@ -193,6 +341,10 @@ PROFILES_FIELD = "profiles"
 #: 本注册表里 profile 记录的形状版本（与 audio_identity 的 mapping_version 不同：
 #: 那个是**音色映射口径**的版本，换口径时递增）
 PROFILE_SCHEMA = "tts_voice_profile.v1"
+#: S04/A1 的分级与共享池落盘字段（互不覆盖旧字段；旧注册表读入即按空处理）
+SHARED_VOICE_IDS_FIELD = "shared_voice_ids"
+SHARED_BUCKETS_FIELD = "shared_buckets"
+ROLE_TIERS_FIELD = "role_tiers"
 
 
 class IllegalSpeakerError(ValueError):
@@ -227,6 +379,41 @@ def _as_profiles(raw) -> dict:
     return out
 
 
+def _as_buckets(raw) -> dict:
+    """`{work: {bucket: value}}`；形状不对的分支丢弃（读旧文件即空）。"""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for work, buckets in raw.items():
+        if not isinstance(buckets, dict):
+            continue
+        clean = {str(k): str(v) for k, v in buckets.items() if str(v or "").strip()}
+        if clean:
+            out[str(work)] = clean
+    return out
+
+
+def _as_tiers(raw) -> dict:
+    """`{work: {role: {"tier","reason","source"}}}`；非法等级不猜、直接丢。"""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for work, roles in raw.items():
+        if not isinstance(roles, dict):
+            continue
+        clean = {}
+        for role, rec in roles.items():
+            tier = normalize_voice_tier(rec.get("tier") if isinstance(rec, dict) else rec)
+            if not tier:
+                continue
+            base = dict(rec) if isinstance(rec, dict) else {}
+            base["tier"] = tier
+            clean[str(role)] = base
+        if clean:
+            out[str(work)] = clean
+    return out
+
+
 class VoiceRegistry(_LegacyVoicePool):
     """角色音色注册表（旧 Sambert 池 + 新 profile，两种 provider 契约并存）."""
 
@@ -241,6 +428,12 @@ class VoiceRegistry(_LegacyVoicePool):
         self.used_voice_ids: set[str] = set()
         #: 新 profile：`{work_id: {role_id: {voice_profile_id, provider, speaker, ...}}}`
         self.profiles: dict = {}
+        #: S04/A1：共享桶已占用的旧池音色 id（独占分配必须避开）
+        self.shared_voice_ids: set[str] = set()
+        #: S04/A1：`{work: {"<gender>|<age_range>": voice_id_or_speaker}}`（跨章稳定）
+        self.shared_buckets: dict = {}
+        #: S04/A1：`{work: {role: {"tier","reason","source"}}}`（分级跨章稳定）
+        self.role_tiers: dict = {}
         self.work_id = str(work_id or "")
         # #19 修复 2026-08-14：get_voice 的 mapping 写入 + 落盘与并发读竞态加锁
         self._lock = threading.RLock()
@@ -263,6 +456,10 @@ class VoiceRegistry(_LegacyVoicePool):
                 self.mapping = data.get("mapping", {}) or {}
                 self.used_voice_ids = set(data.get("used_voice_ids", []) or [])
                 self.profiles = _as_profiles(data.get(PROFILES_FIELD))
+                self.shared_voice_ids = {str(x) for x in
+                                         (data.get(SHARED_VOICE_IDS_FIELD) or []) if str(x)}
+                self.shared_buckets = _as_buckets(data.get(SHARED_BUCKETS_FIELD))
+                self.role_tiers = _as_tiers(data.get(ROLE_TIERS_FIELD))
         except Exception as e:
             if self.mapping:
                 # 已有内存态（重载场景）：保留现役分配，不整体漂移
@@ -279,6 +476,9 @@ class VoiceRegistry(_LegacyVoicePool):
             self.mapping = {}
             self.used_voice_ids = set()
             self.profiles = {}
+            self.shared_voice_ids = set()
+            self.shared_buckets = {}
+            self.role_tiers = {}
 
     def save(self) -> None:
         """保存注册表到 JSON 文件（#19 修复：先写临时文件再原子替换）."""
@@ -290,6 +490,12 @@ class VoiceRegistry(_LegacyVoicePool):
         }
         if self.profiles:
             payload[PROFILES_FIELD] = self.profiles
+        if self.shared_voice_ids:
+            payload[SHARED_VOICE_IDS_FIELD] = sorted(self.shared_voice_ids)
+        if self.shared_buckets:
+            payload[SHARED_BUCKETS_FIELD] = self.shared_buckets
+        if self.role_tiers:
+            payload[ROLE_TIERS_FIELD] = self.role_tiers
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, self.registry_path)
@@ -372,7 +578,8 @@ class VoiceRegistry(_LegacyVoicePool):
 
     def profile_for(self, role_id: str, *, provider: str, legal_speakers=(),
                     work_id: Optional[str] = None, mapping_version: str = "",
-                    speaker: Optional[str] = None, voice_profile_id: str = "") -> dict:
+                    speaker: Optional[str] = None, voice_profile_id: str = "",
+                    tier: str = "") -> dict:
         """取（必要时分配）该角色在本作品下的**稳定**新 profile.
 
         - 已存在 ⇒ 原样返回（并复核其 speaker 仍合法、映射版本一致；不合法/不一致即
@@ -444,11 +651,150 @@ class VoiceRegistry(_LegacyVoicePool):
                 "mapping_version": str(mapping_version or ""),
                 "role_id": role,
                 "work_id": work,
+                "voice_tier": normalize_voice_tier(tier) or VOICE_TIER_RECURRING,
             }
             bucket[role] = rec
             self.save()
             print("[INFO] 角色 '%s'（work=%s）分配 profile: speaker=%s provider=%s"
                   % (role, work, chosen or "(provider 默认)", provider or "?"))
+            return dict(rec)
+
+    # ---- S04/A1：分级记录与共享龙套桶 -----------------------------------
+
+    def role_tier(self, role_id: str, *, work_id: Optional[str] = None) -> dict:
+        """该角色**已记录**的分级（历史优先用于跨章稳定）；没有返回 {}。"""
+        work = self._work_of(work_id)
+        rec = (self.role_tiers.get(work) or {}).get(str(role_id or "").strip())
+        return dict(rec) if isinstance(rec, dict) else {}
+
+    def record_role_tier(self, role_id: str, tier: str, *, work_id: Optional[str] = None,
+                         reason: str = "", source: str = "",
+                         replace: bool = False) -> dict:
+        """记录角色分级（默认同一角色只写一次；`replace=True` 用于显式声明覆盖）."""
+        role = str(role_id or "").strip()
+        norm = normalize_voice_tier(tier)
+        if not role or not norm:
+            return self.role_tier(role, work_id=work_id)
+        work = self._work_of(work_id)
+        with self._lock:
+            roles = self.role_tiers.setdefault(work, {})
+            if role in roles and not replace:
+                return dict(roles[role])
+            roles[role] = {"tier": norm, "reason": str(reason or ""),
+                           "source": str(source or "")}
+            self.save()
+            return dict(roles[role])
+
+    @staticmethod
+    def _bucket_key(gender: str | None, age_range: str | None) -> str:
+        return "%s|%s" % (str(gender or "any").strip().lower(),
+                          str(age_range or "any").strip().lower())
+
+    def get_shared_voice(self, role_id: str, *, gender: str = None,
+                         age_range: str = None, work_id: Optional[str] = None,
+                         avoid: tuple = ()) -> dict:
+        """旧池（Sambert）共享音色分配：龙套桶内共享，**不撞独占角色/旁白**.
+
+        `avoid` = 同一批分配里**不得复用**的音色（同镜/同场会同时被听见的角色），
+        由调用方按发言/出镜重叠算出。桶内已有音色且不在 `avoid` 里就直接复用，
+        这是"龙套共用一条声线"的正常情形。
+        """
+        role = str(role_id or "").strip()
+        if not role:
+            raise ValueError("get_shared_voice 需要角色标识，收到空值")
+        work = self._work_of(work_id)
+        key = self._bucket_key(gender, age_range)
+        blocked = set(self.used_voice_ids) | set(avoid or ())
+        with self._lock:
+            if role in self.mapping:
+                existing = dict(self.mapping[role])
+                if str(existing.get("id") or ""):
+                    self.shared_voice_ids.add(str(existing["id"]))
+                return existing
+            bucket_value = str((self.shared_buckets.get(work) or {}).get(key) or "")
+            chosen = None
+            if bucket_value and bucket_value not in blocked:
+                chosen = next((v for v in character_voice_pool() if v["id"] == bucket_value), None)
+            if chosen is None:
+                free = [v for v in character_voice_pool()
+                        if v["id"] not in blocked
+                        and v["id"] not in self.shared_voice_ids]
+                # 优先同性别+同龄段 → 同性别 → 任意；同分按 id 稳定排序
+                free.sort(key=lambda v: (v.get("gender") != str(gender or "").lower(),
+                                         v.get("age_range") != str(age_range or "").lower(),
+                                         v["id"]))
+                chosen = free[0] if free else None
+            if chosen is None:
+                # 桶内已有声线被本批 avoid 挡住、又无空余 ⇒ 明确失败，不静默撞人
+                raise VoicePoolExhaustedError(
+                    "龙套角色 %r（%s）无可用共享音色：角色音色池 %d 条已被独占/同镜角色占用"
+                    "（avoid=%s）——扩充共享音色或把该角色声明为独占等级"
+                    % (role, key, len(character_voice_pool()), sorted(avoid)),
+                    occupied={r: v.get("id") for r, v in self.mapping.items()},
+                    remaining=0)
+            voice = dict(chosen)
+            self.mapping[role] = voice
+            self.shared_voice_ids.add(str(voice["id"]))
+            self.shared_buckets.setdefault(work, {}).setdefault(key, str(voice["id"]))
+            self.save()
+            print("[INFO] 龙套角色 '%s' 分共享音色: %s（桶 %s）"
+                  % (role, voice["id"], key))
+            return voice
+
+    def shared_profile_for(self, role_id: str, *, provider: str, legal_speakers=(),
+                           work_id: Optional[str] = None, mapping_version: str = "",
+                           gender: str = None, age_range: str = None,
+                           avoid: tuple = (), tier: str = "") -> dict:
+        """新模型（有独立 speaker）的共享 profile：桶内共享，不撞独占角色/旁白."""
+        role = str(role_id or "").strip()
+        if not role:
+            raise ValueError("shared_profile_for 需要 role_id，收到空值")
+        work = self._work_of(work_id)
+        legal_sorted = sorted({str(x) for x in (legal_speakers or ())})
+        key = self._bucket_key(gender, age_range)
+        with self._lock:
+            if role != NARRATOR_ROLE:
+                self._ensure_narrator_profile(work, provider, legal_sorted,
+                                              mapping_version)
+            bucket = self._in_work(work)
+            existing = bucket.get(role)
+            if existing:
+                self.validate_speaker(str(existing.get("speaker") or ""),
+                                      provider=provider, legal=legal_sorted)
+                return dict(existing)
+            blocked = set(avoid or ())
+            bucket_value = str((self.shared_buckets.get(work) or {}).get(key) or "")
+            used = self._used_speakers(work, exclude_role=role)
+            chosen = ""
+            if bucket_value and bucket_value not in blocked and bucket_value not in used:
+                chosen = bucket_value
+            if not chosen and legal_sorted:
+                free = [x for x in legal_sorted if x not in used and x not in blocked]
+                if free:
+                    digest = hashlib.md5(("%s|%s|%s" % (work, key, role)).encode("utf-8")).hexdigest()
+                    chosen = free[int(digest, 16) % len(free)]
+            if not chosen and legal_sorted:
+                raise VoicePoolExhaustedError(
+                    "龙套角色 %r（%s）无可用共享 speaker：合法集合 %s 已被独占角色占用"
+                    % (role, key, legal_sorted),
+                    occupied={r: v.get("speaker") for r, v in bucket.items()},
+                    remaining=0)
+            rec = {
+                "schema_version": PROFILE_SCHEMA,
+                "voice_profile_id": _profile_id(work, role, provider, chosen),
+                "provider": str(provider or ""),
+                "speaker": chosen,
+                "mapping_version": str(mapping_version or ""),
+                "role_id": role,
+                "work_id": work,
+                "voice_tier": normalize_voice_tier(tier) or VOICE_TIER_EXTRA,
+            }
+            bucket[role] = rec
+            if chosen:
+                self.shared_buckets.setdefault(work, {}).setdefault(key, chosen)
+            self.save()
+            print("[INFO] 龙套角色 '%s'（work=%s）分共享 speaker=%s（桶 %s）"
+                  % (role, work, chosen or "(provider 默认)", key))
             return dict(rec)
 
 

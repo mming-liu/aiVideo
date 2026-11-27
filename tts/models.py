@@ -135,6 +135,9 @@ class SpeechUnit:
     #: `shot_index`/`narration_index` 由它给出（消费侧不按数组位置猜身份）。
     source_index: Optional[int] = None
     voice_role: str = ""  # explicit offscreen ownership; absent on legacy units
+    #: S04/A1：该发言角色的分级（primary/recurring 独占音色；minor/extra 走共享龙套池）。
+    #: 空 = 旧单元/未分级（唯一性校验按独占处理，不放松保护）。
+    voice_tier: str = ""
 
     def as_request(self, *, text: str, output: str | None = None) -> TTSRequest:
         """按本单元的身份构造请求（**逐段**调用：text 是该段的正文）."""

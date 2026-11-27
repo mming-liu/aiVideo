@@ -751,13 +751,15 @@ def resolve_applied(unit: SpeechUnit, caps) -> dict:
 
 def _check_speaker(unit: SpeechUnit, caps) -> None:
     """非法 speaker **明确拒绝**（含 provider 未声明白名单时不校验具体值）."""
-    from tts.voice_registry import IllegalSpeakerError, VoiceRegistry
+    from tts.voice_registry import (IllegalSpeakerError, VoiceRegistry,
+                                    legal_speakers_for)
     if not caps.supports_speaker:
         return
     registry = VoiceRegistry.__new__(VoiceRegistry)  # 只借校验逻辑，不碰任何文件
     try:
+        # S04/A1：与分配侧同源——provider 白名单 + 显式配置的扩容 speaker
         registry.validate_speaker(unit.speaker, provider=caps.provider or unit.provider,
-                                  legal=caps.legal_speakers)
+                                  legal=legal_speakers_for(caps))
     except IllegalSpeakerError as exc:
         raise SynthesisError("speaker_not_legal", str(exc), field_path="speaker",
                              unit_id=unit.unit_id, provider=exc.provider,

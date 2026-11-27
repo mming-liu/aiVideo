@@ -100,11 +100,25 @@ def binding_table(units) -> dict:
     return table
 
 
+def _shared_tier(unit) -> bool:
+    """S04/A1：共享等级（minor/extra）的单元允许复用同一条龙套声线."""
+    from tts.voice_registry import is_shared_tier
+    return is_shared_tier(str(getattr(unit, "voice_tier", "") or ""))
+
+
 def binding_issues(units) -> list[dict]:
-    """检查音色绑定的一一关系；返回结构化问题（空=通过）."""
+    """检查音色绑定的一一关系；返回结构化问题（空=通过）.
+
+    S04/A1：独占等级仍要求 speaker ↔ profile 一一；**共享等级**（龙套）允许
+    同一个 speaker 被多个 profile 复用，只要同一 profile 没有绑定多个 speaker。
+    """
     issues: list[dict] = []
     table = binding_table(units)
     by_speaker: dict[str, list[str]] = {}
+    shared_profiles: set = set()
+    for unit in units or ():
+        if _shared_tier(unit):
+            shared_profiles.add(str(getattr(unit, "voice_profile_id", "") or "").strip())
     for profile, entry in table.items():
         by_speaker.setdefault(entry["speaker"], []).append(profile)
     for profile, entry in table.items():
@@ -120,11 +134,13 @@ def binding_issues(units) -> list[dict]:
                 "message": "同一音色档案 %r 绑定了多个 speaker" % profile,
             })
     for speaker, profiles in by_speaker.items():
-        if len(profiles) > 1:
+        unique_profiles = [p for p in profiles if p not in shared_profiles]
+        if len(unique_profiles) > 1 or (unique_profiles and len(profiles) > 1):
             issues.append({
                 "code": "speaker_profile_conflict",
                 "speaker": speaker,
                 "voice_profile_ids": sorted(profiles),
+                "unique_voice_profile_ids": sorted(unique_profiles),
                 "message": "同一 speaker %r 被多个音色档案复用: %s"
                            % (speaker, sorted(profiles)),
             })

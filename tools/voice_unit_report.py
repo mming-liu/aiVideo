@@ -24,13 +24,21 @@ from shared.run_scope import current_scope_identity
 
 def load_report_plan(ch: Path, script: dict, plan_dir=None) -> dict:
     """声音报告与 Step03 共用 v2 缓存校验；无缓存时只接受稿内计划."""
-    from shared.plan_cache import FILENAME, load_plan_cache
+    from shared.plan_cache import FILENAME, PlanCacheError, load_plan_cache
     revision = str(script.get("script_revision") or "") or compute_script_revision(script)
     scope = {"book_name": script.get("book_name"), "chapter": script.get("chapter_index")}
     base = Path(plan_dir) if plan_dir else Path(ch)
     path = base if base.is_file() else (base / FILENAME)
     if path.is_file():
-        return load_plan_cache(path, scope=scope, script_revision=revision)
+        try:
+            return load_plan_cache(path, scope=scope, script_revision=revision)
+        except PlanCacheError as exc:
+            legacy = (json.loads(path.read_text(encoding="utf-8")) or {}).get("outline")
+            if isinstance(legacy, dict) and legacy:
+                print("[WARN] 计划缓存未带身份绑定（按旧格式读取，身份未核）: %s (%s)"
+                      % (path, exc), flush=True)
+                return legacy
+            raise
     plan = script.get("chapter_outline")
     if not isinstance(plan, dict) or not plan:
         raise SystemExit("缺少受绑定的 chapter_outline.cache.json，且稿内无 chapter_outline")
@@ -53,6 +61,11 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
     revision = computed_revision
     units = build_speech_units(script, scope=current_scope_identity(),
                                script_revision=revision, plan=plan)
+    try:
+        from step03_tts_audio.shot_tts import _role_counts_free, derive_voice_tiers
+        tiers = derive_voice_tiers(script, plan, roles=_role_counts_free(script, plan))
+    except Exception as _tier_exc:  # noqa: BLE001 - 分级失败不掩盖单元报告本身
+        tiers = {"error": str(_tier_exc)[:200]}
     vrecs = voice_units(plan if isinstance(plan, dict) and plan
                         else script.get("chapter_outline"), script.get("shots"))
     bindings = {(r.get("kind"), r.get("index")): r for r in vrecs}
@@ -95,6 +108,7 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
             "declared_shot": binding.get("declared_shot"),
             "est_sec": binding.get("est_sec"),
             "voice_role": getattr(unit, "voice_role", "") or "",
+            "voice_tier": getattr(unit, "voice_tier", "") or "",
             "voice_profile_id": unit.voice_profile_id,
             "model_id": unit.model_id,
             "model_revision": unit.model_revision,
@@ -128,6 +142,7 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
         "total_chars": sum(r["chars"] for r in rows),
         "units": rows,
         "layout_problems": layout_problems,
+        "voice_tiers": tiers,
         "voice_uniqueness": check_voice_uniqueness(
             units, None, script.get("characters") or []),
         "audible_warnings": missing_audible_speech_units(
@@ -151,10 +166,16 @@ def _md(report: dict) -> str:
             key=(r["request_key"] or "-")[:12], a="有" if r["audio_exists"] else "无",
             cs=r["cache_state"]))
     uniq = report.get("voice_uniqueness") or {}
-    lines += ["", "汇总：%d 个单元 / %d 字符；排版问题 %d；声音唯一性=%s；provider 调用 0。" % (
+    tiers = report.get("voice_tiers") or {}
+    tier_counts: dict = {}
+    for rec in tiers.values() if isinstance(tiers, dict) else ():
+        if isinstance(rec, dict) and rec.get("tier"):
+            tier_counts[rec["tier"]] = tier_counts.get(rec["tier"], 0) + 1
+    lines += ["", "汇总：%d 个单元 / %d 字符；排版问题 %d；声音唯一性=%s；分级=%s；provider 调用 0。" % (
         report["unit_count"], report["total_chars"],
         len(report.get("layout_problems") or []),
-        "ok" if uniq.get("ok") else "conflict")]
+        "ok" if uniq.get("ok") else "conflict",
+        "/".join("%s:%d" % (k, v) for k, v in sorted(tier_counts.items())) or "-")]
     for c in uniq.get("conflicts") or []:
         lines.append("- 唯一性冲突：%s" % json.dumps(c, ensure_ascii=False))
     warnings = report.get("audible_warnings") or []

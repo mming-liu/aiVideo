@@ -30,7 +30,10 @@ load_dotenv(_PROJECT_ROOT / ".env.keys")
 import json
 from tts import create_provider
 from tts.config import config as tts_config
-from tts.voice_registry import get_registry, NARRATOR_VOICE
+from tts.voice_registry import (NARRATOR_ROLE, NARRATOR_VOICE, UNIQUE_VOICE_TIERS,
+                                VOICE_TIER_EXTRA, VOICE_TIER_PRIMARY,
+                                VoicePoolExhaustedError, declared_voice_tier,
+                                is_shared_tier, normalize_voice_tier, get_registry)
 from tts.synthesis_job import (AudioArtifact, DurationRejectedError, SpeechUnit,
                                SynthesisError, TtsCandidateContext, finalize_in_place,
                                normalize_unit, partial_path, request_key_for,
@@ -48,8 +51,8 @@ from shared.audio_identity import (dialogue_speech_text, identity_path, read_ide
 SAMBERT_SINGLE_CALL_LIMIT = 300
 MAX_TEXT_LENGTH = SAMBERT_SINGLE_CALL_LIMIT
 
-#: 声线角色：没有识别到说话人时用它的稳定性来代替「统一默认声线」
-NARRATOR_ROLE = "Narrator"
+#: 声线角色（`NARRATOR_ROLE`）单源在 `tts.voice_registry`：没有识别到说话人时用它
+#: 的稳定性来代替「统一默认声线」。
 
 
 def _tts_cache_sig(text: str, voice_config: dict) -> str:
@@ -242,7 +245,8 @@ def _caps_of(provider, provider_name: str = ""):
 
 
 def resolve_voice(registry, *, role_id: str, provider_name: str, caps,
-                  gender: str | None = None, age_range: str | None = None) -> dict:
+                  gender: str | None = None, age_range: str | None = None,
+                  tier: str = "", avoid: tuple = ()) -> dict:
     """声线解析（两条路，按 provider 能力事实分流，**不静默回退默认声线**）.
 
     - provider **没有**独立 speaker 概念（Sambert：模型 ID 就是音色 ID）⇒ 沿用旧
@@ -250,10 +254,16 @@ def resolve_voice(registry, *, role_id: str, provider_name: str, caps,
     - provider **有**独立 speaker（新模型）⇒ 走 profile 表：`profile_for` 按
       （作品 + 角色）稳定分配 `speaker`，模型 ID 与音色 ID 分开；非法 speaker 直接抛。
 
-    返回 `{"model_id", "speaker", "voice_profile_id", "mapping_version",
+    S04/A1：`tier` 为共享等级（minor/extra）时改走龙套共享池
+    （`get_shared_voice` / `shared_profile_for`）——同一桶内可共用声线，但
+    **不撞**独占角色与旁白；`avoid` 是同一批分配里同镜/同场不得复用的声线。
+
+    返回 `{"model_id", "speaker", "voice_profile_id", "mapping_version", "tier",
     "legacy_voice": <旧池音色字典或 None>}`。
     """
     mapping_version = str(getattr(tts_config, "MAPPING_VERSION", "v1") or "v1")
+    norm_tier = normalize_voice_tier(tier)
+    shared = is_shared_tier(norm_tier)
     if not bool(getattr(caps, "supports_speaker", False)):
         # 旧音色池通道（Sambert：模型 ID 就是音色 ID）。注册表能力缺失必须**显式失败**：
         # 2026-10-31 复核——此前这里 `else dict(NARRATOR_VOICE)`，而生效的注册表类恰好
@@ -267,6 +277,14 @@ def resolve_voice(registry, *, role_id: str, provider_name: str, caps,
         if str(role_id or "") == NARRATOR_ROLE:
             # 旁白身份：显式取旁白音色（它本来就该是这一个），不占用角色音色池
             voice = dict(NARRATOR_VOICE)
+        elif shared and hasattr(registry, "get_shared_voice"):
+            voice = dict(registry.get_shared_voice(
+                role_id, gender=gender, age_range=age_range, avoid=tuple(avoid)) or {})
+            if not voice.get("id"):
+                raise SynthesisError(
+                    "voice_unresolved",
+                    "龙套角色 %r 没有可用共享音色，拒绝回退旁白" % role_id,
+                    field_path="voice")
         else:
             voice = dict(registry.get_voice(role_id, gender, age_range) or {})
             if not voice.get("id"):
@@ -277,21 +295,263 @@ def resolve_voice(registry, *, role_id: str, provider_name: str, caps,
         voice_id = str(voice.get("id") or "")
         return {"model_id": voice_id, "speaker": "", "legacy_voice": voice,
                 "voice_profile_id": "legacy-%s" % (voice_id or "default"),
-                "mapping_version": mapping_version}
+                "mapping_version": mapping_version,
+                "tier": norm_tier or (VOICE_TIER_PRIMARY
+                                      if str(role_id) == NARRATOR_ROLE else "")}
     if registry is None or not hasattr(registry, "profile_for"):
         raise SynthesisError(
             "voice_registry_unsupported",
             "provider %r 需要独立 speaker，但传入的注册表不支持 profile_for"
             "（拒绝静默回退统一默认声线）" % provider_name,
             field_path="voice_registry")
-    profile = registry.profile_for(role_id, provider=provider_name,
-                                   legal_speakers=getattr(caps, "legal_speakers", ()) or (),
-                                   mapping_version=mapping_version)
+    # provider 白名单 + 显式配置的扩容 speaker（`TTS_EXTRA_SPEAKERS`，零调用）
+    from tts.voice_registry import legal_speakers_for
+    legal = legal_speakers_for(caps)
+    if shared and hasattr(registry, "shared_profile_for"):
+        profile = registry.shared_profile_for(
+            role_id, provider=provider_name, legal_speakers=legal,
+            mapping_version=mapping_version, gender=gender, age_range=age_range,
+            avoid=tuple(avoid), tier=norm_tier)
+    else:
+        profile = registry.profile_for(role_id, provider=provider_name,
+                                       legal_speakers=legal,
+                                       mapping_version=mapping_version,
+                                       tier=norm_tier)
     return {"model_id": str(caps.model_id or tts_config.MODEL or ""),
             "speaker": str(profile.get("speaker") or ""),
             "voice_profile_id": str(profile.get("voice_profile_id") or ""),
             "mapping_version": str(profile.get("mapping_version") or mapping_version),
+            "tier": norm_tier or str(profile.get("voice_tier") or ""),
             "legacy_voice": None}
+
+
+# ---------------------------------------------------------------- 角色分级（S04/A1）
+
+def _primary_min_units() -> int:
+    """派生为独占角色的最低发言单元数（默认 2；0/非法按 2）。"""
+    raw = os.getenv("VOICE_PRIMARY_MIN_UNITS", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 2
+    return value if value > 0 else 2
+
+
+def role_visibility(script: dict) -> dict:
+    """每个角色**在帧布局里实际出镜**的镜头集合（结构化字段，空镜不算）."""
+    out: dict[str, set] = {}
+    units = []
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    if hook:
+        units.append(hook)
+    units.extend(s for s in (script.get("shots") or []) if isinstance(s, dict))
+    for shot in units:
+        idx = int(shot.get("index", 0) or 0)
+        layouts = shot.get("frame_layouts")
+        if not isinstance(layouts, dict):
+            continue
+        for _kind, frames in layouts.items():
+            groups = frames if isinstance(frames, list) else [frames]
+            for group in groups:
+                entries = group if isinstance(group, list) else [group]
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get("on_screen") is False:
+                        continue
+                    name = str(entry.get("name") or "").strip()
+                    if name:
+                        out.setdefault(name, set()).add(idx)
+    return out
+
+
+def role_shot_sets(script: dict, plan: dict | None = None) -> dict:
+    """角色 → 需要被听见/看见的镜头集合（发言镜 ∪ 出镜镜）.
+
+    共享龙套池按「同镜不得撞声线」判定：两个角色在这个集合里有交集，就不能用
+    同一条声线（观众会在同一场里同时听到两个一样的声音）。
+    """
+    shots = {int(s.get("index", 0) or 0): s
+             for s in (script.get("shots") or []) if isinstance(s, dict)}
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    units_script = ([hook] if hook else []) + list(shots.values())
+    characters = script.get("characters") or []
+    out: dict[str, set] = {}
+    for shot in units_script:
+        try:
+            raw, text = _dialogue_speech(shot, plan, characters)
+            if raw is None or not text:
+                continue
+            role = resolve_shot_speaker(shot, raw, characters, plan)["role"]
+        except Exception:  # noqa: BLE001 - 分级只做兼容读取，真错误由生成路径显式报
+            continue
+        role = canonical_character_role(role, characters)
+        out.setdefault(role, set()).add(int(shot.get("index", 0) or 0))
+    for role, shot_ids in role_visibility(script).items():
+        out.setdefault(canonical_character_role(role, characters), set()).update(shot_ids)
+    return out
+
+
+def _has_frame_layout_data(script: dict) -> bool:
+    """本次输入是否带可用的帧布局（有结构才谈"只在一镜露面"）."""
+    units = []
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    if hook:
+        units.append(hook)
+    units.extend(s for s in (script.get("shots") or []) if isinstance(s, dict))
+    for shot in units:
+        layouts = shot.get("frame_layouts")
+        if isinstance(layouts, dict) and any(layouts.get(k) for k in layouts):
+            return True
+    return False
+
+
+def derive_voice_tiers(script: dict, plan: dict | None = None, *,
+                       registry=None, roles: dict | None = None) -> dict:
+    """角色 → 分级（确定性；输入声明 > 历史记录 > 本次发言/出镜结构）.
+
+    - 旁白恒为 `primary`（它独占旁白音色，不进入角色池）；
+    - 输入显式声明（`characters[].voice_tier`/`voice_pool`/`role_tier`）**最高优先**，
+      并覆盖历史记录（人改了声明就是要换口径）；
+    - **历史记录其次**：同一角色上一章怎么分级，本章保持不变（跨章音色稳定）；
+    - 派生：发言单元数 ≥ `VOICE_PRIMARY_MIN_UNITS`（默认 2）或出镜 ≥ 2 镜 ⇒ primary；
+      只有在**输入带帧布局**、且该角色仅发言 1 单元、仅出镜 ≤ 1 镜时才判 extra。
+      没有帧布局就不猜"龙套"——保持旧的独占分配，宁可不共享也不误判主配角。
+    """
+    registry = registry if registry is not None else get_registry()
+    characters = script.get("characters") or []
+    if roles is None:
+        roles = _role_counts_free(script, plan)
+    chars_by_id = {}
+    for c in characters:
+        if not isinstance(c, dict):
+            continue
+        ident = str(c.get("identifier") or c.get("name") or "").strip()
+        if ident:
+            chars_by_id[ident] = c
+    counts: dict[str, int] = {}
+    for role, rec in (roles or {}).items():
+        counts[str(role)] = int((rec or {}).get("units") or 0)
+    visibility = role_visibility(script)
+    has_layouts = _has_frame_layout_data(script)
+    all_roles = set(counts) | set(visibility) | {NARRATOR_ROLE}
+    threshold = _primary_min_units()
+    out: dict = {}
+    for role in sorted(all_roles):
+        if role == NARRATOR_ROLE:
+            out[role] = {"tier": VOICE_TIER_PRIMARY, "reason": "旁白专用音色",
+                          "source": "narrator", "speech_units": counts.get(role, 0),
+                          "visible_shots": len(visibility.get(role) or ())}
+            continue
+        known = {}
+        if registry is not None and hasattr(registry, "role_tier"):
+            known = registry.role_tier(role) or {}
+        declared = declared_voice_tier(chars_by_id.get(role) or {})
+        if declared:
+            out[role] = {"tier": declared, "reason": "输入显式声明",
+                          "source": "declared", "speech_units": counts.get(role, 0),
+                          "visible_shots": len(visibility.get(role) or ())}
+            if registry is not None and hasattr(registry, "record_role_tier"):
+                registry.record_role_tier(role, declared, reason="输入显式声明",
+                                          source="declared", replace=True)
+            continue
+        if known.get("tier"):
+            out[role] = {"tier": normalize_voice_tier(known["tier"]),
+                          "reason": str(known.get("reason") or "历史分级"),
+                          "source": str(known.get("source") or "history"),
+                          "speech_units": counts.get(role, 0),
+                          "visible_shots": len(visibility.get(role) or ())}
+            continue
+        units_n = counts.get(role, 0)
+        shots_n = len(visibility.get(role) or ())
+        if has_layouts and units_n <= 1 and shots_n <= 1:
+            out[role] = {"tier": VOICE_TIER_EXTRA,
+                          "reason": "带帧布局下仅发言 %d 单元且出镜 %d 镜（一次性龙套）"
+                                    % (units_n, shots_n),
+                          "source": "derived", "speech_units": units_n,
+                          "visible_shots": shots_n}
+        else:
+            out[role] = {"tier": VOICE_TIER_PRIMARY,
+                          "reason": ("发言 %d 单元/出镜 %d 镜（≥%d 或 ≥2%s）"
+                                     % (units_n, shots_n, threshold,
+                                        "" if has_layouts else "；无帧布局不判龙套")),
+                          "source": "derived", "speech_units": units_n,
+                          "visible_shots": shots_n}
+        # 只给**实际发声**的角色记录分级：不出声的角色没有音色，记录它会变成
+        # 下一章的"历史分级"，反而锁死后来才开口的重要角色。
+        if (counts.get(role, 0) > 0 and registry is not None
+                and hasattr(registry, "record_role_tier")):
+            registry.record_role_tier(role, out[role]["tier"],
+                                      reason=out[role]["reason"], source="derived")
+    return out
+
+
+def plan_role_voices(script: dict, plan: dict | None = None, *,
+                     registry=None, provider_name: str = "", caps=None,
+                     tiers: dict | None = None, roles: dict | None = None) -> dict:
+    """整章一次性分配声线：先独占（旁白+primary/recurring），再共享龙套池.
+
+    顺序是确定性的（独占先排序、共享按桶内顺序），且共享角色的 `avoid` 由
+    **同镜/同场**的已分配声线算出——两个会在同一镜被听见的龙套不会拿到同一条声线。
+    返回 `{role: {voice fields..., "tier": ..., "tier_reason": ...}}`。
+    """
+    registry = registry if registry is not None else get_registry()
+    caps = caps if caps is not None else provider_capabilities(provider_name or tts_config.PROVIDER)
+    name = str(getattr(caps, "provider", "") or provider_name or tts_config.PROVIDER)
+    characters = script.get("characters") or []
+    if roles is None:
+        roles = _role_counts_free(script, plan)
+    tiers = tiers if isinstance(tiers, dict) and tiers else derive_voice_tiers(
+        script, plan, registry=registry, roles=roles)
+    shot_sets = role_shot_sets(script, plan)
+    # 分级里没有发言角色的也要有记录（便于报告）；实际分配只针对有发言的角色
+    speaking = set(roles or {})
+    planned: dict[str, dict] = {}
+    ordered = sorted([r for r in speaking if r],
+                     key=lambda r: (0 if (tiers.get(r) or {}).get("tier") in UNIQUE_VOICE_TIERS
+                                    else 1, r))
+    for role in ordered:
+        info = tiers.get(role) or {}
+        tier = normalize_voice_tier(info.get("tier"))
+        gender, age = _detect_speaker_attributes(role, characters)
+        avoid = ()
+        if is_shared_tier(tier):
+            mine = set(shot_sets.get(role) or ())
+            avoid = tuple(sorted({
+                _voice_key(voice) for other, voice in planned.items()
+                if _voice_key(voice) and mine & set(shot_sets.get(other) or ())
+            }))
+        try:
+            voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
+                                  gender=gender, age_range=age, tier=tier, avoid=avoid)
+        except VoicePoolExhaustedError as exc:
+            raise SynthesisError(
+                "voice_pool_exhausted",
+                "%s（角色 %r，等级 %s）" % (exc, role, tier or "unclassified"),
+                field_path="voice",
+                detail={"occupied_roles": sorted(exc.occupied),
+                        "remaining": int(exc.remaining)}) from exc
+        voice = dict(voice)
+        voice.setdefault("tier", tier)
+        voice["tier_reason"] = str(info.get("reason") or "")
+        planned[role] = voice
+    return planned
+
+
+def _voice_key(voice: dict | None) -> str:
+    """声线身份（旧池=model_id；新模型=speaker）；空值返回 ""。"""
+    if not isinstance(voice, dict):
+        return ""
+    return str(voice.get("voice_profile_id") or voice.get("speaker")
+               or voice.get("model_id") or "")
+
+
+def _tier_for_standalone(role: str, script: dict, plan: dict | None,
+                         registry) -> str:
+    """单镜生成（无整章预分配）时的等级回退：仍按同一分级规则算。"""
+    info = derive_voice_tiers(script, plan, registry=registry,
+                              roles={role: {"units": 1}}) or {}
+    return str((info.get(role) or {}).get("tier") or "")
 
 
 # ---------------------------------------------------------------- 声音单元构造
@@ -343,6 +603,7 @@ def dialogue_speech_unit(shot: dict, *, scope: dict, script_revision: str,
         sample_rate=int(tts_config.CONSUMER_SAMPLE_RATE or 0) or 24000,
         mapping_version=str(voice.get("mapping_version") or ""),
         params_strict=bool(strict), legacy_voice_signature=dict(legacy) if legacy else None,
+        voice_tier=str(voice.get("tier") or ""),
     )
     return unit
 
@@ -369,6 +630,7 @@ def narration_speech_unit(entry_index: int, *, text: str, scope: dict,
         sample_rate=int(tts_config.CONSUMER_SAMPLE_RATE or 0) or 24000,
         mapping_version=str(voice.get("mapping_version") or ""),
         params_strict=bool(strict), legacy_voice_signature=dict(legacy) if legacy else None,
+        voice_tier=str(voice.get("tier") or ""),
     )
 
 
@@ -473,6 +735,28 @@ def narration_subset_entries(plan: dict, shots: list, only_indices=None) -> list
     return keep
 
 
+def _role_counts_free(script: dict, plan: dict | None) -> dict:
+    """发言单元数（不含旁白）→ 分级用；与 `build_speech_units` 同一提取口径."""
+    plan = plan if isinstance(plan, dict) and plan else script.get("chapter_outline")
+    plan = plan if isinstance(plan, dict) else {}
+    characters = script.get("characters") or []
+    shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
+    hook = script.get("hook") if isinstance(script.get("hook"), dict) else None
+    counts: dict[str, dict] = {}
+    for shot in ([hook] if hook else []) + shots:
+        try:
+            raw_for_speaker, text = _dialogue_speech(shot, plan, characters)
+            if raw_for_speaker is None or not text:
+                continue
+            role = resolve_shot_speaker(shot, raw_for_speaker, characters, plan)["role"]
+        except Exception:  # noqa: BLE001 - 真错误由 build_speech_units 显式抛
+            continue
+        role = canonical_character_role(role, characters)
+        rec = counts.setdefault(role, {"units": 0})
+        rec["units"] += 1
+    return counts
+
+
 def build_speech_units(script: dict, *, scope: dict | None = None,
                        script_revision: str = "", registry=None,
                        provider_name: str = "", only_indices=None,
@@ -481,6 +765,10 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
     """整章 → `SpeechUnit` 列表（对白 + 旁白）——`plan` / `--plan-only` 与生成共用.
 
     只做**规划**：不实例化 provider、不调用模型（能力用登记表读数）。
+
+    S04/A1：声线先按整章预分配（`plan_role_voices`）——独占角色（旁白/primary/
+    recurring）先占音色，一次性龙套（minor/extra）再走共享桶，因此同一批分配
+    与逐镜生成顺序无关，龙套也不会抢走独占角色要用的音色。
     """
     from step01_script_gen.plan_feasibility import (broadcast_narration_entries,
                                                     layout_voice_entries, voice_units)
@@ -500,6 +788,30 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
     _kept_narr = {i for i, _e in narration_subset_entries(plan, _subset_shots, only_indices)}
     registry = registry if registry is not None else get_registry()
 
+    # ---- 第一遍：收集发言角色（对白 + 角色旁白）→ 整章分级 ----
+    counts = _role_counts_free(script, plan)
+    for entry, role in zip(entries, roles):
+        norm = role if str(role).strip().lower() != "narrator" else NARRATOR_ROLE
+        if norm != NARRATOR_ROLE:
+            rec = counts.setdefault(canonical_character_role(norm, characters),
+                                    {"units": 0})
+            rec["units"] += 1
+    tiers = derive_voice_tiers(script, plan, registry=registry, roles=counts)
+    planned_voices = plan_role_voices(script, plan, registry=registry,
+                                      provider_name=name, caps=caps,
+                                      tiers=tiers, roles=counts)
+
+    def _voice_for(role: str) -> dict:
+        if role in planned_voices:
+            return dict(planned_voices[role])
+        # 分级里有但不发言的角色（或预分配遗漏）：按同一规则即时解析
+        gender, age = _detect_speaker_attributes(role, characters)
+        tier = normalize_voice_tier((tiers.get(role) or {}).get("tier"))
+        voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
+                              gender=gender, age_range=age, tier=tier)
+        voice["tier_reason"] = str((tiers.get(role) or {}).get("reason") or "")
+        return voice
+
     out: list = []
     for shot in units_script:
         raw_for_speaker, text = _dialogue_speech(shot, plan, characters)
@@ -507,12 +819,9 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
             continue
         role = resolve_shot_speaker(shot, raw_for_speaker, characters, plan)["role"]
         role = canonical_character_role(role, characters)
-        gender, age = _detect_speaker_attributes(role, characters)
-        voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
-                              gender=gender, age_range=age)
         out.append(dialogue_speech_unit(shot, scope=scope, script_revision=revision,
-                                        voice=voice, provider_name=name, text=text,
-                                        voice_role=role))
+                                        voice=_voice_for(role), provider_name=name,
+                                        text=text, voice_role=role))
 
     if entries:
         _win, _ = _compute_voice_windows(script, shots)
@@ -522,11 +831,10 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
             if i not in _kept_narr:
                 continue
             role = roles[i - 1]
-            if role != NARRATOR_ROLE:
+            if str(role).strip().lower() == "narrator":
+                role = NARRATOR_ROLE
+            else:
                 role = canonical_character_role(role, characters)
-            gender, age = _detect_speaker_attributes(role, characters)
-            voice = resolve_voice(registry, role_id=NARRATOR_ROLE if role == "narrator" else role,
-                                  provider_name=name, caps=caps, gender=gender, age_range=age)
             text = str(entry.get("text") or "").strip()
             if not text:
                 continue
@@ -538,7 +846,8 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
             start = float(tr.get("start") or 0.0)
             window = (start, float(end)) if run and float(end) > start else None
             out.append(narration_speech_unit(i, text=text, scope=scope, script_revision=revision,
-                                             voice=voice, provider_name=name, window=window,
+                                             voice=_voice_for(role), provider_name=name,
+                                             window=window,
                                              voice_role=role if "voice_role" in entry else ""))
     return out
 
@@ -546,10 +855,17 @@ def build_speech_units(script: dict, *, scope: dict | None = None,
 # ---------------------------------------------------------------- 缓存判定
 
 def check_voice_uniqueness(units, registry, characters) -> dict:
-    """1 规范角色 ↔ 1 音色，且角色不与旁白撞音（只读）."""
+    """角色 ↔ 音色一致性（S04/A1 按等级分口径）.
+
+    - **独占等级**（旁白 / primary / recurring / 未标等级）仍要求 1 角色 ↔ 1 音色，
+      并且不与旁白、也不与任何其他角色撞音；
+    - **共享等级**（minor / extra）允许同一条龙套声线被多个角色复用（这是龙套池
+      的本意），但仍然要求**同一角色始终同一条声线**，且不得占用旁白或独占角色的音色。
+    """
     role_voice: dict[str, set] = {}
     voice_role: dict[str, set] = {}
     narrator_voices: set = set()
+    shared_roles: set = set()
     for u in units or []:
         kind = str(getattr(u, "kind", "") or "")
         role = str(getattr(u, "voice_role", "") or "")
@@ -561,6 +877,9 @@ def check_voice_uniqueness(units, registry, characters) -> dict:
                     getattr(u, "model_id", "") or getattr(u, "speaker", "") or "")
         if not role or not voice:
             continue
+        tier = normalize_voice_tier(getattr(u, "voice_tier", ""))
+        if is_shared_tier(tier) and role != NARRATOR_ROLE:
+            shared_roles.add(role)
         role_voice.setdefault(role, set()).add(voice)
         voice_role.setdefault(voice, set()).add(role)
         if role == NARRATOR_ROLE:
@@ -569,18 +888,35 @@ def check_voice_uniqueness(units, registry, characters) -> dict:
     for role, voices in sorted(role_voice.items()):
         if len(voices) > 1:
             conflicts.append({"code": "role_multiple_voices", "role": role,
-                              "voices": sorted(voices)})
+                              "voices": sorted(voices),
+                              "tier": ("shared" if role in shared_roles else "unique")})
     for voice, roles in sorted(voice_role.items()):
-        if len(roles) > 1:
+        if len(roles) <= 1:
+            continue
+        unique_roles = sorted(r for r in roles
+                              if r != NARRATOR_ROLE and r not in shared_roles)
+        if unique_roles:
             conflicts.append({"code": "voice_multiple_roles", "voice": voice,
-                              "roles": sorted(roles)})
+                              "roles": sorted(roles),
+                              "unique_roles": unique_roles})
     for voice in sorted(narrator_voices):
         chars = sorted(r for r in voice_role.get(voice, set()) if r != NARRATOR_ROLE)
         if chars:
             conflicts.append({"code": "narrator_voice_collision",
                               "voice": voice, "roles": chars})
+    # 共享等级不得占用独占角色的音色（上面已按 unique_roles 判，这里再显式记一条
+    # 便于报告区分「独占撞独占」与「龙套撞独占」）
+    for role in sorted(shared_roles):
+        for voice in sorted(role_voice.get(role, set())):
+            owners = sorted(r for r in voice_role.get(voice, set())
+                            if r != role and r != NARRATOR_ROLE
+                            and r not in shared_roles)
+            if owners:
+                conflicts.append({"code": "shared_voice_collides_unique", "role": role,
+                                  "voice": voice, "unique_roles": owners})
     return {"ok": not conflicts, "conflicts": conflicts,
-            "roles": {r: sorted(v) for r, v in sorted(role_voice.items())}}
+            "roles": {r: sorted(v) for r, v in sorted(role_voice.items())},
+            "shared_roles": sorted(shared_roles)}
 
 
 def _cache_hit(output_path: Path, unit: SpeechUnit, request_key: str) -> bool:
@@ -702,8 +1038,13 @@ async def _gen_single_tts_async(unit: SpeechUnit, provider,
 
 
 def _prepare_shot_unit(shot: dict, *, output_dir: Path, voice_registry, characters,
-                       plan, scope, script_revision, provider, candidate_context):
-    """单镜对白 → `(unit, output_path, display_name)`；不该出声时返回 `(None, None, None)`."""
+                       plan, scope, script_revision, provider, candidate_context,
+                       role_voices: dict | None = None, script: dict | None = None):
+    """单镜对白 → `(unit, output_path, display_name)`；不该出声时返回 `(None, None, None)`.
+
+    `role_voices`（整章预分配）优先：同一章里所有镜头的声线必须来自同一次分配，
+    否则龙套共享桶与独占分配会随生成顺序漂移。
+    """
     idx = int(shot.get("index", 0) or 0)
     raw_for_speaker, text = _dialogue_speech(shot, plan, characters)
     if raw_for_speaker is None or not text:
@@ -715,11 +1056,16 @@ def _prepare_shot_unit(shot: dict, *, output_dir: Path, voice_registry, characte
                                  name=configured)
     name = str(caps.provider or configured)   # 与真正拿去合成的 provider 一致
     registry = voice_registry if voice_registry is not None else get_registry()
-    voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
-                          gender=gender, age_range=age)
+    role = canonical_character_role(role, characters)
+    voice = (role_voices or {}).get(role)
+    if voice is None:
+        tier = _tier_for_standalone(role, script or {"characters": characters},
+                                    plan, registry)
+        voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
+                              gender=gender, age_range=age, tier=tier)
     unit = dialogue_speech_unit(shot, scope=scope, script_revision=script_revision,
                                 voice=voice, provider_name=name, text=text,
-                                strict=candidate_context is not None)
+                                strict=candidate_context is not None, voice_role=role)
     if candidate_context is not None:
         output_path = candidate_context.for_unit(unit.unit_id, unit.format)
     else:
@@ -732,8 +1078,13 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
                  plan: dict | None = None, *, scope: dict | None = None,
                  script_revision: str = "",
                  candidate_context: Optional[TtsCandidateContext] = None,
-                 collected: Optional[list] = None) -> Optional[str]:
+                 collected: Optional[list] = None,
+                 role_voices: dict | None = None,
+                 script: dict | None = None) -> Optional[str]:
     """为单个分镜生成 TTS 音频（**只合成对白那一份**）.
+
+    `role_voices` 是整章预分配的声线（`plan_role_voices` 的返回值）；不给时按
+    同一分级规则即时解析（单镜工具/测试的兼容路径）。
 
     Returns: 生成的音频文件路径，失败返回 None（失败原因在日志里；不伪造成功）。
     """
@@ -748,7 +1099,8 @@ def gen_shot_tts(shot: dict, output_dir: Path, provider=None,
         unit, output_path, display_name = _prepare_shot_unit(
             shot, output_dir=Path(output_dir), voice_registry=voice_registry,
             characters=characters, plan=plan, scope=scope, script_revision=revision,
-            provider=provider, candidate_context=candidate_context)
+            provider=provider, candidate_context=candidate_context,
+            role_voices=role_voices, script=script)
     except SynthesisError as exc:
         print(f"  [FAIL] Shot {idx}: {exc}")
         return None
@@ -797,7 +1149,9 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
                               plan: dict | None = None, *, scope: dict | None = None,
                               script_revision: str = "",
                               candidate_context: Optional[TtsCandidateContext] = None,
-                              collected: Optional[list] = None
+                              collected: Optional[list] = None,
+                              role_voices: dict | None = None,
+                              script: dict | None = None
                               ) -> Optional[str]:
     """异步版本的单分镜 TTS 生成（与串行**同一判据、同一实现**）."""
     idx = shot.get("index", 0)
@@ -810,7 +1164,8 @@ async def _gen_shot_tts_async(shot: dict, output_dir: Path, provider,
         unit, output_path, display_name = _prepare_shot_unit(
             shot, output_dir=Path(output_dir), voice_registry=voice_registry,
             characters=characters, plan=plan, scope=scope, script_revision=revision,
-            provider=provider, candidate_context=candidate_context)
+            provider=provider, candidate_context=candidate_context,
+            role_voices=role_voices, script=script)
     except SynthesisError as exc:
         print(f"  [FAIL] Shot {idx}: {exc}")
         return None
@@ -884,6 +1239,20 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
         output_dir.mkdir(parents=True, exist_ok=True)
     provider = provider if provider is not None else create_provider()
     results = []
+    # S04/A1：整章只做**一次**声线分配（独占先、龙套共享后），逐镜不得各自分配。
+    _caps = provider_capabilities(provider, name=str(getattr(provider, "PROVIDER_NAME", "")
+                                                    or tts_config.PROVIDER))
+    try:
+        role_voices = plan_role_voices(script, _plan, registry=voice_registry,
+                                       provider_name=str(_caps.provider or tts_config.PROVIDER),
+                                       caps=_caps)
+    except SynthesisError as exc:
+        # 声线池满/非法 speaker：整章显式失败，绝不逐镜静默退回旁白或撞音
+        print(f"[ERROR] 声线分配失败（{getattr(exc, 'code', 'voice')}）: {exc}")
+        raise
+    print(f"[INFO] 声线分级: " + ", ".join(
+        "%s=%s(%s)" % (r, (v.get("tier") or "?"), (v.get("tier_reason") or "")[:18])
+        for r, v in sorted(role_voices.items())))
     print(f"[INFO] Generating TTS for {len(units)} units (hook + shots) with dynamic voices...\n")
 
     if use_async:
@@ -893,7 +1262,8 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
                                     characters, plan=_plan, scope=scope,
                                     script_revision=revision,
                                     candidate_context=candidate_context,
-                                    collected=collected)
+                                    collected=collected, role_voices=role_voices,
+                                    script=script)
                 for unit in units
             ]
             return await asyncio.gather(*tasks)
@@ -905,7 +1275,8 @@ def gen_all_shot_tts(script: dict, output_dir: Path,
             path = gen_shot_tts(unit, output_dir, provider, voice_registry, characters,
                                 plan=_plan, scope=scope, script_revision=revision,
                                 candidate_context=candidate_context,
-                                collected=collected)
+                                collected=collected, role_voices=role_voices,
+                                script=script)
             if path:
                 results.append(path)
 
@@ -1026,13 +1397,33 @@ def gen_narration_tts(script: dict, output_dir: Path, provider=None, *,
                                  name=configured)
     name = str(caps.provider or configured)
     registry = voice_registry if voice_registry is not None else get_registry()
+    # S04/A1：与对白轨共用**同一次整章声线分配**（角色旁白不得另分一条声线）
+    _counts = _role_counts_free(script, plan)
+    for _r in roles:
+        _norm = NARRATOR_ROLE if str(_r).strip().lower() == "narrator" else \
+            canonical_character_role(_r, script.get("characters") or [])
+        if _norm != NARRATOR_ROLE:
+            _counts.setdefault(_norm, {"units": 0})["units"] += 1
+    try:
+        _role_voices = plan_role_voices(script, plan, registry=registry,
+                                        provider_name=name, caps=caps, roles=_counts)
+    except SynthesisError as exc:
+        print(f"[ERROR] 旁白声线分配失败（{getattr(exc, 'code', 'voice')}）: {exc}")
+        raise
 
     out: List[str] = []
     for _i, _e in enumerate(entries, 1):
         role = roles[_i - 1]
+        role = (NARRATOR_ROLE if str(role).strip().lower() == "narrator"
+                else canonical_character_role(role, script.get("characters") or []))
         gender, age = _detect_speaker_attributes(role, script.get("characters") or [])
-        voice = resolve_voice(registry, role_id=NARRATOR_ROLE if role == "narrator" else role,
-                              provider_name=name, caps=caps, gender=gender, age_range=age)
+        voice = dict(_role_voices.get(role) or {})
+        if not voice:
+            voice = resolve_voice(registry, role_id=role, provider_name=name, caps=caps,
+                                  gender=gender, age_range=age,
+                                  tier=(derive_voice_tiers(
+                                      script, plan, registry=registry,
+                                      roles={role: {"units": 1}}).get(role) or {}).get("tier", ""))
         text = str(_e.get("text") or "").strip()
         if not text:
             continue
