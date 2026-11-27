@@ -275,3 +275,13 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
   （`README.md`、`baseline.json`、`config.json`、`cleanup-manifest.md`）。
 - 故障注入开关 `STEP04_PUBLISH_FAULT`（`final`/`srt`/`quality`/`rollback`）**仅用于离线
   故障验收**，默认不设置、不影响生产路径；journal 与备份位于 `stretched/` 下，恢复成功即清理。
+
+**合并状态（M05，2026-11-27）**
+
+- 验收代码提交 `482676b` 已 `git merge --ff-only` 到 master（master 合并前为 `507ccea`；
+  合并后 HEAD `c55cc4c`，与分支 tree 一致；`482676b..HEAD` 仅新增本账本与证据目录）。
+- 合并后保护复核：主仓库 8 项未跟踪文件路径与 SHA-256 与 `baseline.json` 完全一致；
+  正式 `output/` 仍为 3191 个文件 / 989,104,390 字节；未触碰 `.tmp/s14a` 与 `aiVideo-s14base`。
+- 原始测试日志归档在 `docs/downstream-safe-delivery-evidence/2026-11-27/`
+  （`s07-end-to-end.log`、`fault-and-identity-tests.log`）。
+- 真实模型调用、正式媒体采纳、生产章节重跑、远端推送、Stage 3/4 均未执行。

@@ -1,0 +1,11 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\ee54\AppData\Local\Python\pythoncore-3.14-64\python.exe
+cachedir: .pytest_cache
+rootdir: C:\myFloders\git\aiVideo\.tmp\worktrees\downstream-safe-delivery
+configfile: pytest.ini
+plugins: anyio-4.14.1, langsmith-0.9.7
+collecting ... collected 1 item
+
+tests/integration/test_downstream_safe_delivery_s07.py::test_downstream_offline_pipeline_delivers_playable_final PASSED [100%]
+
+======================== 1 passed in 106.03s (0:01:46) ========================

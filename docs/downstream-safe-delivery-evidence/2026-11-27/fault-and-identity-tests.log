@@ -1,0 +1,31 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\ee54\AppData\Local\Python\pythoncore-3.14-64\python.exe
+cachedir: .pytest_cache
+rootdir: C:\myFloders\git\aiVideo\.tmp\worktrees\downstream-safe-delivery
+configfile: pytest.ini
+plugins: anyio-4.14.1, langsmith-0.9.7
+collecting ... collected 21 items
+
+tests/step04_merge/test_s07_publication.py::test_publish_success_replaces_all_and_cleans_backups PASSED [  4%]
+tests/step04_merge/test_s07_publication.py::test_publish_failure_rolls_back_all_targets PASSED [  9%]
+tests/step04_merge/test_s07_publication.py::test_publish_failure_with_rollback_error_is_unconfirmed PASSED [ 14%]
+tests/step04_merge/test_s07_publication.py::test_recover_pending_restores_and_is_idempotent PASSED [ 19%]
+tests/step04_merge/test_s07_publication.py::test_recover_conflict_does_not_overwrite PASSED [ 23%]
+tests/step04_merge/test_s07_publication.py::test_recover_does_not_delete_when_old_and_new_bytes_identical PASSED [ 28%]
+tests/step04_merge/test_s07_publication.py::test_publish_busy_when_same_target_locked PASSED [ 33%]
+tests/integration/test_s05_duration_audit.py::test_duration_audit_projects_measured_overflow PASSED [ 38%]
+tests/integration/test_s05_duration_audit.py::test_unmeasured_unit_is_not_overflow_evidence PASSED [ 42%]
+tests/integration/test_s05_duration_audit.py::test_step03_entry_writes_measured_duration_audit PASSED [ 47%]
+tests/integration/test_s05_duration_audit.py::test_step02b_plan_blocks_audio_overflow_with_recommended_duration PASSED [ 52%]
+tests/integration/test_s05_duration_audit.py::test_step02b_plan_rejects_foreign_audit_identity PASSED [ 57%]
+tests/integration/test_s05_duration_audit.py::test_step02b_plan_allows_within_tolerance PASSED [ 61%]
+tests/integration/test_s05_duration_audit.py::test_narration_uses_carrier_shots_not_index_number PASSED [ 66%]
+tests/integration/test_s05_duration_audit.py::test_candidate_audit_reads_artifact_paths PASSED [ 71%]
+tests/integration/test_s05_duration_audit.py::test_step02b_plan_blocks_narration_overflow PASSED [ 76%]
+tests/integration/test_s05_duration_audit.py::test_confirmed_unit_without_identity_is_rejected PASSED [ 80%]
+tests/integration/test_s05_duration_audit.py::test_prepared_unit_does_not_supply_measured_need PASSED [ 85%]
+tests/integration/test_s05_duration_audit.py::test_bad_json_and_wrong_schema_report_rejection PASSED [ 90%]
+tests/integration/test_s05_duration_audit.py::test_audio_digest_mismatch_is_rejected PASSED [ 95%]
+tests/integration/test_s05_duration_audit.py::test_step02b_generation_entry_rejects_before_any_post PASSED [100%]
+
+============================= 21 passed in 1.98s ==============================
