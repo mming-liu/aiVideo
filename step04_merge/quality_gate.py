@@ -344,6 +344,13 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
             _defect("av_duration_drift",
                     "音画时长差 %.0fms 超过 %.0fms"
                     % (drift * 1000, AV_DRIFT_TOLERANCE_SEC * 1000))
+        else:
+            _check("av_duration", "pass", drift_ms=round(drift * 1000.0, 1))
+    elif audio is None and not audio_required:
+        _check("av_duration", "pass", note="无音频合同")
+    else:
+        _check("av_duration", "unavailable",
+               reason="音视频时长不可读", video_sec=video_dur, audio_sec=audio_dur)
     if expected_duration and total:
         delta = total - float(expected_duration)
         metrics["duration_delta_sec"] = round(delta, 4)

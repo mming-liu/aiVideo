@@ -172,20 +172,19 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 4. **失败不覆盖基线**：移走 shot 2 的 video 后重跑 Step04 → 非零退出且日志点明缺片段；
    既有 `final.mp4` 的 sha256 与 `step04_quality.json` 内容**原样保留**。
 
-**干净副本复跑**：`git archive HEAD`（提交 `ea7ea2d`）解到 `.tmp/s07-clean`（仅受控源码，
-无 `.env.keys`、无 `output/`），同一组新测试（S01/S02/S03/S04/S05/S06/S07 九份文件）
-在该副本内独立通过：`62 passed`（77.6s）。
+**干净副本复跑**：`git archive HEAD` 解到 `.tmp/s07-clean`（仅受控源码，无 `.env.keys`、
+无 `output/`），同一组新测试（S01/S02/S03/S04/S05/S06/S07 十份文件）在该副本内独立通过：
+`71 passed`（97s，含整改后新增的 `test_s05_policy_through_main.py`）。
 
-**证据（2026-11-27）**：
-- `pytest tests/integration/test_downstream_safe_delivery_s07.py -q` → `1 passed`（52s）。
-- 下游全量回归（本 worktree）：
-  `pytest tests/tts tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/integration/test_s01_isolation_baseline.py tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py`
-  → **`290 passed / 6 skipped`**（skip 均为缺正式 `output/` 产物的既有用例）。
-- 干净副本：`62 passed`（同上九份文件）。
+**证据（2026-11-27，整改后）**：
+- `pytest tests/integration/test_downstream_safe_delivery_s07.py -q` → `1 passed`（62s）。
+- 下游全量回归（本 worktree）→ **`299 passed / 6 skipped`**（命令与明细见「九、复核整改记录」）。
+- 干净副本 → `71 passed`（同上十份文件）。
 - 限制：三阶段均为**桩 provider + 本地合成媒体**，未运行真实 TTS/视频模型；成片的
   音质、唇形/动作质量、平台播放在本轮未验证；视频桩只证明"请求→响应→产物→合并"链路。
-  0 元探针的黑场/静帧/首帧阈值与 M3 响度判据也只在本地合成片上验证过，真实生成片需要
-  第一轮真跑后校准（阈值可用 `VIDEO_MEDIA_*` / `VIDEO_FIRST_FRAME_*` / `MERGE_AUDIO_*` 覆盖）。
+  0 元探针的黑场/静帧/首帧阈值与 M3 响度判据也只在本地合成片上验证过，**默认按影子评估
+  运行**（`VIDEO_MEDIA_ENFORCE` / `MERGE_QUALITY_ENFORCE` 才硬拦），真实生成片需要第一轮
+  真跑后校准。
 
 ## 七、与长期计划（Stage 1–4）的对应与未完成项
 
