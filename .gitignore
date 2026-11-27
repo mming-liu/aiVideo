@@ -649,3 +649,4 @@ start_studio.bat
 !tests/integration/test_s05_duration_audit.py
 !tests/step02_video_gen/test_s06_media_probe.py
 !tests/step04_merge/test_s06_merge_quality.py
+!tests/integration/test_downstream_safe_delivery_s07.py

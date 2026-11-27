@@ -190,12 +190,13 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
                              message=str(_vp_exc)[:500])
         # S05/A2：候选运行同样落实测时长审计（Step02b 候选/正式 plan 都可读）
         try:
+            from shared.audio_policy import resolve_audio_policy as _resolve_policy
             _write_duration_audit(
                 script=script, gen_script=script, plan=plan, scope=scope,
                 revision=revision,
                 provider=str(getattr(provider, "PROVIDER_NAME", "") or tts_config.PROVIDER),
                 target_dir=attempt,
-                audio_mode=str(_policy.effective_merge_mode),
+                audio_mode=_resolve_policy().effective_merge_mode,
                 units=units, only_indices=only_indices)
         except Exception as _audit_exc:  # noqa: BLE001
             eio.append_event(attempt, "duration_audit_failed",
@@ -695,7 +696,7 @@ def main(options=None):
             script=script, gen_script=gen_script,
             plan=_plan_for_script(gen_script, scope=scope, script_revision=revision),
             scope=scope, revision=revision, provider=tts_config.PROVIDER,
-            target_dir=CHAPTER_DIR, audio_mode=_policy.effective_merge_mode,
+            target_dir=CHAPTER_DIR, audio_mode=policy.effective_merge_mode,
             only_indices=only_indices)
     except Exception as _audit_exc:  # noqa: BLE001 - 审计失败不掩盖已生成音轨
         _logger.warn("[WARN] step03_duration_audit.json 写入失败（Step02b 将无实测下限）: %s"

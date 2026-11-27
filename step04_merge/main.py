@@ -1393,7 +1393,7 @@ def _run_merge(options, attempt):
                         dict(candidates.dialogue_identity.get(int(_s.get("index", 0))) or {})
                         for _s in valid_shots}
     from step04_merge.audio_fit import plan_audio_fit
-    _tts_secs = [get_media_duration(_p) if _p else None for _p in tts_paths]
+    _tts_secs = [get_media_duration(Path(_p)) if _p else None for _p in tts_paths]
     _audio_fit = plan_audio_fit(_tts_secs, target_durations, shot_indexes=shot_indexes,
                                 policy=_AUDIO_OVERFLOW_POLICY)
     if not _audio_fit.ok:

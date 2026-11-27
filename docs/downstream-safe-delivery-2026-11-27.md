@@ -29,7 +29,7 @@
 | S04 音色容量与身份 | `tts/voice_registry.py`（分级/共享桶/扩容通道）、`tts/models.py`（`SpeechUnit.voice_tier`）、`step03_tts_audio/shot_tts.py`（`derive_voice_tiers` / `plan_role_voices` / 分级版 `check_voice_uniqueness`）、`tts/synthesis_job.py`（speaker 校验与分配同源）、`shared/voice_fit.py`（共享等级不误报复用冲突）、`tools/voice_unit_report.py`、`tools/voice_tier_audit.py`（新增，多章审计）、`tests/tts/test_s04_voice_tiers.py` | 已完成 | `pytest tests/tts/test_s04_voice_tiers.py` `9 passed`；下游回归 `254 passed / 6 skipped`；`ruff check` 0 新增（`tts/synthesis_job.py` 的 `KIND_DIALOGUE` F401 为基线既有）；真实第 1+2 章只读副本离线核对：两章 `voice_uniqueness.ok=true`、跨章合并 `ok=true`、`provider_calls=0`，见「S04 证据」 |
 | S05 实测时长与防截音 | `shared/voice_preparation.py`（`build_duration_audit` 投影）、`step03_tts_audio/main.py`（`_write_duration_audit`：正式 + 候选都落 `step03_duration_audit.json`）、`step02b_video_gen/main.py`（`build_plan` 消费审计、`_assert_audio_fit` 生视频前拒收）、`step04_merge/audio_fit.py`（新增：策略纯算术）、`step04_merge/timeline.py`（`ClipEntry.pad_sec` / `TimelineAudioTrack.atempo`）、`step04_merge/backends/ffmpeg.py`（`tpad` / `atempo`）、`step04_merge/main.py`（策略接线 + `audio_fit` 入质量报告）、`tests/step04_merge/test_s05_audio_fit.py`、`tests/integration/test_s05_duration_audit.py` | 已完成 | `pytest tests/step04_merge/test_s05_audio_fit.py` `11 passed`（含真实 FFmpeg 渲染：pad 后音频尾音保留、音画等长）；`pytest tests/integration/test_s05_duration_audit.py` `6 passed`；下游回归 `270 passed / 6 skipped`（1 条 `step03.log` 断言失败来自 `.pytest_tmp` 上次跑测遗留的现场目录，清掉后该套件 `57 passed`）；`ruff check` 0 新增 |
 | S06 媒体检查与混音 | `step02_video_gen/video_qc.py`（`probe_video_media` 0 元探针、空镜判据复用 `is_empty_scene`）、`step02_video_gen/submit_poll.py`（探针先于视觉 QC、问题进 `VideoCheckReport`）、`step04_merge/backends/ffmpeg.py`（切点淡变 + 48kHz + `+faststart`）、`step04_merge/quality_gate.py`（新增：成片终检）、`step04_merge/main.py`（终检接线 + `step04_quality.json.media_check`、`step04_media_quality.json`）、`tests/step02_video_gen/test_s06_media_probe.py`、`tests/step04_merge/test_s06_merge_quality.py` | 已完成 | `pytest tests/step02_video_gen tests/step02b_video_gen tests/step04_merge` `185 passed / 6 skipped`；`pytest tests/step02_video_gen/test_s06_media_probe.py` `9 passed`（合成黑场/静帧/残缺/首帧偏离全部拦截、视觉 QC 0 调用）；`pytest tests/step04_merge/test_s06_merge_quality.py` `9 passed`（正常样片 PASS、音画差/缺音轨/黑场/静帧/字幕越界/响度全部 BLOCK）；`ruff check` 无新增 |
-| S07 完整离线交付 | `tests/integration/test_downstream_safe_delivery_s07.py`、干净副本复跑 | 待开工 | — |
+| S07 完整离线交付 | `tests/integration/test_downstream_safe_delivery_s07.py`、干净副本复跑（`git archive` 到 `.tmp/s07-clean` 后同套测试） | 已完成 | `pytest tests/integration/test_downstream_safe_delivery_s07.py` `1 passed`（52s，三阶段各自真实入口 + 子进程）；干净副本同套 `9` 文件回归见「S07 证据」 |
 
 ## 三、S04 证据：角色分级、龙套共享池与音色容量
 
@@ -147,7 +147,37 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 - 限制：黑场/静帧/首帧阈值是**首轮默认值**（`VIDEO_FIRST_FRAME_*_CORR` 等可覆盖），
   尚未用真实生成片校准；响度与 moov 只在本地合成片上验证。
 
-## 六、结论边界声明
+## 六、S07 证据：下游全链路离线交付
+
+`tests/integration/test_downstream_safe_delivery_s07.py` 在一个匿名单章上按真实顺序跑
+**三个阶段的真实入口**（各自独立子进程，环境/import 期路径与生产一致）：
+
+1. **Step03 配音**：`step03_tts_audio.main(cli.StageOptions())`；TTS 用本地桩 provider
+   （写真实 WAV，`dur_per_char=0.34` 使音轨超过下游 10KB 有效门槛且仍落在 5s 镜内）。
+   产物：`audio/shot_1|2.mp3` + 身份侧车、`voice_state.json`、`step03_quality.json`
+   （PASS）、`step03_duration_audit.json`（`measured_units≥2`、`overflow_shot_count=0`）。
+2. **Step02b 生视频**：`step02b_video_gen.main(cli.parse_args(["--force"]))`；视频用本地桩
+   provider（`tests/enhancements/video_stub_provider`，造真实 MP4，1 POST/镜）。
+   产物：`vimax_working/shots/<n>/video.mp4`、`step02b_quality.json`（PASS）。
+   随后**不带 `--force` 再跑一次**：两次运行后两个 clip 的 sha256 完全相同（缓存命中，不重复提交）。
+3. **Step04 合并**：`step04_merge.main()`；真实 FFmpeg 后端。
+   产物：`final.mp4`（可播放，10.00s）、`subtitles.srt`、`step04_quality.json`：
+   `status=PASS`、`media_check.status=PASS`、`audio_fit.policy=fail`、
+   `audio_fit.adjustments=[]`（没有截字、没有补齐/加速）；每条对白音轨实测时长与审计
+   `audio_need_sec` 一致（±0.2s）。
+4. **失败不覆盖基线**：移走 shot 2 的 video 后重跑 Step04 → 非零退出且日志点明缺片段；
+   既有 `final.mp4` 的 sha256 与 `step04_quality.json` 内容**原样保留**。
+
+**干净副本复跑**：`git archive HEAD` 解到 `.tmp/s07-clean`（仅受控源码，无 `.env.keys`、
+无 `output/`），同一组新测试（S01/S02/S03/S04/S05/S06/S07 九份文件）在该副本内独立通过。
+
+**证据（2026-11-27）**：
+- `pytest tests/integration/test_downstream_safe_delivery_s07.py -q` → `1 passed`（52s）。
+- 干净副本：`.tmp/s07-clean` 内同一命令组合 → 见交付记录末尾读数。
+- 限制：三阶段均为**桩 provider + 本地合成媒体**，未运行真实 TTS/视频模型；成片的
+  音质、唇形/动作质量、平台播放在本轮未验证；视频桩只证明"请求→响应→产物→合并"链路。
+
+## 七、结论边界声明
 
 本工作包全链路验收均为 **0 次外部模型调用**，本地音频/视频素材由 FFmpeg 合成，provider 网络交互由可控传输桩替代：
 - **源码完成 / 离线通过**：仅证明下游协议、隔离事务、状态机恢复、逐镜策略透传、音色容量预检、实测超窗拒收与 FFmpeg 混音/媒体检测工程通路成立；
