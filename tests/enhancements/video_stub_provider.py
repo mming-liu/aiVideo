@@ -51,13 +51,23 @@ def _ffmpeg() -> str:
     return exe
 
 
-def make_video(path: Path, *, color: str = "blue", seconds: float = 1.0,
-               tone_hz: int = 440, with_audio: bool = True) -> Path:
-    """现造一段**可解码**测试视频（带正弦测试音，便于区分身份）。"""
+def make_video(path: Path, *, color: str | None = None, seconds: float = 1.0,
+               tone_hz: int = 440, with_audio: bool = True,
+               motion: bool | None = None) -> Path:
+    """现造一段**可解码**测试视频（带正弦测试音，便于区分身份）.
+
+    默认造**有运动**的画面（`testsrc2`）：真实生成视频不会是整段静帧，静态桩视频会被
+    0 元媒体探针如实判成"整片静帧"。需要固定颜色的身份用例显式传 ``color=``。
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    args = [_ffmpeg(), "-y", "-v", "error", "-f", "lavfi", "-i",
-            f"color=c={color}:s=160x120:r=10:d={seconds}"]
+    if motion is None:
+        motion = color is None
+    if motion:
+        vsrc = f"testsrc2=size=160x120:rate=10:duration={seconds}"
+    else:
+        vsrc = f"color=c={color or 'blue'}:s=160x120:r=10:d={seconds}"
+    args = [_ffmpeg(), "-y", "-v", "error", "-f", "lavfi", "-i", vsrc]
     if with_audio:
         args += ["-f", "lavfi", "-i", f"sine=frequency={tone_hz}:sample_rate=16000:duration={seconds}",
                  "-c:a", "aac", "-shortest"]
@@ -237,7 +247,10 @@ class StubVideoService(VideoGenerationService):
                 Path(target).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(self.video_source, target)
             else:
-                make_video(Path(target), color=str(rec.get("color") or "blue"),
+                # 桩产物一律造**有运动**的画面：真实生成结果不会是整段静帧，
+                # 静态色块会被 0 元媒体探针如实判成"整片静帧"（需要静态/坏片的
+                # 用例走 `video_source=` 显式给冻结/黑场素材）。
+                make_video(Path(target), motion=True,
                            seconds=float(getattr(req, "duration", 1) or 1))
         except Exception as exc:  # noqa: BLE001
             return VideoGenerationResult(clip_index=req.clip_index, success=False,

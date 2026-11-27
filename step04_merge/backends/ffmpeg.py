@@ -43,7 +43,7 @@ SCHEMA_MEDIA_DECODE_EVIDENCE = "media_decode_evidence.v1"
 
 #: AAC 帧长（1024 采样）——时长判据要同时容纳视频帧与音频帧粒度
 AAC_FRAME_SAMPLES = 1024
-AUDIO_SAMPLE_RATE = 44100
+AUDIO_SAMPLE_RATE = 48000
 
 #: `enable` 表达式的**浮点容差**（秒）：帧时间戳 `N*(1/fps)` 与边界 `end_frame/fps`
 #: 可能差 1 ulp（1e-15 量级）。容差必须远大于它、又远小于任何一帧——**不能退半帧**，
@@ -83,7 +83,10 @@ class EncodeSettings:
     narration_gain: float = 1.0       # 图外旁白权重
     subtitle_style: SubtitleStyle = field(default_factory=SubtitleStyle)
     require_explicit_font: bool = False
-    audio_encoder_args: tuple = ("-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2")
+    audio_encoder_args: tuple = ("-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2")
+    #: S06/M2：逐镜原声在硬切点的极短淡入淡出（毫秒，0 = 关闭）——消除切点爆音。
+    #: 只作用于视频原声，不动 TTS 对白/旁白（人声尾音不能被淡出）。
+    cut_fade_ms: int = 20
     video_encoder_args: tuple = ("-c:v", "libx264", "-profile:v", "main", "-level", "4.0",
                                  "-pix_fmt", "yuv420p")
     ffmpeg: str | None = None
@@ -367,6 +370,14 @@ def compile_graph(timeline: MergeTimeline, settings: EncodeSettings, *,
             audio_chain += ",loudnorm=I=-16:TP=-1.5:LRA=11"
         elif settings.audio_volume:
             audio_chain += f",volume={settings.audio_volume}"
+        # S06/M2：硬切点极短淡入淡出（默认 20ms），消除每镜首尾的 click/pop。
+        # 放在 loudnorm/volume **之后**，保证淡入淡出是最后一步；只处理原声，
+        # TTS 对白/旁白链不淡出（人声尾音不截）。
+        fade_ms = int(getattr(settings, "cut_fade_ms", 0) or 0)
+        if fade_ms > 0 and duration > (fade_ms / 1000.0) * 2:
+            fade = fade_ms / 1000.0
+            audio_chain += (f",afade=t=in:st=0:d={fade:.3f},"
+                            f"afade=t=out:st={duration - fade:.6f}:d={fade:.3f}")
 
         tts_index = index_of.get(_tts_stable_id(validated, position))
         if tts_index is not None:
@@ -522,6 +533,8 @@ def command_for(timeline: MergeTimeline, settings: EncodeSettings, inputs, filte
     cmd.extend(list(settings.video_encoder_args))
     cmd.extend(["-preset", str(settings.preset), "-crf", str(settings.crf)])
     cmd.extend(list(settings.audio_encoder_args))
+    # S06/M3：moov atom 前置（快启）——短视频平台与浏览器拖动需要它
+    cmd.extend(["-movflags", "+faststart"])
     cmd.append(str(output))
     return cmd
 

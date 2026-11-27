@@ -108,9 +108,25 @@ class _VideoProductQc:
     status: str                      # measured_pass | soft_allowed | failed
     reason: str | None = None
     checks: list = field(default_factory=list)
+    #: S06/V3：0 元探针的结构化结果与问题（供 reroll_decision 分类裁决）
+    media_probe: dict | None = None
+    media_issues: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"status": self.status, "reason": self.reason, "checks": list(self.checks)}
+        return {"status": self.status, "reason": self.reason,
+                "checks": list(self.checks),
+                "media_probe": self.media_probe,
+                "media_issues": list(self.media_issues)}
+
+
+def _first_frame_of(shot_idx: int) -> Path | None:
+    """该镜的输入首帧路径（有才给 probe 比首帧；没有就不测相似度）."""
+    try:
+        from shared.paths import FIRST_FRAME_FILENAME, vimax_shots_dir
+        path = vimax_shots_dir() / str(int(shot_idx)) / FIRST_FRAME_FILENAME
+        return path if path.is_file() else None
+    except Exception:
+        return None
 
 
 def _qc_video_product_result(video_path: Path, shot_idx: int, expected_duration: float,
@@ -121,6 +137,9 @@ def _qc_video_product_result(video_path: Path, shot_idx: int, expected_duration:
 
     ``log_path`` 非空 ⇒ 日志写该路径（候选模式用它把日志留在 attempt 内，
     不污染正式 ``step02.log``）。
+
+    S06/V3：**先跑 0 元 FFmpeg 硬探针**（黑场/静帧/残缺/首帧偏离），再按配置决定
+    是否调昂贵的视觉 QC。探针判 critical 时直接判失败（不花任何模型调用）。
     """
     from shared.tee_logger import get_logger
     from shared.log_utils import resolve_log_file
@@ -153,6 +172,32 @@ def _qc_video_product_result(video_path: Path, shot_idx: int, expected_duration:
             logger.verbose(f"  [Shot {shot_idx}] 视频 QC：时长 {actual:.1f}s 校验通过")
             checks.append({"name": "duration", "status": "pass",
                            "actual": actual, "expected": expected_duration})
+
+        # ---- S06/V3：0 元 FFmpeg 硬探针（任何配置下都跑，零模型调用） ----
+        probe_result, media_issues = None, []
+        try:
+            from step02_video_gen.video_qc import probe_video_media
+            probe_result = probe_video_media(
+                video_path, expected_duration=expected_duration,
+                first_frame_path=_first_frame_of(shot_idx))
+            media_issues = list(probe_result.issues or [])
+            checks.append({"name": "media_probe", "status": probe_result.status,
+                           "measured": probe_result.measured,
+                           "issues": [i.get("code") for i in media_issues],
+                           "reason": probe_result.reason})
+            if probe_result.critical:
+                logger.warn(
+                    "  [Shot %s] 0 元媒体探针检出确定性问题: %s"
+                    % (shot_idx, [i.get("code") for i in probe_result.critical]))
+                return _VideoProductQc(
+                    "failed", reason="媒体探针: %s" % ",".join(
+                        str(i.get("code")) for i in probe_result.critical),
+                    checks=checks, media_probe=probe_result.to_dict(),
+                    media_issues=media_issues)
+        except Exception as probe_exc:  # noqa: BLE001 - 探针异常=未验证，不误杀
+            logger.verbose(f"  [Shot {shot_idx}] 0 元媒体探针异常（不阻断）: {probe_exc}")
+            checks.append({"name": "media_probe", "status": "unavailable"})
+
         if VIDEO_QC_ENABLED:
             try:
                 from step02_video_gen.video_qc import qc_video_file_result
@@ -161,14 +206,20 @@ def _qc_video_product_result(video_path: Path, shot_idx: int, expected_duration:
                                "measured": vis.measured, "reason": vis.reason})
                 if vis.status == "critical":
                     logger.warn(f"  [Shot {shot_idx}] 视频 QC 视觉检测发现问题")
-                    return _VideoProductQc("failed", reason="视觉 critical", checks=checks)
+                    return _VideoProductQc("failed", reason="视觉 critical", checks=checks,
+                                           media_probe=(probe_result.to_dict()
+                                                        if probe_result is not None else None),
+                                           media_issues=media_issues)
             except Exception as e:
                 logger.verbose(f"  [Shot {shot_idx}] 视频视觉 QC 异常（不阻断）: {e}")
                 checks.append({"name": "visual", "status": "unavailable"})
         measured = all(c.get("status") in ("pass",) for c in checks if c.get("name") == "duration")
         return _VideoProductQc("measured_pass" if measured else "soft_allowed",
                                reason=None if measured else "时长未测得（软通过）",
-                               checks=checks)
+                               checks=checks,
+                               media_probe=(probe_result.to_dict()
+                                            if probe_result is not None else None),
+                               media_issues=media_issues)
     except Exception as e:
         logger.verbose(f"  [Shot {shot_idx}] 视频 QC 异常（不阻断）: {e}")
         return _VideoProductQc("soft_allowed", reason=f"QC 异常: {e}", checks=checks)
@@ -749,6 +800,12 @@ def _qc_coverage(qc, media_status: str) -> tuple:
         media_coverage.append("file_size")
     if checks.get("duration") in ("pass", "fail"):
         media_coverage.append("duration")
+    # S06/V3：0 元硬探针真跑过 ⇒ media 轴覆盖扩展到 black/freeze/decode/首帧
+    if checks.get("media_probe") in ("clean", "warned", "critical"):
+        media_coverage.extend(["media_probe", "black", "freeze", "decode"])
+        if any((i or {}).get("kind") == "frame_binding"
+               for i in (getattr(qc, "media_issues", None) or [])):
+            media_coverage.append("first_frame")
     if "visual" not in checks:
         return media_coverage, [], "not_applicable"
     visual = checks["visual"]
@@ -788,6 +845,24 @@ def _record_candidate_qc(shot_dir: Path, candidate_context, *, qc, shot_idx, sho
         media_status = rd.STATUS_UNKNOWN
         issues = []
 
+    # S06/V3：0 元探针检出的问题按**证据类型**分类进入裁决（不在这里判重抽）
+    probe = getattr(qc, "media_probe", None) or {}
+    for i, issue in enumerate(getattr(qc, "media_issues", None) or []):
+        kind = str(issue.get("kind") or "decode")
+        time_range = issue.get("time_range")
+        issues.append(rd.VideoIssue(
+            issue_id=f"shot{shot_idx}-media-{i}",
+            kind=kind,
+            time_range=(tuple(time_range) if isinstance(time_range, (list, tuple))
+                        and len(time_range) == 2 else None),
+            expected=None, observed=str(issue.get("message") or ""),
+            evidence_paths=[str(video_path)],
+            required_change=("回输入层修正（帧绑定/时长/内容）" if issue.get("severity")
+                             == "critical" else "后处理可缓解，需人工确认"),
+            field_paths=list((issue.get("evidence") or {}).keys())))
+        if issue.get("severity") == "critical":
+            media_status = rd.STATUS_FAIL
+
     # 语义轴：**没跑**（未启用/未要求）与 **跑了但测不到** 是两件事（§V3 覆盖率）：
     # - 没跑 ⇒ not_applicable（不阻断接受，但 manifest 的 check 记 not_run，不写 pass）；
     # - 跑了但工具不可用/证据不足 ⇒ unknown ⇒ 裁决只能是 unverified。
@@ -796,7 +871,8 @@ def _record_candidate_qc(shot_dir: Path, candidate_context, *, qc, shot_idx, sho
     report = rd.VideoCheckReport(
         media_status=media_status, semantic_status=semantic_status,
         coverage={"media": media_coverage, "semantic": semantic_coverage},
-        issues=issues, tool_versions={"qc": "step02._qc_video_product_result.v1"},
+        issues=issues, tool_versions={"qc": "step02._qc_video_product_result.v2",
+                                      "media_probe": (probe.get("tool_versions") or {})},
         request={"request_key": request_key},
         attempt={"attempt_id": attempt.name})
     decision = rd.decide(report, {"request_key": request_key})
@@ -820,6 +896,7 @@ def _record_candidate_qc(shot_dir: Path, candidate_context, *, qc, shot_idx, sho
     return {"kind": decision.kind, "coverage": report.coverage,
             "media_status": report.media_status, "semantic_status": report.semantic_status,
             "checks": list(qc.checks or []),
+            "media_probe": probe or None,
             "checks_report": [{"name": "media", "status": report.media_status},
                               {"name": "semantic", "status": report.semantic_status}],
             "decision": decision.to_dict()}

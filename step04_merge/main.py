@@ -620,13 +620,41 @@ def _subtitle_style() -> SubtitleStyle:
 
 def _encode_settings(*, require_explicit_font: bool = False) -> EncodeSettings:
     """把当前生效配置折成后端设置（后端不自己读 env）。"""
+    try:
+        _cut_fade_ms = max(0, int(os.getenv("MERGE_AUDIO_CUT_FADE_MS", "20").strip()))
+    except ValueError:
+        _cut_fade_ms = 20
     return EncodeSettings(
         width=OUT_W, height=OUT_H, crf=str(_CRF), preset=str(VIDEO_PRESET),
         audio_volume=_AUDIO_VOLUME, loudnorm=(_LOUDNORM == "1"),
         tts_base_gain=_TTS_BASE_GAIN, narration_base_gain=_NARRATION_BASE_GAIN,
         narration_gain=_NARRATION_GAIN, subtitle_style=_subtitle_style(),
-        require_explicit_font=require_explicit_font,
+        require_explicit_font=require_explicit_font, cut_fade_ms=_cut_fade_ms,
     )
+
+
+def _declared_black_windows(timeline) -> list:
+    """时间线**声明**的黑场窗口（fadeblack/fadewhite 转场 + 首尾端点淡变）.
+
+    终检只把"没声明过的黑场"判成缺陷；这是"黑场闪白"这类有意转场不被误杀的唯一判据。
+    """
+    windows = list(getattr(timeline, "windows", ()) or ())
+    out: list = []
+    for boundary in getattr(timeline, "boundary_transitions", ()) or ():
+        if str(boundary.kind) not in ("fadeblack", "fadewhite"):
+            continue
+        idx = int(boundary.index)
+        if 0 <= idx < len(windows):
+            start = float(windows[idx].start_sec)
+            out.append([start, start + float(boundary.duration_sec)])
+    for effect in getattr(timeline, "endpoint_effects", ()) or ():
+        duration = float(effect.duration_sec)
+        if effect.kind == ENDPOINT_FADE_IN:
+            out.append([0.0, duration])
+        elif effect.kind == ENDPOINT_FADE_OUT:
+            total = float(getattr(timeline, "total_duration_sec", 0.0) or 0.0)
+            out.append([max(0.0, total - duration), total])
+    return out
 
 
 def _color_filter() -> str:
@@ -1642,6 +1670,35 @@ def _run_merge(options, attempt):
     except OSError:
       pass
 
+  # 6.9 S06/M3：成片自动化终检（编码规范/音画一致/黑场/静帧/静音/字幕/响度/moov）
+  from step04_merge.quality_gate import evaluate_final
+  _media_quality = evaluate_final(
+      FINAL_OUT, expected_duration=float(timeline.total_duration_sec),
+      width=OUT_W, height=OUT_H, fps=timeline.fps,
+      audio_required=bool(timeline.audio_tracks
+                          or any(c.has_audio for c in timeline.clips)),
+      audio_sample_rate=48000,
+      declared_black_windows=_declared_black_windows(timeline),
+      srt_path=(None if _dry_run else SRT_OUT))
+  _logger.info("[STEP04-MEDIA] status=%s checks=%d defects=%s"
+               % (_media_quality["status"], len(_media_quality["checks"]),
+                  [d.get("code") for d in _media_quality["defects"]]))
+  try:
+    from shared.json_io import atomic_dump_json as _dump_media
+    _media_target = ((attempt.outputs_dir if attempt is not None else CHAPTER_DIR)
+                     / "step04_media_quality.json")
+    _dump_media(_media_target, _media_quality, ensure_ascii=False, indent=2)
+  except Exception as _mq_exc:  # noqa: BLE001 - 报告写失败不改变判定，但必须可见
+    _logger.warn("[WARN] step04_media_quality.json 写入失败: %s" % _mq_exc)
+  if _media_quality["status"] == "BLOCK":
+    _codes = [d.get("code") for d in _media_quality["defects"]
+              if d.get("severity") == "block"]
+    _logger.error("[STEP04-MEDIA] 成片终检未通过: %s" % _codes)
+    raise RenderError("final_quality_blocked", "verify",
+                      "成片终检未通过（%s）：%s"
+                      % (",".join(str(c) for c in _codes), str(FINAL_OUT)),
+                      exit_code=2)
+
   # 8. 候选提交（只在增强模式）：冻结输入 → manifest → accepted 替换 + 读回
   if attempt is not None:
     accepted = _commit_candidate(attempt, timeline, result, options, subtitle_plan, SRT_OUT,
@@ -1697,6 +1754,8 @@ def _run_merge(options, attempt):
           "audio_mode": str(_AUDIO_MODE),
           # S05/M1：超窗策略与逐条调整（补齐/加速/显式截断都留痕，不静默）
           "audio_fit": (_audio_fit.to_dict() if _audio_fit is not None else None),
+          # S06/M3：成片终检（编码/音画/黑场/静帧/静音/字幕/响度/moov）
+          "media_check": _media_quality,
       }
       _attach(_payload, script, stage="step04.product_acceptance")
       if only_indices is not None:
