@@ -24,7 +24,7 @@
 | 模块 | 责任文件（规划/实际） | 状态 | 验证证据 |
 |---|---|---|---|
 | S01 基线与隔离 | `docs/downstream-safe-delivery-2026-11-27.md`、`tests/integration/downstream_fixtures.py`、`tests/integration/test_s01_isolation_baseline.py` | 已完成 | `pytest tests/integration/test_s01_isolation_baseline.py tests/test_py311_source_grammar.py` `15 passed`；`ruff check` 0 错误 |
-| S02 任务恢复与计量 | `shared/video_attempts.py`、`step02_video_gen/submit_poll.py`、`step02b_video_gen/main.py`、`_video_gen/*provider.py`、`shared/request_events.py`、`tools/step02b_metrics_report.py` | 待开工 | — |
+| S02 任务恢复与计量 | `shared/request_events.py`、`step02_video_gen/submit_poll.py`、`step02b_video_gen/main.py`、`_video_gen/*provider.py`、`tools/step02b_metrics_report.py`、`tests/step02b_video_gen/test_s02_recovery_and_metrics.py` | 已完成 | `pytest test_s02_recovery_and_metrics.py` `6 passed`、`test_production_trace.py` 全过、`ruff check` 0 错误 |
 | S03 逐镜策略贯通 | `shared/video_media_plan.py`、`step02b_video_gen/cli.py`、`step02b_video_gen/main.py`、`step02_video_gen/execution_requirements.py`、`step02_video_gen/prompt_builder.py`、`step02_video_gen/submit_poll.py`、`_video_gen/models.py`、`_video_gen/*provider.py` | 待开工 | — |
 | S04 音色容量与身份 | `tts/voice_registry.py`、`step03_tts_audio/shot_tts.py`、`step03_tts_audio/main.py`、`tools/voice_unit_report.py` | 待开工 | — |
 | S05 实测时长与防截音 | `tts/synthesis_job.py`、`step03_tts_audio/shot_tts.py`、`step03_tts_audio/main.py`、`step02b_video_gen/main.py`、`step04_merge/timeline.py`、`step04_merge/backends/ffmpeg.py` | 待开工 | — |

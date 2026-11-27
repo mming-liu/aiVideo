@@ -687,6 +687,29 @@ class VolcengineVideoService(VideoGenerationService):
             raise VideoSubmissionError(
                 "budget_exhausted", str(exc), http_status=403) from exc
 
+        from shared import request_events as _req_ev
+        _src = dict(prepared.source or {})
+        _scope = dict(_src.get("scope") or {})
+        _req_ev.emit_step02b(
+            "http_attempt",
+            context=context,
+            request_id=prepared.request_id,
+            kind="video_submit",
+            provider="volcengine",
+            model_id=prepared.model_id,
+            media_policy=str(_src.get("media_policy") or prepared.media_mode or "unknown"),
+            request_key=prepared.request_key or "",
+            content_key=prepared.content_key or "",
+            shot_index=_src.get("shot_index", (prepared.parameters or {}).get("clip_index")),
+            operation_id=str(_src.get("generation_id") or prepared.request_id),
+            generation_id=str(_src.get("generation_id") or ""),
+            work_id=str(_scope.get("work_id") or os.getenv("NOVEL_NAME", "")),
+            chapter_scope=str(_scope.get("chapter_scope") or ""),
+            script_revision=str(_src.get("script_revision") or ""),
+        )
+        if isinstance(prepared.source, dict):
+            prepared.source["_provider_http_emitted"] = True
+
         try:
             resp = requests.post(
                 f"{self._base_url}/contents/generations/tasks",

@@ -109,21 +109,31 @@ def make_test_mp4(
     with_audio: bool = False,
     tone_hz: int = 520,
     black: bool = False,
+    freeze: bool = False,
 ) -> Path:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg executable is required for local test video synthesis")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    c = "black" if black else color
     frames = max(1, int(round(seconds * fps)))
+    if black:
+        vsrc = f"color=c=black:s={width}x{height}:r={fps}:d={seconds:.4f}"
+    elif freeze:
+        vsrc = f"color=c={color}:s={width}x{height}:r={fps}:d={seconds:.4f}"
+    else:
+        vsrc = f"testsrc2=size={width}x{height}:rate={fps}:duration={seconds:.4f}"
     cmd = [
         ffmpeg, "-y", "-v", "error",
-        "-f", "lavfi", "-i", f"color=c={c}:s={width}x{height}:r={fps}:d={seconds:.4f}",
+        "-f", "lavfi", "-i", vsrc,
     ]
     if with_audio:
         cmd += ["-f", "lavfi", "-i", f"sine=frequency={tone_hz}:sample_rate=44100:duration={seconds:.4f}"]
-    cmd += ["-frames:v", str(frames), "-t", f"{seconds:.4f}", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast"]
+    cmd += [
+        "-frames:v", str(frames), "-t", f"{seconds:.4f}",
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+        "-b:v", "160k", "-minrate", "80k", "-bufsize", "320k",
+    ]
     if with_audio:
         cmd += ["-c:a", "aac", "-shortest"]
     cmd.append(str(path))
@@ -187,10 +197,6 @@ def build_anonymous_story_pack(
                 "节拍1：甲判断雨势｜载体：台词1",
                 "节拍2：乙回应过桥｜载体：台词2",
             ],
-            "voice_adaptations": [
-                {"shot_index": 1, "entries": [{"kind": "dialogue", "index": 1, "speaker": "甲", "text": "雨快落下来了。"}]},
-                {"shot_index": 2, "entries": [{"kind": "dialogue", "index": 2, "speaker": "乙", "text": "我们早点过桥。"}]},
-            ],
         }
     elif variant == "multi_speaker":
         specs = [
@@ -240,7 +246,6 @@ def build_anonymous_story_pack(
             "dialogue_lines": dialogue_lines,
             "narration_lines": [],
             "shot_beats": beats,
-            "voice_adaptations": adaptations,
         }
     elif variant == "narration_and_dialogue":
         characters = [
@@ -305,11 +310,6 @@ def build_anonymous_story_pack(
                 "节拍1：薄雾渡口开场｜载体：旁白1",
                 "节拍2：甲登船定计｜载体：台词1",
                 "节拍3：丙收缆离岸｜载体：台词2",
-            ],
-            "voice_adaptations": [
-                {"shot_index": 1, "entries": [{"kind": "narration", "index": 1, "text": "清晨的渡口尚无人声，薄雾贴着水面流动。"}]},
-                {"shot_index": 2, "entries": [{"kind": "dialogue", "index": 1, "speaker": "甲", "text": "风向变了，按原路撤。"}]},
-                {"shot_index": 3, "entries": [{"kind": "dialogue", "index": 2, "speaker": "丙", "text": "渡船立刻离岸。"}]},
             ],
         }
     else:

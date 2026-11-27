@@ -642,3 +642,4 @@ start_studio.bat
 !docs/downstream-safe-delivery-2026-11-27.md
 !tests/integration/downstream_fixtures.py
 !tests/integration/test_s01_isolation_baseline.py
+!tests/step02b_video_gen/test_s02_recovery_and_metrics.py

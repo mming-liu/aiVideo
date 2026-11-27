@@ -754,11 +754,17 @@ def _run_candidate(options, script: dict, work_dir: Path, script_path: Path,
     if options.force:
         logger.info("  force: True（仅跳过可复用缓存，不隐式允许新 POST）")
 
+    from shared import request_events as _req_ev
+    _ev_path = package_root_dir / "logs" / "step02b_events.jsonl"
+    _ev_tok = _req_ev.set_step02b_events_path(_ev_path)
     before = production_snapshot(chapter)
     posts_before = va.submit_post_count(package_root_dir)
-    failed = asyncio.run(gen_all_videos(
-        script, work_dir, script_path, only_indices=only_indices, force=options.force,
-        candidate_factory=_factory, log_path=batch_log))
+    try:
+        failed = asyncio.run(gen_all_videos(
+            script, work_dir, script_path, only_indices=only_indices, force=options.force,
+            candidate_factory=_factory, log_path=batch_log))
+    finally:
+        _req_ev.reset_step02b_events_path(_ev_tok)
     after = production_snapshot(chapter)
     changes = snapshot_changes(before, after)
     posts_delta = va.submit_post_count(package_root_dir) - posts_before
@@ -777,6 +783,8 @@ def _run_candidate(options, script: dict, work_dir: Path, script_path: Path,
                 _codes.add(str(_it["code"]))
     payload = {"failed": failed, "candidate_root": str(package_root_dir),
                "generation_posts_this_run": posts_delta,
+               "generations": va.generations(package_root_dir),
+               "events_path": str(_ev_path),
                "production_unchanged": not any(changes.values()),
                "failure_codes": sorted(_codes)}
     if any(changes.values()):

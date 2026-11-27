@@ -35,6 +35,41 @@ REQUEST_EVENTS = (
 
 _LOCK = threading.Lock()
 _CURRENT = contextvars.ContextVar("request_events_current", default="")
+_STEP02B_PATH = contextvars.ContextVar("step02b_events_path", default="")
+
+
+def _append_jsonl(path: Path, record: dict) -> None:
+    line = json.dumps(record, ensure_ascii=False) + "\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _LOCK:
+            with open(path, "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(line)
+                fh.flush()
+                os.fsync(fh.fileno())
+    except Exception:
+        return
+
+
+def set_step02b_events_path(path: str | Path | None) -> contextvars.Token:
+    return _STEP02B_PATH.set(str(path) if path else "")
+
+
+def reset_step02b_events_path(token: contextvars.Token) -> None:
+    _STEP02B_PATH.reset(token)
+
+
+def step02b_events_path(context=None) -> Path:
+    raw = (os.getenv("STEP02B_EVENTS_FILE") or "").strip()
+    if raw:
+        return Path(raw)
+    if context is not None and getattr(context, "experiment_id", None) and getattr(context, "package_root", None):
+        return Path(context.package_root) / "logs" / "step02b_events.jsonl"
+    ctx_raw = (_STEP02B_PATH.get() or "").strip()
+    if ctx_raw:
+        return Path(ctx_raw)
+    from shared.paths import chapter_dir
+    return Path(chapter_dir()) / "step02b_events.jsonl"
 
 
 def new_request_id(prefix: str = "req") -> str:
@@ -64,8 +99,7 @@ def events_path() -> Path:
     return Path(chapter_dir()) / "step02_events.jsonl"
 
 
-def emit(event: str, *, request_id: str = "", kind: str = "", **fields) -> None:
-    """追加一条事件；未知事件名/写盘失败都不抛给主流程."""
+def _build_record(event: str, *, request_id: str = "", kind: str = "", **fields) -> dict:
     if event not in REQUEST_EVENTS:
         raise ValueError("未知请求事件: %r" % (event,))
     record = {
@@ -78,15 +112,32 @@ def emit(event: str, *, request_id: str = "", kind: str = "", **fields) -> None:
     for key, value in fields.items():
         if value is not None:
             record[key] = value
-    line = json.dumps(record, ensure_ascii=False) + "\n"
+    return record
+
+
+def emit(event: str, *, request_id: str = "", kind: str = "", **fields) -> None:
+    """追加一条事件；未知事件名/写盘失败都不抛给主流程."""
+    record = _build_record(event, request_id=request_id, kind=kind, **fields)
     try:
-        path = events_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with _LOCK:
-            with open(path, "a", encoding="utf-8", newline="\n") as fh:
-                fh.write(line)
-                fh.flush()
-                os.fsync(fh.fileno())
+        _append_jsonl(events_path(), record)
+    except Exception:
+        return
+
+
+def emit_step02b(
+    event: str,
+    *,
+    context=None,
+    events_file: str | Path | None = None,
+    request_id: str = "",
+    kind: str = "",
+    **fields,
+) -> None:
+    """追加一条 Step02b 视频提交/恢复/终局事件（写隔离候选包日志或章级 step02b_events.jsonl）."""
+    record = _build_record(event, request_id=request_id, kind=kind, **fields)
+    try:
+        target = Path(events_file) if events_file else step02b_events_path(context)
+        _append_jsonl(target, record)
     except Exception:
         return
 
@@ -188,6 +239,60 @@ def summarize(path: str | Path | None = None) -> dict:
     return {"events": counts, "requests": len(requests)}
 
 
+def emit_video_decision_ledger(
+    *,
+    work_id: str = "",
+    chapter_scope: str = "",
+    script_revision: str = "",
+    shot_index: int | None = None,
+    provider: str = "",
+    model_id: str = "",
+    media_policy: str = "",
+    request_key: str = "",
+    content_key: str = "",
+    operation_id: str = "",
+    generation_id: str = "",
+    task_id: str = "",
+    attempt_id: str = "",
+    action_type: str = "generate",
+    outcome: str = "",
+    error_code: str = "",
+    recovered: bool = False,
+    submit_posts: int | None = None,
+    context=None,
+    request_id: str = "",
+    detail: str = "",
+) -> None:
+    """Append a structured Step02b decision_ledger record keyed by 4-field shot tuple."""
+    emit_step02b(
+        "decision_ledger",
+        context=context,
+        request_id=request_id,
+        kind="video_decision",
+        work_id=work_id,
+        chapter_scope=chapter_scope,
+        script_revision=script_revision,
+        shot_index=shot_index,
+        provider=provider,
+        model_id=model_id,
+        media_policy=media_policy or "unknown",
+        request_key=request_key,
+        content_key=content_key,
+        operation_id=operation_id or generation_id,
+        generation_id=generation_id,
+        task_id=task_id,
+        attempt_id=attempt_id,
+        action_type=action_type,
+        outcome=outcome,
+        error_code=error_code,
+        recovered=bool(recovered),
+        submit_posts=submit_posts,
+        detail=detail[:240] if detail else None,
+    )
+
+
 __all__ = ["REQUEST_EVENTS", "begin_request", "clear_request", "current_request_id",
-           "emit", "emit_decision_ledger", "events_for", "events_path",
-           "new_request_id", "read_events", "summarize"]
+           "emit", "emit_decision_ledger", "emit_step02b", "emit_video_decision_ledger",
+           "events_for", "events_path", "new_request_id", "read_events",
+           "reset_step02b_events_path", "set_step02b_events_path",
+           "step02b_events_path", "summarize"]

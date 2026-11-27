@@ -989,6 +989,204 @@ def _request_from_frozen(frozen: dict, clip_index: int):
         camera_movement=str(params.get("camera_movement") or ""))
 
 
+def _scope_matches(a: dict | None, b: dict | None) -> bool:
+    """Compare two scope dicts strictly across any overlapping non-empty keys."""
+    if not a or not b:
+        return True
+    for key in ("work_id", "book_index", "chapter_scope", "chapter"):
+        va_val, vb_val = a.get(key), b.get(key)
+        if va_val not in (None, "") and vb_val not in (None, ""):
+            if str(va_val) != str(vb_val):
+                return False
+    return True
+
+
+def _chapter_scope_str(scope: dict | None) -> str:
+    sc = dict(scope or {})
+    if sc.get("chapter_scope"):
+        return str(sc["chapter_scope"])
+    if sc.get("chapter") is not None:
+        return f"part_{int(sc.get('book_index') or 1):02d}/chapter_{int(sc['chapter']):03d}"
+    return ""
+
+
+def _work_id_str(scope: dict | None) -> str:
+    sc = dict(scope or {})
+    return str(sc.get("work_id") or os.getenv("NOVEL_NAME", "") or "")
+
+
+def _emit_video_ledger(
+    *,
+    scope: dict | None,
+    script_revision: str,
+    shot_index: int | None,
+    provider: str = "",
+    model_id: str = "",
+    media_policy: str = "",
+    request_key: str = "",
+    content_key: str = "",
+    generation_id: str = "",
+    task_id: str = "",
+    attempt_id: str = "",
+    action_type: str = "generate",
+    outcome: str = "",
+    error_code: str = "",
+    recovered: bool = False,
+    submit_posts: int | None = None,
+    context=None,
+    request_id: str = "",
+    detail: str = "",
+) -> None:
+    try:
+        from shared.request_events import emit_video_decision_ledger
+        emit_video_decision_ledger(
+            work_id=_work_id_str(scope),
+            chapter_scope=_chapter_scope_str(scope),
+            script_revision=str(script_revision or ""),
+            shot_index=shot_index,
+            provider=str(provider or ""),
+            model_id=str(model_id or ""),
+            media_policy=str(media_policy or ""),
+            request_key=str(request_key or ""),
+            content_key=str(content_key or ""),
+            operation_id=str(generation_id or request_id or ""),
+            generation_id=str(generation_id or ""),
+            task_id=str(task_id or ""),
+            attempt_id=str(attempt_id or ""),
+            action_type=action_type,
+            outcome=outcome,
+            error_code=error_code,
+            recovered=recovered,
+            submit_posts=submit_posts,
+            context=context,
+            request_id=request_id,
+            detail=detail,
+        )
+    except Exception:
+        return
+
+
+def find_recoverable_attempt(
+    package_root: Path,
+    *,
+    shot_index: int,
+    request_key: str = "",
+    scope: dict | None = None,
+    script_revision: str = "",
+    provider: str = "",
+) -> dict | None:
+    """Inspect existing attempt logs/lifecycles for a shot and return recovery or block action.
+
+    Reuses ``shared.enhancement_io`` + ``shared.video_attempts`` as the single state source:
+    - Terminal closed generations (``accepted``, ``provider_failed``, ``rejected``, ``draft``,
+      ``ready``) return ``None`` so legitimate re-runs proceed with a new attempt.
+    - Non-terminal or IO/unknown attempts holding a ``task_id`` (including ``late_task_id``)
+      return ``recover_same_task`` to attach a recovery attempt without sending a new POST.
+    - ``submitting`` or ``submission_unknown`` without a ``task_id`` return
+      ``submission_unknown_no_id`` to fail closed without guessing or resubmitting.
+    - ``commit_unconfirmed`` returns ``commit_unconfirmed`` without resubmitting.
+    """
+    from shared import enhancement_io as eio
+    from shared import video_attempts as va
+
+    attempts_dir = Path(package_root) / eio.ATTEMPTS_DIRNAME
+    if not attempts_dir.is_dir():
+        return None
+
+    matched: list[tuple[Path, dict]] = []
+    for att in sorted(p for p in attempts_dir.iterdir() if p.is_dir()):
+        inputs = eio.read_inputs(att)
+        if not isinstance(inputs, dict):
+            continue
+        raw_idx = inputs.get("shot_index")
+        if raw_idx is None:
+            continue
+        try:
+            if int(raw_idx) != int(shot_index):
+                continue
+        except (TypeError, ValueError):
+            continue
+        if request_key and str(inputs.get("request_key") or "") != str(request_key):
+            continue
+        if provider and inputs.get("provider") and str(inputs.get("provider")) != str(provider):
+            continue
+        if script_revision and inputs.get("script_revision") and str(inputs.get("script_revision")) != str(script_revision):
+            continue
+        att_scope = inputs.get("scope") if isinstance(inputs.get("scope"), dict) else None
+        if not _scope_matches(att_scope, scope):
+            continue
+        matched.append((att, inputs))
+
+    if not matched:
+        return None
+
+    groups: dict[str, list[tuple[Path, dict]]] = {}
+    for att, inputs in matched:
+        gid = str(inputs.get("generation_id") or f"att:{att.name}")
+        groups.setdefault(gid, []).append((att, inputs))
+
+    leaves: list[tuple[Path, dict]] = []
+    for nodes in groups.values():
+        parents = {str(inp.get("parent_attempt_id") or "") for _, inp in nodes if inp.get("parent_attempt_id")}
+        leaf_cands = [(a, inp) for a, inp in nodes if a.name not in parents] or nodes
+        leaf_cands.sort(key=lambda item: (str(item[1].get("opened_at") or ""), item[0].name))
+        leaves.append(leaf_cands[-1])
+
+    leaves.sort(key=lambda item: (str(item[1].get("opened_at") or ""), item[0].name), reverse=True)
+    finished_states = {
+        va.STATE_ACCEPTED,
+        va.STATE_PROVIDER_FAILED,
+        va.STATE_REJECTED,
+        va.STATE_DRAFT,
+        va.STATE_READY,
+    }
+    for leaf, leaf_inputs in leaves:
+        state = va.current_state(leaf)
+        if state in finished_states:
+            continue
+        info = attempt_task_id(leaf)
+        task_id = info.get("task_id")
+        gen_id = str(info.get("generation_id") or leaf_inputs.get("generation_id") or "")
+        if state == va.STATE_COMMIT_UNCONFIRMED:
+            return {
+                "action": "commit_unconfirmed",
+                "attempt": leaf,
+                "state": state,
+                "task_id": str(task_id) if task_id else None,
+                "generation_id": gen_id,
+                "inputs": leaf_inputs,
+            }
+        if task_id:
+            return {
+                "action": "recover_same_task",
+                "attempt": leaf,
+                "state": state,
+                "task_id": str(task_id),
+                "task_id_source": info.get("source_event"),
+                "generation_id": gen_id,
+                "inputs": leaf_inputs,
+            }
+        if state in (
+            va.STATE_SUBMITTING,
+            va.STATE_SUBMISSION_UNKNOWN,
+            va.STATE_SUBMITTED,
+            va.STATE_RUNNING,
+            va.STATE_DOWNLOADED,
+            va.STATE_CHECKED,
+            va.STATE_IO_FAILED,
+            va.STATE_UNVERIFIED,
+        ):
+            return {
+                "action": "submission_unknown_no_id",
+                "attempt": leaf,
+                "state": state,
+                "task_id": None,
+                "generation_id": gen_id,
+                "inputs": leaf_inputs,
+            }
+    return None
+
+
 def resume_candidate_attempt(attempt: Path, *, service=None, adapter=None,
                              poll_interval: float = 0.5, timeout_sec: float = 60.0) -> dict:
     """恢复**指定已有任务**：查询原 task_id → 下载 → 验收采纳；**不新生成**。
@@ -1234,6 +1432,62 @@ async def _poll_video(
             f"  [Shot {shot_idx}] VIDEO_QC_RESUBMIT={qc_resubmit_limit} 在候选模式下 "
             f"deprecated_ignored：候选入口不自动重交（重生成需人工费用确认）")
     qc_resubmit_left = 0 if candidate_context is not None else max(0, qc_resubmit_limit)
+    def _emit_poll_ledger(outcome: str, error_code: str = "", attempt_dir: Path | None = None) -> None:
+        fz_dict = frozen_request.to_dict() if frozen_request is not None else {}
+        fz_src = dict(fz_dict.get("source") or {})
+        att = Path(attempt_dir) if attempt_dir is not None else (
+            trace_attempt if trace_attempt is not None else (
+                _candidate_attempt(shot_dir, candidate_context) if candidate_context is not None else None
+            )
+        )
+        att_inputs = {}
+        posts_cnt = None
+        if att is not None:
+            try:
+                from shared import enhancement_io as _eio_l
+                att_inputs = _eio_l.read_inputs(att) or {}
+                posts_cnt = attempt_task_id(att).get("submit_posts")
+            except Exception:
+                att_inputs = {}
+        _emit_video_ledger(
+            scope=dict(att_inputs.get("scope") or fz_src.get("scope") or (
+                getattr(candidate_context, "scope", None) or {}
+            )),
+            script_revision=str(att_inputs.get("script_revision") or fz_src.get("script_revision") or (
+                getattr(candidate_context, "script_revision", "") or ""
+            )),
+            shot_index=shot_idx,
+            provider=str(att_inputs.get("provider") or fz_dict.get("provider") or ""),
+            model_id=str(att_inputs.get("model_id") or fz_dict.get("model_id") or ""),
+            media_policy=str(fz_src.get("media_policy") or (fz_dict.get("parameters") or {}).get("media_mode") or ""),
+            request_key=str(att_inputs.get("request_key") or getattr(frozen_request, "request_key", "") or ""),
+            generation_id=str(att_inputs.get("generation_id") or ""),
+            task_id=str(task_id or ""),
+            attempt_id=att.name if att is not None else "",
+            action_type="recover" if att_inputs.get("parent_attempt_id") else "generate",
+            outcome=outcome,
+            error_code=error_code,
+            recovered=bool(att_inputs.get("parent_attempt_id")),
+            submit_posts=posts_cnt,
+            context=candidate_context,
+            request_id=str(att_inputs.get("generation_id") or task_id or ""),
+        )
+
+    def _transition_candidate_failure(target_state: str, kind: str, **fields) -> None:
+        if candidate_context is None:
+            return
+        from shared import video_attempts as _va
+        try:
+            _cand = _candidate_attempt(shot_dir, candidate_context)
+            cur = _va.current_state(_cand)
+            if cur == _va.STATE_SUBMITTED:
+                _va.transition(_cand, _va.STATE_RUNNING, kind="poll_started", task_id=task_id)
+                cur = _va.STATE_RUNNING
+            if cur == _va.STATE_RUNNING or target_state in _va.TRANSITIONS and cur in _va.TRANSITIONS[target_state]:
+                _va.transition(_cand, target_state, kind=kind, task_id=task_id, **fields)
+        except Exception:
+            pass
+
     async with semaphore:
         # 获取提交时绑定的 key 索引（计划 §V2：只能走 provider 的**公开**接口；
         # 旧写法读 adapter 私有 `_task_keys`（该属性不存在）被 except 吞掉后恒回退
@@ -1258,9 +1512,12 @@ async def _poll_video(
                 f"查询使用当前 key，**不得**据此宣称跨重启可恢复")
         if candidate_context is not None:
             from shared import enhancement_io as _eio
+            from shared import video_attempts as _va
             try:
-                _eio.append_event(Path(getattr(candidate_context, "attempt_dir", shot_dir)),
-                                  "task_binding", binding=_binding, task_id=task_id)
+                _cand_att = _candidate_attempt(shot_dir, candidate_context)
+                _eio.append_event(_cand_att, "task_binding", binding=_binding, task_id=task_id)
+                if _va.current_state(_cand_att) == _va.STATE_SUBMITTED:
+                    _va.transition(_cand_att, _va.STATE_RUNNING, kind="poll_started", task_id=task_id)
             except Exception:
                 pass
 
@@ -1384,6 +1641,7 @@ async def _poll_video(
                             except Exception as _exc:  # noqa: BLE001 - 记录失败不吞：写事件并继续
                                 logger.warn(f"  [Shot {shot_idx}] 候选 QC 裁决记录失败: {_exc}")
                             # 候选模式的坏片**保留**（rejected 保留供修订），只删生产哈希
+                            _emit_poll_ledger("rejected", "qc_failed", attempt_dir=_candidate_attempt(shot_dir, candidate_context))
                             return False
                         # 先持久化 attempt；失败保留坏片与错误，不静默回到旧 seed。
                         try:
@@ -1393,6 +1651,7 @@ async def _poll_video(
                             logger.warn(f"  [Shot {shot_idx}] QC 重抽状态保存失败，保留视频: {exc}")
                             _failed_videos[shot_idx].append({"attempt": -1, "task_id": task_id,
                                                             "error": f"qc_retry_state: {exc}"})
+                            _emit_poll_ledger("rejected", "qc_retry_state_failed")
                             return False
                         if trace_attempt is not None:
                             from shared import enhancement_io as eio
@@ -1404,6 +1663,7 @@ async def _poll_video(
                             video_path.unlink(missing_ok=True)
                         except OSError as exc:
                             logger.warn(f"  [Shot {shot_idx}] 坏片清理失败: {exc}")
+                        _emit_poll_ledger("rejected", "qc_failed")
                         return False
 
                     if candidate_context is not None:
@@ -1444,6 +1704,7 @@ async def _poll_video(
                             })
                             logger.warn(
                                 f"  [Shot {shot_idx}] clips/ 同步失败（不再静默忽略）: {_exc}")
+                            _emit_poll_ledger("io_failed", "clips_copy_failed")
                             return False
                         # 生产 attempt 的成功终态必须闭合（R2）：此前只在候选分支
                         # 迁 ACCEPTED，生产分支停在 checked——不在 TERMINAL_STATES 里，
@@ -1451,6 +1712,7 @@ async def _poll_video(
                         if trace_attempt is not None:
                             va.transition(trace_attempt, va.STATE_ACCEPTED, kind="accepted",
                                           task_id=task_id, clip_path=str(_clip_dst))
+                        _emit_poll_ledger("accepted")
                     else:
                         # 候选模式：副本进 attempt（生产 clips/ 一个字节都不动），
                         # 随后走**不可变 manifest → accepted 读回**的采纳事务。
@@ -1468,6 +1730,7 @@ async def _poll_video(
                                 "attempt": -1, "error": f"io_failed: 候选副本写入失败（{_exc}）",
                                 "task_id": task_id, "code": "io_failed",
                             })
+                            _emit_poll_ledger("io_failed", "candidate_copy_failed")
                             return False
 
                         _attempt = _candidate_attempt(shot_dir, candidate_context)
@@ -1482,6 +1745,7 @@ async def _poll_video(
                                 "error": f"candidate 未采纳（{_verdict['kind']}）：保留待修订",
                                 "task_id": task_id, "decision": _verdict["kind"],
                             })
+                            _emit_poll_ledger(_verdict["kind"], _verdict["kind"], attempt_dir=_attempt)
                             return False
                         try:
                             _accepted = accept_candidate_video(
@@ -1491,6 +1755,7 @@ async def _poll_video(
                                 coverage=_verdict["coverage"])
                             _va.transition(_attempt, _va.STATE_ACCEPTED, kind="accepted",
                                            manifest_sha256=_accepted["manifest"]["manifest_sha256"])
+                            _emit_poll_ledger("accepted", attempt_dir=_attempt)
                         except _eio.CommitUnconfirmedError as _exc:
                             # 替换后读回失败：不得声称旧值仍在，也不盲目回滚
                             _va.transition(_attempt, _va.STATE_COMMIT_UNCONFIRMED,
@@ -1498,12 +1763,14 @@ async def _poll_video(
                             _failed_videos[shot_idx].append({
                                 "attempt": -1, "error": f"commit_unconfirmed: {_exc}",
                                 "task_id": task_id, "code": "commit_unconfirmed"})
+                            _emit_poll_ledger("commit_unconfirmed", "commit_unconfirmed", attempt_dir=_attempt)
                             return False
                         except Exception as _exc:  # noqa: BLE001 - 验收/提交失败如实返回
                             _failed_videos[shot_idx].append({
                                 "attempt": -1, "error": f"accept_failed: {_exc}",
                                 "task_id": task_id,
                                 "code": getattr(_exc, "code", "") or "candidate_rejected"})
+                            _emit_poll_ledger("rejected", getattr(_exc, "code", "") or "candidate_rejected", attempt_dir=_attempt)
                             return False
 
                     return True
@@ -1514,6 +1781,9 @@ async def _poll_video(
                         consecutive_failures += 1
                         if consecutive_failures > max_retries:
                             _failed_videos[shot_idx].append({"attempt": -1, "error": f"连续失败 {consecutive_failures} 次，超过上限 {max_retries}", "task_id": task_id})
+                            from shared import video_attempts as _va
+                            _transition_candidate_failure(_va.STATE_IO_FAILED, "poll_retries_exhausted", error=str(err)[:300])
+                            _emit_poll_ledger("io_failed", "poll_retries_exhausted")
                             return False
                         if "429" in err or "rate" in err.lower():
                             wait = parse_retry_after(err)
@@ -1529,12 +1799,14 @@ async def _poll_video(
                         continue
                     # R1：远端明确失败（failed/expired）与下载失败必须分开记账，
                     # 否则 lifecycle 里全是 io_failed + unverified，无法归因。
+                    _fail_state, _remote_status = _classify_poll_failure(err)
                     if trace_attempt is not None:
-                        _fail_state, _remote_status = _classify_poll_failure(err)
                         va.transition(trace_attempt, _fail_state, kind="poll_failed",
                                       task_id=task_id, remote_status=_remote_status,
                                       error=str(err)[:500])
+                    _transition_candidate_failure(_fail_state, "poll_failed", remote_status=_remote_status, error=str(err)[:500])
                     _failed_videos[shot_idx].append({"attempt": -1, "error": err, "task_id": task_id})
+                    _emit_poll_ledger(_fail_state, _remote_status or "poll_failed")
                     # 2026-09-12 用户要求：终态失败打印完整报错（不走 fmt_err 截断）
                     logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 最终失败完整报错: {err}")
                     return False
@@ -1545,6 +1817,9 @@ async def _poll_video(
                     consecutive_failures += 1
                     if consecutive_failures > max_retries:
                         _failed_videos[shot_idx].append({"attempt": -1, "error": f"连续失败 {consecutive_failures} 次，超过上限 {max_retries}", "task_id": task_id})
+                        from shared import video_attempts as _va
+                        _transition_candidate_failure(_va.STATE_IO_FAILED, "poll_retries_exhausted", error=err_str[:300])
+                        _emit_poll_ledger("io_failed", "poll_retries_exhausted")
                         return False
                     if "429" in err_str or "rate" in err_str.lower():
                         wait = parse_retry_after(err_str)
@@ -1558,7 +1833,10 @@ async def _poll_video(
                         poll_interval = min(poll_interval * POLL_EXPONENTIAL_FACTOR, POLL_MAX_INTERVAL)
                         logger.verbose(f"  [Shot {shot_idx}] [{key_display}] Poll error (interval {poll_interval:.0f}s): {_fmt_err(err_str)}")
                     continue
+                _fail_state, _remote_status = _classify_poll_failure(err_str)
+                _transition_candidate_failure(_fail_state, "poll_exception", remote_status=_remote_status, error=err_str[:500])
                 _failed_videos[shot_idx].append({"attempt": -1, "error": err_str, "task_id": task_id})
+                _emit_poll_ledger(_fail_state, _remote_status or "poll_exception")
                 # 2026-09-12 用户要求：终态失败打印完整报错（不走 fmt_err 截断）
                 logger.verbose(f"  [Shot {shot_idx}] [{key_display}] 最终失败完整报错: {err_str}")
                 return False
@@ -1742,7 +2020,110 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                          problems=problems)
         return _fail(f"preflight: {problems}", code="preflight_blocked")
 
+    _recovery = find_recoverable_attempt(
+        package_root,
+        shot_index=idx,
+        request_key=frozen.request_key,
+        scope=scope,
+        script_revision=script_revision,
+        provider=prepared.provider,
+    )
+    if _recovery is not None:
+        _r_act = _recovery["action"]
+        _r_prev = Path(_recovery["attempt"])
+        _r_gid = str(_recovery.get("generation_id") or "")
+        _r_tid = _recovery.get("task_id")
+        if _r_act == "submission_unknown_no_id":
+            _emit_video_ledger(
+                scope=scope, script_revision=script_revision, shot_index=idx,
+                provider=prepared.provider, model_id=prepared.model_id,
+                media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+                request_key=frozen.request_key, content_key=prepared.content_key,
+                generation_id=_r_gid, attempt_id=_r_prev.name,
+                action_type="blocked_recovery", outcome="submission_unknown",
+                error_code="submission_unknown", submit_posts=attempt_task_id(_r_prev).get("submit_posts"),
+                context=candidate_context, request_id=_r_gid or prepared.request_id,
+            )
+            return _fail(
+                f"submission_unknown: 先前尝试 {_r_prev.name} 提交状态未知且无 task_id，禁止重发",
+                code="submission_unknown",
+            )
+        if _r_act == "commit_unconfirmed":
+            _emit_video_ledger(
+                scope=scope, script_revision=script_revision, shot_index=idx,
+                provider=prepared.provider, model_id=prepared.model_id,
+                media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+                request_key=frozen.request_key, content_key=prepared.content_key,
+                generation_id=_r_gid, task_id=str(_r_tid or ""), attempt_id=_r_prev.name,
+                action_type="blocked_recovery", outcome="commit_unconfirmed",
+                error_code="commit_unconfirmed", submit_posts=attempt_task_id(_r_prev).get("submit_posts"),
+                context=candidate_context, request_id=_r_gid or prepared.request_id,
+            )
+            return _fail(
+                f"commit_unconfirmed: 先前尝试 {_r_prev.name} 采纳未确认，禁止重发",
+                code="commit_unconfirmed",
+            )
+        if _r_act == "recover_same_task" and _r_tid:
+            _prev_inputs = dict(_recovery.get("inputs") or {})
+            _bind_fn = getattr(svc, "restore_task_binding", None)
+            if callable(_bind_fn):
+                _binding = {
+                    "status": "ok",
+                    "provider": _prev_inputs.get("provider"),
+                    "key_slot": _prev_inputs.get("key_slot"),
+                    "credential_profile_ref": _prev_inputs.get("credential_profile_ref"),
+                    "binding_version": 1,
+                }
+                if not _bind_fn(str(_r_tid), _binding):
+                    _emit_video_ledger(
+                        scope=scope, script_revision=script_revision, shot_index=idx,
+                        provider=prepared.provider, model_id=prepared.model_id,
+                        media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+                        request_key=frozen.request_key, content_key=prepared.content_key,
+                        generation_id=_r_gid, task_id=str(_r_tid), attempt_id=_r_prev.name,
+                        action_type="blocked_recovery", outcome="credential_binding_unavailable",
+                        error_code="credential_binding_unavailable",
+                        context=candidate_context, request_id=_r_gid or prepared.request_id,
+                    )
+                    return _fail(
+                        "credential_binding_unavailable: 历史任务凭据绑定不可解析，禁止猜测查询或重发",
+                        code="submission_unknown",
+                    )
+            _resumed = va.open_recovery_attempt(package_root, _r_prev, attempt_id=attempt_id)
+            if logger is not None:
+                logger.info(
+                    f"  [Shot {idx}] 命中可恢复任务 task_id={_r_tid} (prev={_r_prev.name} state={_recovery['state']})"
+                    f" -> 复用 {_resumed.name}（0 次新 POST）"
+                )
+            _emit_video_ledger(
+                scope=scope, script_revision=script_revision, shot_index=idx,
+                provider=prepared.provider, model_id=prepared.model_id,
+                media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+                request_key=frozen.request_key, content_key=prepared.content_key,
+                generation_id=_r_gid, task_id=str(_r_tid), attempt_id=_resumed.name,
+                action_type="recover", outcome="resumed_poll", recovered=True,
+                submit_posts=attempt_task_id(_resumed).get("submit_posts"),
+                context=candidate_context, request_id=_r_gid or prepared.request_id,
+            )
+            poll = _poll_video_production if production_output else _poll_video
+            return asyncio.create_task(
+                poll(video_adapter, poll_semaphore, req, str(_r_tid), idx,
+                     shot_dir, video_path, VIDEO_MAX_RETRIES, shot_hash,
+                     qc_resubmit_limit=0, shot=shot, characters=characters,
+                     candidate_context=None if production_output else candidate_context,
+                     frozen_request=frozen,
+                     **({"trace_attempt": _resumed} if production_output else {}))
+            )
+
     gen_id = va.new_generation_id()
+    prepared.source = {
+        **dict(prepared.source or {}),
+        "generation_id": gen_id,
+        "scope": scope,
+        "script_revision": script_revision,
+        "shot_index": idx,
+        "media_policy": str(prepared.media_mode or (prepared.source or {}).get("media_policy", "")),
+    }
     va.open_attempt(package_root, attempt_id, request_key=frozen.request_key, scope=scope,
                     script_revision=script_revision, provider=prepared.provider,
                     model_id=prepared.model_id, generation_id=gen_id,
@@ -1768,6 +2149,15 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
         # materialize 阶段拒收（素材字节变了/不可读）⇒ 可证未送出，零 POST
         va.transition(attempt, va.STATE_PROVIDER_FAILED, kind="submit_blocked",
                       error=f"{exc.code}: {exc.message}", generation_id=gen_id)
+        _emit_video_ledger(
+            scope=scope, script_revision=script_revision, shot_index=idx,
+            provider=prepared.provider, model_id=prepared.model_id,
+            media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+            request_key=frozen.request_key, content_key=prepared.content_key,
+            generation_id=gen_id, attempt_id=attempt.name,
+            action_type="generate", outcome="submit_blocked", error_code=exc.code,
+            context=candidate_context, request_id=prepared.request_id,
+        )
         return _fail(f"submit_blocked({exc.code}): {exc.message}", code=exc.code)
     except VideoSubmissionError as exc:
         state = (va.STATE_SUBMISSION_UNKNOWN
@@ -1782,18 +2172,53 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
         # 结构化分类**必须落到失败记录上**：不带 code 会被批处理记成默认
         # `candidate_submit_failed`，CLI 于是返回 3 而不是约定的 7（复核 P2-8）。
         _cls_code = submit_failure_code(exc.classification)
+        _emit_video_ledger(
+            scope=scope, script_revision=script_revision, shot_index=idx,
+            provider=prepared.provider, model_id=prepared.model_id,
+            media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+            request_key=frozen.request_key, content_key=prepared.content_key,
+            generation_id=gen_id, attempt_id=attempt.name,
+            action_type="generate", outcome=state, error_code=_cls_code,
+            submit_posts=1, context=candidate_context, request_id=prepared.request_id,
+        )
         return _fail(f"submit({exc.classification}): {exc}", code=_cls_code)
 
     except Exception as exc:
         va.transition(attempt, va.STATE_SUBMISSION_UNKNOWN, kind="submit_post",
                       task_id=None, generation_id=gen_id, classification=SUBMIT_UNKNOWN,
                       error=str(exc))
+        _emit_video_ledger(
+            scope=scope, script_revision=script_revision, shot_index=idx,
+            provider=prepared.provider, model_id=prepared.model_id,
+            media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+            request_key=frozen.request_key, content_key=prepared.content_key,
+            generation_id=gen_id, attempt_id=attempt.name,
+            action_type="generate", outcome="submission_unknown", error_code="submission_unknown",
+            submit_posts=1, context=candidate_context, request_id=prepared.request_id,
+        )
         return _fail(f"submission_unknown: {exc}", code="submission_unknown")
 
     task_id = str(task_id)
-    va.transition(attempt, va.STATE_SUBMITTED, kind="submit_post", task_id=task_id,
-                  generation_id=gen_id,
-                  credential_profile_ref=prepared.credential_profile_ref)
+    try:
+        va.transition(attempt, va.STATE_SUBMITTED, kind="submit_post", task_id=task_id,
+                      generation_id=gen_id,
+                      credential_profile_ref=prepared.credential_profile_ref)
+    except Exception as _persist_exc:
+        _saved_tid = attempt_task_id(attempt).get("task_id")
+        _err_code = "post_submit_persist_failed" if _saved_tid else "submission_unknown"
+        _emit_video_ledger(
+            scope=scope, script_revision=script_revision, shot_index=idx,
+            provider=prepared.provider, model_id=prepared.model_id,
+            media_policy=prepared.media_mode or (prepared.source or {}).get("media_policy", ""),
+            request_key=frozen.request_key, content_key=prepared.content_key,
+            generation_id=gen_id, task_id=str(_saved_tid or task_id), attempt_id=attempt.name,
+            action_type="generate", outcome=_err_code, error_code=_err_code,
+            submit_posts=1, context=candidate_context, request_id=prepared.request_id,
+        )
+        return _fail(
+            f"{_err_code}: task_id={task_id} 已创建但状态落盘失败（{_persist_exc}），禁止重发",
+            code=_err_code,
+        )
     poll = _poll_video_production if production_output else _poll_video
     task = asyncio.create_task(
         poll(video_adapter, poll_semaphore, req, task_id, idx,
@@ -1857,10 +2282,43 @@ async def _create_prepared_task_once(svc, prepared, candidate_context, *, attemp
     （``late_task_id``），恢复时按同一 ID 查询——主协程不因取消就断言没建任务。
     """
     import concurrent.futures
+    import contextvars
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1,
                                                      thread_name_prefix="video-submit")
-    cfut = executor.submit(svc.create_prepared_task, prepared, candidate_context)
+    _submit_fn = getattr(svc, "create_prepared_task", None)
+    _submit_mod = getattr(getattr(_submit_fn, "__func__", _submit_fn), "__module__", "")
+    _builtin_http = _submit_mod in (
+        "_video_gen.volcengine_provider",
+        "_video_gen.agent_plan_provider",
+    )
+
+    def _invoke():
+        if not _builtin_http:
+            from shared import request_events as _req_ev
+            _src = dict(getattr(prepared, "source", None) or {})
+            _sc = dict(_src.get("scope") or {})
+            _req_ev.emit_step02b(
+                "http_attempt",
+                context=candidate_context,
+                request_id=str(getattr(prepared, "request_id", "") or ""),
+                kind="video_submit",
+                provider=str(getattr(prepared, "provider", "") or ""),
+                model_id=str(getattr(prepared, "model_id", "") or ""),
+                media_policy=str(_src.get("media_policy") or getattr(prepared, "media_mode", "") or "unknown"),
+                request_key=str(getattr(prepared, "request_key", "") or ""),
+                content_key=str(getattr(prepared, "content_key", "") or ""),
+                shot_index=_src.get("shot_index", (getattr(prepared, "parameters", None) or {}).get("clip_index")),
+                operation_id=str(_src.get("generation_id") or generation_id or ""),
+                generation_id=str(_src.get("generation_id") or generation_id or ""),
+                work_id=_work_id_str(_sc),
+                chapter_scope=_chapter_scope_str(_sc),
+                script_revision=str(_src.get("script_revision") or ""),
+            )
+        return svc.create_prepared_task(prepared, candidate_context)
+
+    _cv_ctx = contextvars.copy_context()
+    cfut = executor.submit(_cv_ctx.run, _invoke)
 
     def _persist_late(fut) -> None:
         try:
