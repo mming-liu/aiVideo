@@ -332,12 +332,16 @@ def compile_graph(timeline: MergeTimeline, settings: EncodeSettings, *,
     for position, clip in enumerate(validated.clips):
         in_index = index_of[clip.stable_id]
         duration = float(clip.duration_sec)
+        pad_sec = max(0.0, float(getattr(clip, "pad_sec", 0.0) or 0.0))
         chain = (
             f"[{in_index}:v]fps={fps},"
             f"scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},setsar=1,format=yuv420p,"
             f"trim=duration={duration:.6f},setpts=PTS-STARTPTS,settb=AVTB"
         )
+        if pad_sec > 0:
+            # S05/M1 pad_video_tail：末帧克隆补齐，**不重复、不插黑**，整段人声保留
+            chain += f",tpad=stop_mode=clone:stop_duration={pad_sec:.6f}"
         effect = endpoints.get(position)
         if effect is not None and effect.kind == ENDPOINT_FADE_IN:
             chain += f",fade=t=in:st=0:d={min(float(effect.duration_sec), duration):.6f}"
@@ -366,8 +370,15 @@ def compile_graph(timeline: MergeTimeline, settings: EncodeSettings, *,
 
         tts_index = index_of.get(_tts_stable_id(validated, position))
         if tts_index is not None:
+            # S05/M1 gentle_atempo：轻度加速（≤1.12x）优先于 atrim；超窗但策略是
+            # fail/pad 时这里的 atempo 保持 1.0，绝不靠加速掩盖超长台词。
+            _track = next((t for t in validated.audio_tracks
+                           if t.kind == "shot_tts" and t.clip_index is not None
+                           and int(t.clip_index) == position), None)
+            _atempo = float(getattr(_track, "atempo", 1.0) or 1.0)
+            _pre = (f"atempo={_atempo:.6f}," if _atempo > 1.0 + 1e-9 else "")
             parts.append(
-                f"[{tts_index}:a]aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                f"[{tts_index}:a]{_pre}aformat=sample_fmts=fltp:channel_layouts=stereo,"
                 f"aresample={AUDIO_SAMPLE_RATE},atrim=duration={duration:.6f},"
                 f"asetpts=PTS-STARTPTS,apad=whole_dur={duration:.6f}[tts{position}]"
             )

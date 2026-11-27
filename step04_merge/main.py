@@ -110,6 +110,15 @@ except ImportError:
 from shared.audio_policy import resolve_audio_policy
 _AUDIO_POLICY = resolve_audio_policy()
 _AUDIO_MODE = _AUDIO_POLICY.effective_merge_mode
+# S05/M1：配音超窗策略（fail 默认；pad_video_tail / gentle_atempo / trim 显式开）
+from step04_merge.audio_fit import (ENV_LEGACY_ALLOW_TRIM, ENV_POLICY,
+                                    resolve_policy as _resolve_overflow_policy)
+try:
+    _AUDIO_OVERFLOW_POLICY = _resolve_overflow_policy(
+        os.getenv(ENV_POLICY, ""),
+        legacy_allow_trim=(os.getenv(ENV_LEGACY_ALLOW_TRIM, "0").strip() == "1"))
+except ValueError as _overflow_exc:
+    raise ValueError(str(_overflow_exc)) from None
 _m = re.match(r"(\d+)x(\d+)", _RES.strip())
 if not _m:
     raise ValueError(f"MERGE_RESOLUTION 格式错误（应为 WxH，如 720x1280）: {_RES!r}")
@@ -199,13 +208,19 @@ def _resolve_narration_path(index, resolve=None):
     return narration_audio_file(index)
 
 
-def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None, plan=None):
+def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None, plan=None,
+                           *, overflow_policy="fail",
+                           tolerance_sec=0.15):
   """tts_mix：逐镜对白轨的收集 + **消费侧身份核对**（返回与 `valid_shots` 等长的路径表）.
 
   三处显式失败（都不静默降级）：音轨超出实际视频时长、缺音轨、音轨与当前文本不符。
   判据必须与**生成器**（`gen_shot_tts`）一致：纯叙述镜不出对白轨——它的文字是字幕
   （旁白由独立旁白轨承担），旧实现按「`narration_segment` 非空」要求音轨，纯叙述镜
   必然被记成缺失 ⇒ tts_mix 整段失败（2026-09-30 复核第 7/8 轮）。
+
+  S05/M1：超窗是否直接失败由 `overflow_policy` 决定——`fail` 在此拒收；其余策略
+  由 `audio_fit.plan_audio_fit` 统一计算补齐/加速，随后在时间线上落实（本函数只收
+  集路径，不改时长）。
   """
   from shared.paths import audio_file
   from step01_script_gen.plan_feasibility import (
@@ -230,17 +245,23 @@ def _collect_shot_tts_paths(valid_shots, clips, script, resolve=None, plan=None)
       tts_paths.append(None)
       continue
     if _tp.exists() and _tp.stat().st_size > 10240:
-      # A TTS track longer than the actual clip cannot be silently atrim'd.
+      # A TTS track longer than the actual clip must not be silently atrim'd.
       if _i < len(clips):
         _clip_dur = get_media_duration(clips[_i])
         _tts_dur = get_media_duration(_tp)
-        if (_clip_dur > 0 and _tts_dur > _clip_dur + 0.05
-                and os.getenv("TTS_MIX_ALLOW_TRIM", "0").strip() != "1"):
-          raise RuntimeError(
-            f"shot {s.get('index')} TTS 超出实际视频时长: "
-            f"tts={_tts_dur:.2f}s clip={_clip_dur:.2f}s。请调整台词/停顿/镜头，"
-            "禁止 step04 静默截句。显式允许可设 TTS_MIX_ALLOW_TRIM=1。"
-          )
+        if _clip_dur > 0 and _tts_dur > _clip_dur + max(0.0, float(tolerance_sec)):
+          if str(overflow_policy) == "fail":
+            raise RuntimeError(
+              f"shot {s.get('index')} TTS 超出实际视频时长: "
+              f"tts={_tts_dur:.2f}s clip={_clip_dur:.2f}s。请调整台词/停顿/镜头，"
+              "禁止 step04 静默截句。显式允许可设 TTS_MIX_ALLOW_TRIM=1，"
+              "或用 MERGE_AUDIO_OVERFLOW_POLICY=pad_video_tail / gentle_atempo。"
+            )
+          if str(overflow_policy) == "trim":
+            _logger.warn(
+              "[WARN] shot %s TTS 超窗 %.2fs，按 TTS_MIX_ALLOW_TRIM/"
+              "MERGE_AUDIO_OVERFLOW_POLICY=trim **显式**截断（尾音会丢，已记录）"
+              % (s.get('index'), _tts_dur - _clip_dur))
       # 逐镜对白轨的**消费侧**身份核对（复核第 8 轮：这个类别也应覆盖）：
       # 拿不到角色音色配置，只核**正文**指纹；缺边车是历史产物 ⇒ 告警不失败。
       _split = _svp(s, _plan)
@@ -622,7 +643,8 @@ def _build_timeline(clips, durations, transitions, *, scope, script_revision,
                     tts_paths=None, narration_tracks=None, subtitle_plan=None,
                     overlays=(), source=None, fps=MERGE_FPS, clip_has_audio=None,
                     shot_digests=None, tts_identities=None,
-                    narration_identities=None) -> MergeTimeline:
+                    narration_identities=None, clip_pads=None,
+                    tts_atempo=None) -> MergeTimeline:
     """旧参数（路径表 + 旧 transitions 列表）→ :class:`MergeTimeline`（唯一装配点）."""
     clip_list = [Path(c) for c in clips]
     n = len(clip_list)
@@ -645,6 +667,7 @@ def _build_timeline(clips, durations, transitions, *, scope, script_revision,
             stable_id=stable_shot_id(scope, script_revision, kind, index, digest),
             path=clip_list[i], duration_sec=0.0,
             raw_duration_sec=float(durations[i]), frames=0,
+            pad_sec=float((clip_pads or {}).get(i, 0.0) or 0.0),
             has_audio=bool(clip_has_audio[i]) if clip_has_audio is not None
             else has_audio_stream(clip_list[i])))
 
@@ -656,6 +679,7 @@ def _build_timeline(clips, durations, transitions, *, scope, script_revision,
             tracks.append(TimelineAudioTrack(
                 kind="shot_tts", stable_id=f"{entries[i].stable_id}:tts",
                 path=Path(path), clip_index=i, gain=_TTS_BASE_GAIN,
+                atempo=float((tts_atempo or {}).get(i, 1.0) or 1.0),
                 identity=dict((tts_identities or {}).get(str(indexes[i])) or {}) or None))
     for track in (narration_tracks or []):
         tracks.append(TimelineAudioTrack(
@@ -1324,10 +1348,51 @@ def _run_merge(options, attempt):
   clip_kinds = ["hook" if (hook_clip is not None and i == 0) else "shot"
                 for i in range(len(clips))]
   shot_indexes = [int(s.get("index", i)) for i, s in enumerate(valid_shots)]
+
+  # 4.1 S05/M1：先按实测配音时长与**策略**决定每镜怎么处理时长倒挂，再建时间线。
+  # 术语：provisional（时间线）/ cut（硬切）/ clip（片段）保持既有含义。
+  tts_paths = None
+  tts_identities = {}
+  _audio_fit = None
+  _clip_pads: dict = {}
+  _tts_atempo: dict = {}
+  if _AUDIO_MODE == "tts_mix":
+    tts_paths = _collect_shot_tts_paths(
+        valid_shots, clips, script, resolve=audio_resolve, plan=plan,
+        overflow_policy=_AUDIO_OVERFLOW_POLICY)
+    if candidates is not None:
+      tts_identities = {str(_s.get("index", 0)):
+                        dict(candidates.dialogue_identity.get(int(_s.get("index", 0))) or {})
+                        for _s in valid_shots}
+    from step04_merge.audio_fit import plan_audio_fit
+    _tts_secs = [get_media_duration(_p) if _p else None for _p in tts_paths]
+    _audio_fit = plan_audio_fit(_tts_secs, target_durations, shot_indexes=shot_indexes,
+                                policy=_AUDIO_OVERFLOW_POLICY)
+    if not _audio_fit.ok:
+      _first = _audio_fit.blocked[0]
+      _logger.error("[AUDIO-FIT] 撞墙（策略 %s）：%s", _AUDIO_OVERFLOW_POLICY,
+                    _first.get("message"))
+      raise RenderError(str(_first.get("code") or "audio_overflow_truncated"),
+                        "audio", str(_first.get("message") or "配音超出视频窗口"),
+                        exit_code=2)
+    _clip_pads = dict(_audio_fit.pads)
+    _tts_atempo = dict(_audio_fit.atempo)
+    for _adj in _audio_fit.adjustments:
+      _logger.warn("[AUDIO-FIT] clip %d(shot %s) %s：clip=%.2fs audio=%.2fs "
+                   "overflow=%.2fs applied=%.3f%s" % (
+                       _adj.clip_index, _adj.shot_index, _adj.action,
+                       _adj.clip_sec, _adj.audio_sec, _adj.overflow_sec,
+                       _adj.applied_sec, ("（截断，已显式允许）" if _adj.action == "trim" else "")))
+    # 补齐/加速后的目标时长进入同一套时间线算术（窗口/转场/字幕都按它）
+    target_durations = list(_audio_fit.clip_durations)
+    _logger.info("[AUDIO-FIT] policy=%s adjustments=%d pads=%d atempo=%d"
+                 % (_AUDIO_OVERFLOW_POLICY, len(_audio_fit.adjustments),
+                    len(_clip_pads), len(_tts_atempo)))
+
   provisional = validate_timeline(_build_timeline(
     clips, target_durations, native_transitions, scope=scope, script_revision=script_revision,
     clip_kinds=clip_kinds, shot_indexes=shot_indexes, audio_mode=_AUDIO_MODE,
-    clip_has_audio=clip_audio_flags, shot_digests=shot_digests))
+    clip_has_audio=clip_audio_flags, shot_digests=shot_digests, clip_pads=_clip_pads))
   clip_windows = [(w.start_sec, w.end_sec) for w in provisional.windows]
   audio_duration = provisional.total_duration_sec
   _logger.info(f"[INFO] Total video duration (after transition overlap): {audio_duration:.2f}s")
@@ -1364,17 +1429,6 @@ def _run_merge(options, attempt):
   _logger.separator("=", 60)
   _logger.info(f"[INFO] Merge: 转场 + 拼接 + 字幕 + 调色（音频模式: {_AUDIO_MODE}）")
   _logger.separator("=", 60)
-
-  # tts_mix：为每个镜头找 step03 的 TTS 音频（audio/shot_{idx}.mp3 或候选清单）
-  tts_paths = None
-  tts_identities = {}
-  if _AUDIO_MODE == "tts_mix":
-    tts_paths = _collect_shot_tts_paths(valid_shots, clips, script,
-                                        resolve=audio_resolve, plan=plan)
-    if candidates is not None:
-      tts_identities = {str(_s.get("index", 0)):
-                        dict(candidates.dialogue_identity.get(int(_s.get("index", 0))) or {})
-                        for _s in valid_shots}
 
   # 图外旁白：独立 TTS 轨叠在最终音轨之上（落点由 voice_units 单源给出）
   narration_tracks = _collect_narration_tracks(
@@ -1459,6 +1513,7 @@ def _run_merge(options, attempt):
     tts_paths=tts_paths, narration_tracks=narration_tracks, subtitle_plan=subtitle_plan,
     overlays=overlays, clip_has_audio=clip_audio_flags, shot_digests=shot_digests,
     tts_identities=tts_identities, narration_identities=narration_identities,
+    clip_pads=_clip_pads, tts_atempo=_tts_atempo,
     source={"clip_source": CLIP_SOURCE,
             "video_candidates": str(options.video_candidates) if options and options.video_candidates else None,
             "audio_candidates": str(options.audio_candidates) if options and options.audio_candidates else None,
@@ -1640,6 +1695,8 @@ def _run_merge(options, attempt):
               "subset": only_indices is not None,
           },
           "audio_mode": str(_AUDIO_MODE),
+          # S05/M1：超窗策略与逐条调整（补齐/加速/显式截断都留痕，不静默）
+          "audio_fit": (_audio_fit.to_dict() if _audio_fit is not None else None),
       }
       _attach(_payload, script, stage="step04.product_acceptance")
       if only_indices is not None:

@@ -173,12 +173,12 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
         publish_attempt(ctx, artifacts, status="completed" if not unresolved else "partial",
                         checks=checks)
         # S05：用实际音频探测时长，把所需/实际/窗口/冲突写入 attempt（不猜）。
+        from step03_tts_audio.shot_tts import _compute_voice_windows
+        _wins, _ = _compute_voice_windows(script, script.get("shots") or [])
+        _windows = {str(k): max(0.0, e - s) for k, (s, e) in _wins.items()}
+        _paths = {a.unit_id: str(a.path) for a in artifacts}
         try:
             from shared.voice_preparation import build_voice_preparation
-            from step03_tts_audio.shot_tts import _compute_voice_windows
-            _wins, _ = _compute_voice_windows(script, script.get("shots") or [])
-            _windows = {str(k): max(0.0, e - s) for k, (s, e) in _wins.items()}
-            _paths = {a.unit_id: str(a.path) for a in artifacts}
             _report = build_voice_preparation(
                 script, scope=scope, windows=_windows, audio_paths=_paths,
                 require_audio_artifacts=True, plan=plan)
@@ -188,6 +188,18 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
         except Exception as _vp_exc:  # noqa: BLE001 - 报告失败不掩盖合成结果，但必须可见
             eio.append_event(attempt, "voice_preparation_failed",
                              message=str(_vp_exc)[:500])
+        # S05/A2：候选运行同样落实测时长审计（Step02b 候选/正式 plan 都可读）
+        try:
+            _write_duration_audit(
+                script=script, gen_script=script, plan=plan, scope=scope,
+                revision=revision,
+                provider=str(getattr(provider, "PROVIDER_NAME", "") or tts_config.PROVIDER),
+                target_dir=attempt,
+                audio_mode=str(_policy.effective_merge_mode),
+                units=units, only_indices=only_indices)
+        except Exception as _audit_exc:  # noqa: BLE001
+            eio.append_event(attempt, "duration_audit_failed",
+                             message=str(_audit_exc)[:500])
         # Step E：候选运行也是**真实合成**，但状态落 attempt 内（不写正式章目录）。
         try:
             _paths = {a.unit_id: str(a.path) for a in artifacts}
@@ -208,6 +220,72 @@ def _run_candidate(*, candidate_root, attempt_id, experiment_id, scope, revision
             eio.append_event(attempt, "voice_state_failed",
                              message=str(_vs_exc)[:500])
         return artifacts
+
+
+def _write_duration_audit(*, script: dict, gen_script: dict, plan: dict | None,
+                          scope: dict, revision: str, provider: str,
+                          target_dir, audio_mode: str = "",
+                          units: list | None = None,
+                          only_indices=None) -> dict:
+    """S05/A2：实测音频时长对账 → `step03_duration_audit.json`（供 Step02b 消费）.
+
+    单元身份与窗口来自**生产构造器** `build_speech_units`（与生成/消费同一判据）；
+    时长由 `shared.voice_preparation._probe_duration`（ffprobe）实测，未测到就记
+    ``state=prepared``（不冒充超窗证据）。本函数只写本次运行自己的落点。
+    """
+    from shared.json_io import atomic_dump_json
+    from shared.paths import audio_file, narration_audio_file
+    from shared.voice_preparation import _probe_duration, build_duration_audit
+    from step01_script_gen.timecode import _estimate_duration
+    from step03_tts_audio.shot_tts import _compute_voice_windows, build_speech_units
+
+    if units is None:
+        units = build_speech_units(gen_script, scope=scope, script_revision=revision,
+                                   provider_name=provider, only_indices=only_indices,
+                                   full_shots=script.get("shots"), plan=plan)
+    wins, _ = _compute_voice_windows(script, script.get("shots") or [])
+    window_durs = {str(k): max(0.0, float(e) - float(s)) for k, (s, e) in wins.items()}
+    rows: list[dict] = []
+    for unit in units:
+        idx = int(getattr(unit, "source_index", 0) or 0)
+        if str(getattr(unit, "kind", "")) == "dialogue":
+            path = audio_file(idx)
+        else:
+            path = narration_audio_file(idx)
+        measured, why = (_probe_duration(str(path)) if path.is_file()
+                         else (None, "audio_missing"))
+        window = window_durs.get(str(idx))
+        if window is None:
+            planned = getattr(unit, "planned_window", None)
+            if isinstance(planned, (list, tuple)) and len(planned) >= 2:
+                window = max(0.0, float(planned[1]) - float(planned[0]))
+        text = str(getattr(unit, "text", "") or "")
+        rows.append({
+            "unit_id": unit.unit_id,
+            "kind": ("narration" if str(getattr(unit, "kind", "")) == "narration"
+                     else "tts_dialogue"),
+            "shot_index": idx,
+            "speaker": str(getattr(unit, "voice_role", "") or ""),
+            "text": text,
+            "declared_sec": round(float(_estimate_duration(text)), 6) if text else None,
+            "actual_sec": measured,
+            "available_window_sec": window,
+            "state": "confirmed" if measured is not None else "prepared",
+            "measurement": ("ffprobe" if measured is not None else why),
+            "audio_path": str(path) if path.is_file() else "",
+        })
+    audit = build_duration_audit(rows, script=gen_script, scope=scope,
+                                 script_revision=revision, audio_mode=audio_mode,
+                                 provider=provider)
+    target = Path(target_dir) / "step03_duration_audit.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_dump_json(target, audit, ensure_ascii=False, indent=2)
+    _logger.info("[STEP03-DURATION] units=%d measured=%d overflow_shots=%d "
+                 "max_overflow=%.2fs path=%s"
+                 % (audit["summary"]["unit_count"], audit["summary"]["measured_units"],
+                    audit["summary"]["overflow_shot_count"],
+                    audit["summary"]["max_overflow_sec"], target))
+    return audit
 
 
 def _voice_state_tracks(required: list, narr_entries: list) -> list[dict]:
@@ -610,6 +688,18 @@ def main(options=None):
         sys.exit(1)
     _logger.info(
         f"[OK] TTS 完成：对白轨 {len(required)} 镜、旁白轨 {len(_narr_entries)} 条音频齐全")
+
+    # S05/A2：实测时长对账（Step02b 生视频前消费；超窗提前暴露，不盲生短视频）
+    try:
+        _write_duration_audit(
+            script=script, gen_script=gen_script,
+            plan=_plan_for_script(gen_script, scope=scope, script_revision=revision),
+            scope=scope, revision=revision, provider=tts_config.PROVIDER,
+            target_dir=CHAPTER_DIR, audio_mode=_policy.effective_merge_mode,
+            only_indices=only_indices)
+    except Exception as _audit_exc:  # noqa: BLE001 - 审计失败不掩盖已生成音轨
+        _logger.warn("[WARN] step03_duration_audit.json 写入失败（Step02b 将无实测下限）: %s"
+                     % _audit_exc)
 
     # Step E：真实合成完成且音轨齐全后，把章节声音状态显式升级为 confirmed
     # （含每条音轨的文件摘要与绑定 revision）。时长不可读/文件为空/摘要不可算

@@ -420,6 +420,110 @@ def _execution_requirements(shot: dict, script: dict, visual_plan: dict | None,
         model_id=model_id, media_policy=media_policy)
 
 
+def _audio_overflow_tolerance() -> float:
+    """配音超窗容差（秒）：≤ 容差视为帧量化误差，不阻断生视频."""
+    raw = os.getenv("STEP02B_AUDIO_OVERFLOW_TOLERANCE", "0.15").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.15
+    return value if value >= 0 else 0.15
+
+
+def _load_duration_audit(shots_dir: Path, *, audit: dict | None = None) -> tuple[dict | None, str]:
+    """读 Step03 实测时长审计（`step03_duration_audit.json`）；不猜、不找"最新".
+
+    查找顺序：显式 ``audit`` → 章目录（正式落点） → ``shots_dir`` 的父目录
+    （候选/实验根的同层落点）。两处都没有 ⇒ ``(None, "")``，计划里如实记无实测下限。
+    """
+    if isinstance(audit, dict) and audit:
+        return audit, "explicit"
+    candidates: list[Path] = []
+    try:
+        candidates.append(Path(chapter_dir()) / "step03_duration_audit.json")
+    except Exception:
+        pass
+    candidates.append(Path(shots_dir).parent / "step03_duration_audit.json")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict) and data.get("schema") == "step03_duration_audit.v1":
+            return data, str(path)
+    return None, ""
+
+
+def _shot_audio_audit(audit: dict | None, shot_index) -> dict | None:
+    """某镜的实测音频下限（只认 confirmed 实测；planned-only 不冒充超窗证据）."""
+    if not isinstance(audit, dict):
+        return None
+    shots = audit.get("shots")
+    if not isinstance(shots, dict):
+        return None
+    entry = shots.get(str(shot_index))
+    return dict(entry) if isinstance(entry, dict) else None
+
+
+def _audio_overflow(shot_audit: dict | None, shot: dict, tolerance: float) -> dict | None:
+    """实测需要时长 > 计划镜头时长 + 容差 ⇒ 返回结构化超窗（否则 None）."""
+    if not shot_audit:
+        return None
+    need = shot_audit.get("audio_need_sec")
+    planned = shot.get("duration_sec") or shot.get("duration")
+    try:
+        need = float(need) if need is not None else None
+        planned = float(planned) if planned is not None else None
+    except (TypeError, ValueError):
+        return None
+    if need is None or planned is None or planned <= 0:
+        return None
+    overflow = need - planned
+    if overflow <= max(0.0, tolerance) + 1e-9:
+        return None
+    return {
+        "overflow_sec": round(overflow, 6),
+        "recommended_shot_dur": round(max(float(shot_audit.get("recommended_shot_dur") or 0.0),
+                                          need), 3),
+        "message": ("镜头 %s 实测配音 %.2fs 超过计划时长 %.2fs（+%.2fs，容差 %.2fs）——"
+                    "先改台词/拆镜或按推荐时长重排 step01，禁止带着超长台词生短视频"
+                    % (shot.get("index"), need, planned, overflow, tolerance)),
+    }
+
+
+def _assert_audio_fit(script: dict, shots_dir: Path, only_indices,
+                      *, duration_audit: dict | None = None) -> dict:
+    """生视频前核对实测配音下限：超窗镜头**启动即拒**（避免盲生短视频后截字）.
+
+    返回``{"source", "tolerance_sec", "checked", "blocked"}``；无审计文件时
+    ``source=None``（如实记"无实测下限"，不假装已核）。
+    """
+    audit, source = _load_duration_audit(shots_dir, audit=duration_audit)
+    tolerance = _audio_overflow_tolerance()
+    report = {"source": source or None, "tolerance_sec": tolerance,
+              "checked": 0, "blocked": []}
+    if not audit:
+        return report
+    hook = script.get("hook")
+    queue = ([dict(hook, index=0)] if isinstance(hook, dict) else []) + list(
+        script.get("shots") or [])
+    for shot in queue:
+        idx = shot.get("index")
+        if only_indices is not None and idx not in only_indices:
+            continue
+        info = _shot_audio_audit(audit, idx)
+        if not info:
+            continue
+        report["checked"] += 1
+        problem = _audio_overflow(info, shot, tolerance)
+        if problem:
+            report["blocked"].append({"shot_index": idx, **problem,
+                                      "audio_audit": info})
+    return report
+
+
 def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                chapter: int, provider: str, model_id: str | None = None,
                precheck_ledger: Path | None = None,
@@ -427,7 +531,8 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                ref_work_dir: Path | None = None,
                scope: dict | None = None,
                policy_source: str | None = None,
-               qa_report: dict | None = None) -> dict:
+               qa_report: dict | None = None,
+               duration_audit: dict | None = None) -> dict:
     """只组装**冻结请求 + 结构预检**（零网络、零生成 POST，§V2「plan-only+force 仍零网络」）。
 
     M4：image 模式下额外做首尾帧 SHA-256 / 差异度预检；给了
@@ -482,6 +587,10 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
     shots = list(script.get("shots") or [])
     hook = script.get("hook")
     queue = ([dict(hook, index=0)] if hook else []) + shots
+    # S05/A2：消费 Step03 的实测时长审计（有就读；没有就按"无实测下限"如实记账）。
+    _audio_audit, _audit_source = _load_duration_audit(shots_dir, audit=duration_audit)
+    _audio_tolerance = _audio_overflow_tolerance()
+    _audit_shots: dict = {}
     for shot in queue:
         idx = shot.get("index")
         if only_indices is not None and idx not in only_indices:
@@ -498,6 +607,20 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             entry.update({"verdict": "blocked", "code": _p_conflict["code"],
                           "field_path": _p_conflict["field_path"],
                           "message": _p_conflict["message"]})
+            entries.append(entry)
+            continue
+        # S05/A2：实测配音超出本镜时长 ⇒ 生视频前显式阻断（不带着超长台词盲生短视频）
+        _shot_audit = _shot_audio_audit(_audio_audit, idx)
+        _overflow = _audio_overflow(_shot_audit, shot, _audio_tolerance)
+        if _shot_audit:
+            entry["audio_audit"] = _shot_audit
+            _audit_shots[str(idx)] = _shot_audit
+        if _overflow:
+            entry.update({"verdict": "blocked", "code": "audio_overflow",
+                          "field_path": f"shots[{idx}].duration_sec",
+                          "message": _overflow["message"],
+                          "recommended_shot_dur": _overflow["recommended_shot_dur"],
+                          "needed_change": "改台词/拆镜，或按推荐时长重排 step01（不截字）"})
             entries.append(entry)
             continue
         if mode == "image":
@@ -626,10 +749,18 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
     ready = [e for e in entries if e.get("verdict") == "ready"]
     blocked = [e for e in entries if e.get("verdict") == "blocked"]
     pending = [e for e in entries if e.get("verdict") == "pending"]
+    _audio_summary = {
+        "source": _audit_source or None,
+        "tolerance_sec": _audio_tolerance,
+        "shots": _audit_shots,
+        "overflow": sorted(str(e.get("shot_index")) for e in entries
+                           if e.get("code") == "audio_overflow"),
+    }
     return {"schema_version": "video_reroll_plan.v1", "chapter": chapter, "provider": provider,
             "model_id": resolved_model,
             "shots": entries, "ready": len(ready), "blocked": len(blocked),
             "pending": len(pending),
+            "audio_audit": _audio_summary,
             "estimated_generations": sum(int(e.get("generations") or 0) for e in entries),
             "network_calls": 0}
 
@@ -1070,6 +1201,20 @@ def main(options=None):
         raise SystemExit(_plan_only(options, script, shots_dir, scope["chapter"],
                                     scope=scope, policy_source=_policy_source,
                                     qa_report=_qa_report))
+
+    # S05/A2：实测配音超窗的镜头不允许生视频（不截字，也不盲生短视频）
+    _audio_fit = _assert_audio_fit(script, shots_dir, only_indices)
+    if _audio_fit["source"]:
+        logger.info("[AUDIO-FIT] 实测配音下限：核 %d 镜，超窗 %d 镜（来源 %s）"
+                    % (_audio_fit["checked"], len(_audio_fit["blocked"]),
+                       _audio_fit["source"]))
+    else:
+        logger.warn("[AUDIO-FIT] 未找到 step03_duration_audit.json：本次生视频**无实测"
+                    "配音下限**（先跑 Step03 才能按真实时长前置拦截超窗）")
+    if _audio_fit["blocked"]:
+        for item in _audio_fit["blocked"]:
+            print(f"[ERROR] {item['message']}", flush=True)
+        raise SystemExit(2)
 
     # r2v/text 模式不需要帧图片（r2v 参考图来自角色肖像注册表，非帧）
     if REFERENCE_MODE in ("r2v", "text"):

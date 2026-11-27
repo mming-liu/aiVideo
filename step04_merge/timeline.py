@@ -109,6 +109,9 @@ class ClipEntry:
     sha256: str | None = None
     has_audio: bool = False
     source: str = "legacy"         # "legacy" | "video_candidates"
+    #: S05/M1 ``pad_video_tail``：本镜末帧克隆补齐秒数（0 = 不补）。时长按
+    #: ``raw_duration_sec + pad_sec`` 量化，视频链用 tpad 克隆末帧补出来。
+    pad_sec: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,8 @@ class TimelineAudioTrack:
     sha256: str | None = None
     identity: dict | None = None
     source: str = "legacy"
+    #: S05/M1 ``gentle_atempo``：逐镜对白轨的轻度加速比（1.0 = 不加速，上限 1.12）。
+    atempo: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -475,7 +480,8 @@ def validate_timeline(timeline: MergeTimeline) -> MergeTimeline:
             raise TimelineError("invalid_clip_duration",
                                 f"clip 时长非法（探测失败/为 0）: {clip.path} "
                                 f"raw={clip.raw_duration_sec!r}", path=str(clip.path))
-        frames, normalized = normalize_duration(float(clip.raw_duration_sec), fps)
+        frames, normalized = normalize_duration(
+            float(clip.raw_duration_sec) + max(0.0, float(clip.pad_sec or 0.0)), fps)
         clips.append(replace(clip, frames=frames, duration_sec=round(normalized, 9)))
 
     boundaries = quantize_transitions(timeline.boundary_transitions, clips, fps)
@@ -543,6 +549,13 @@ def _validate_audio_tracks(timeline: MergeTimeline, clips, windows, total: float
             if track.clip_index is None or not (0 <= int(track.clip_index) < len(clips)):
                 raise TimelineError("audio_track_without_clip",
                                     f"逐镜 TTS 音轨未绑定合法 clip: {track.stable_id}")
+            from step04_merge.audio_fit import DEFAULT_MAX_ATEMPO
+            atempo = float(getattr(track, "atempo", 1.0) or 1.0)
+            if not (1.0 - 1e-9 <= atempo <= DEFAULT_MAX_ATEMPO + 1e-9):
+                raise TimelineError(
+                    "invalid_atempo",
+                    f"逐镜 TTS 加速比 {atempo} 超出 [1.0, {DEFAULT_MAX_ATEMPO}]"
+                    "（不做失真加速掩盖超长台词）: %s" % track.stable_id)
         else:
             start, end = track.start_sec, track.end_sec
             if not (isinstance(start, (int, float)) and isinstance(end, (int, float))

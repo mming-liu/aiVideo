@@ -316,6 +316,120 @@ def build_voice_preparation(script: dict, *, scope: dict, windows: dict | None =
     }
 
 
+DURATION_AUDIT_SCHEMA = "step03_duration_audit.v1"
+
+
+def build_duration_audit(units: list, *, script: dict, scope: dict | None = None,
+                         script_revision: str = "", audio_mode: str = "",
+                         provider: str = "") -> dict:
+    """把**声音单元**（已带实测时长）投影成 `step03_duration_audit.json`（S05/A2）.
+
+    ``units`` 是每个声音单元一条 dict，字段与 `build_voice_preparation` 的 units
+    同口径（``unit_id/kind/shot_index/declared_sec/actual_sec/available_window_sec/
+    state/text/speaker/audio_path/measurement``），时长由调用方经 ffprobe 实测填入。
+
+    只做**投影**：不重新估时、不猜；逐镜给 ``audio_need_sec``（实测优先，未实测为
+    None）与 ``recommended_shot_dur``（= max(计划时长, 实测需要时长)），供 Step02b
+    在生视频前判断"台词塞不进这一镜"。``measured_units`` 只统计 state=confirmed
+    的单元——**未实测不冒充超窗证据**。
+    """
+    shots_by_index = {int(s.get("index", 0)): s
+                      for s in (script.get("shots") or []) if isinstance(s, dict)}
+    units_out: list[dict] = []
+    shots_out: dict = {}
+    measured_count = 0
+    overflow_units: list[str] = []
+    for unit in units or []:
+        if not isinstance(unit, dict):
+            continue
+        shot_index = unit.get("shot_index")
+        try:
+            shot_key = int(shot_index) if shot_index is not None else None
+        except (TypeError, ValueError):
+            shot_key = None
+        shot = shots_by_index.get(shot_key) or {}
+        planned_dur = _number(shot.get("duration_sec") or shot.get("duration"))
+        actual = _number(unit.get("actual_sec"))
+        declared = _number(unit.get("declared_sec"))
+        window = _number(unit.get("available_window_sec"))
+        if window is None:
+            window = _number(unit.get("window_sec"))
+        need = actual if actual is not None else None
+        overflow = (round(need - window, 6)
+                    if need is not None and window is not None else None)
+        measured = bool(unit.get("state") == "confirmed" and actual is not None)
+        if measured:
+            measured_count += 1
+        if overflow is not None and overflow > 1e-9:
+            overflow_units.append(str(unit.get("unit_id")))
+        base = max([v for v in (planned_dur, need, declared) if v is not None] or [0.0])
+        units_out.append({
+            "unit_id": unit.get("unit_id"),
+            "kind": unit.get("kind"),
+            "shot_index": shot_key,
+            "speaker": unit.get("speaker") or "",
+            "chars": len(str(unit.get("text") or "")),
+            "planned_est_sec": declared,
+            "actual_wav_sec": actual,
+            "window_sec": window,
+            "overflow_sec": overflow,
+            "recommended_shot_dur": round(float(base), 3),
+            "state": unit.get("state"),
+            "measurement": unit.get("measurement"),
+            "audio_path": unit.get("audio_path") or "",
+        })
+        if shot_key is None:
+            continue
+        entry = shots_out.setdefault(str(shot_key), {
+            "planned_dur_sec": planned_dur,
+            "audio_need_sec": None,
+            "declared_need_sec": 0.0,
+            "window_sec": window,
+            "overflow_sec": None,
+            "recommended_shot_dur": planned_dur,
+            "unit_ids": [],
+            "measured": False,
+        })
+        entry["unit_ids"].append(unit.get("unit_id"))
+        if need is not None:
+            entry["audio_need_sec"] = round(max(entry["audio_need_sec"] or 0.0, need), 6)
+            entry["measured"] = True
+        if declared is not None:
+            entry["declared_need_sec"] = round(max(entry["declared_need_sec"] or 0.0,
+                                                  declared), 6)
+        if window is not None:
+            entry["window_sec"] = window
+    for key, entry in shots_out.items():
+        need = entry.get("audio_need_sec")
+        window = entry.get("window_sec")
+        if need is not None and window is not None:
+            entry["overflow_sec"] = round(need - window, 6)
+        base = max([v for v in (entry.get("planned_dur_sec"), need,
+                                entry.get("declared_need_sec")) if v] or [0.0])
+        entry["recommended_shot_dur"] = round(float(base), 3)
+    max_overflow = max([u["overflow_sec"] for u in units_out
+                        if u.get("overflow_sec") is not None] or [0.0])
+    return {
+        "schema": DURATION_AUDIT_SCHEMA,
+        "source": "step03.speech_units",
+        "scope": dict(scope or {}),
+        "script_revision": str(script_revision or script.get("script_revision") or ""),
+        "audio_mode": str(audio_mode or ""),
+        "provider": str(provider or ""),
+        "units": units_out,
+        "shots": shots_out,
+        "summary": {
+            "unit_count": len(units_out),
+            "measured_units": measured_count,
+            "overflow_units": sorted(overflow_units),
+            "overflow_shot_count": sum(
+                1 for e in shots_out.values() if (e.get("overflow_sec") or 0) > 1e-9),
+            "max_overflow_sec": round(float(max_overflow), 6),
+        },
+        "provider_calls": 0,
+    }
+
+
 def measure_units(report: dict, audio_paths: dict) -> dict:
     """对已有报告回填实测时长（只探测本地文件，不调用 TTS）."""
     import copy
@@ -359,6 +473,7 @@ def feedback_for_conflicts(report: dict) -> list[dict]:
 
 
 __all__ = [
-    "SCHEMA", "NO_AUDIO_CONFIRMATION", "build_voice_preparation", "measure_units",
+    "DURATION_AUDIT_SCHEMA", "SCHEMA", "NO_AUDIO_CONFIRMATION",
+    "build_duration_audit", "build_voice_preparation", "measure_units",
     "feedback_for_conflicts",
 ]
