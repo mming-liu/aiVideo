@@ -3,6 +3,9 @@
 - **分支**：`codex/downstream-safe-delivery`
 - **隔离 worktree**：`C:/myFloders/git/aiVideo/.tmp/worktrees/downstream-safe-delivery`
 - **冻结基线 SHA**：`3aa86304525903c3a8bb3a1d52cdbb93c2864431`
+- **本包交付状态（2026-11-27）**：S01–S07 全部完成并提交（最新提交见 `git log`），
+  下游全量回归 `290 passed / 6 skipped`；干净副本（`git archive` 仅受控源码）同套新测试
+  `62 passed`。**全程 0 次外部模型调用**（TTS/视频均本地桩 + FFmpeg 合成媒体）。
 - **总体目标（零模型调用）**：在隔离环境中，通过真实 `Step03 → Step02b → Step04` 入口，证明声音完整、请求身份一致、恢复不重复提交、失败不覆盖基线，并产出可播放的合成测试片与完整报告。
 
 ## 一、S01 基线与生效配置快照（非敏感）
@@ -168,18 +171,42 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 4. **失败不覆盖基线**：移走 shot 2 的 video 后重跑 Step04 → 非零退出且日志点明缺片段；
    既有 `final.mp4` 的 sha256 与 `step04_quality.json` 内容**原样保留**。
 
-**干净副本复跑**：`git archive HEAD` 解到 `.tmp/s07-clean`（仅受控源码，无 `.env.keys`、
-无 `output/`），同一组新测试（S01/S02/S03/S04/S05/S06/S07 九份文件）在该副本内独立通过。
+**干净副本复跑**：`git archive HEAD`（提交 `ea7ea2d`）解到 `.tmp/s07-clean`（仅受控源码，
+无 `.env.keys`、无 `output/`），同一组新测试（S01/S02/S03/S04/S05/S06/S07 九份文件）
+在该副本内独立通过：`62 passed`（77.6s）。
 
 **证据（2026-11-27）**：
 - `pytest tests/integration/test_downstream_safe_delivery_s07.py -q` → `1 passed`（52s）。
-- 干净副本：`.tmp/s07-clean` 内同一命令组合 → 见交付记录末尾读数。
+- 下游全量回归（本 worktree）：
+  `pytest tests/tts tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/integration/test_s01_isolation_baseline.py tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py`
+  → **`290 passed / 6 skipped`**（skip 均为缺正式 `output/` 产物的既有用例）。
+- 干净副本：`62 passed`（同上九份文件）。
 - 限制：三阶段均为**桩 provider + 本地合成媒体**，未运行真实 TTS/视频模型；成片的
   音质、唇形/动作质量、平台播放在本轮未验证；视频桩只证明"请求→响应→产物→合并"链路。
+  0 元探针的黑场/静帧/首帧阈值与 M3 响度判据也只在本地合成片上验证过，真实生成片需要
+  第一轮真跑后校准（阈值可用 `VIDEO_MEDIA_*` / `VIDEO_FIRST_FRAME_*` / `MERGE_AUDIO_*` 覆盖）。
 
-## 七、结论边界声明
+## 七、与长期计划（Stage 1–4）的对应与未完成项
+
+| 长期计划模块 | 本包落点 | 状态 |
+|---|---|---|
+| Stage 1 · A1 音色池扩容与角色分级 | S04 | 已完成（离线；扩容通道靠显式配置，未切换 provider） |
+| Stage 1 · A2 实测时长对账与前置反哺 | S05（A2 部分） | 已完成（`step03_duration_audit.json` → Step02b 前置拦截） |
+| Stage 1 · V1 单命令逐镜混合策略 | S03 | 已完成（`--media-policy-source step02a`；`plan_key`/`submit_key` 同源由 S02 证据覆盖） |
+| Stage 1 · V2/V4 断点续查、计量与报告 | S02 | 已完成 |
+| Stage 1 · M1 禁止 `atrim` 静默切字 | S05（M1 部分） | 已完成（fail/pad/atempo/trim 四策略 + 留痕） |
+| Stage 2 · V3 0 元媒体硬探针 | S06（V3 部分） | 已完成（codes 进 `VideoCheckReport`/`reroll_decision`） |
+| Stage 2 · M2 `loudnorm` 与切点处理 | S06（M2 部分） | 已完成（−16 LUFS、20ms 切点淡变、48kHz、faststart） |
+| Stage 2 · M3 成片终检门 | S06（M3 部分） | 已完成（`step04_media_quality.json` + `step04_quality.json.media_check`） |
+| Stage 2 · 首章真实出片同步验收 | — | **未开始**：需要真实 Step02b/Step03 付费调用与人工确认 |
+| Stage 3 · SFX/BGM 与自适应视频策略 | — | **未开始**：依赖首章真实成片体感 |
+| Stage 4 · 巨石模块拆分与看板 | — | **未开始**：计划要求多章连跑稳定后再做 |
+
+## 八、结论边界声明
 
 本工作包全链路验收均为 **0 次外部模型调用**，本地音频/视频素材由 FFmpeg 合成，provider 网络交互由可控传输桩替代：
 - **源码完成 / 离线通过**：仅证明下游协议、隔离事务、状态机恢复、逐镜策略透传、音色容量预检、实测超窗拒收与 FFmpeg 混音/媒体检测工程通路成立；
 - **真实模型未运行**：不代表真实语音音质、人物唇形/句内同步或视频动作生成质量已验证；
-- **正式未采纳**：未修改主仓库或正式 `output/` 下的任何章节产物。
+- **正式未采纳**：未修改主仓库或正式 `output/` 下的任何章节产物；
+- **新判据待校准**：0 元探针的黑场/静帧/首帧阈值、成片终检响度判据、龙套分级的结构派生规则
+  目前只有合成片与匿名单测证据，真实首章出片时应先看读数再决定是否收紧或放宽。
