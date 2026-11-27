@@ -358,10 +358,11 @@ def build_duration_audit(units: list, *, script: dict, scope: dict | None = None
         window = _number(unit.get("available_window_sec"))
         if window is None:
             window = _number(unit.get("window_sec"))
-        need = actual if actual is not None else None
+        measured = bool(unit.get("state") == "confirmed" and actual is not None)
+        # 未实测（prepared）不得贡献任何实测下限；实测值只认 confirmed 单元。
+        need = actual if measured else None
         overflow = (round(need - window, 6)
                     if need is not None and window is not None else None)
-        measured = bool(unit.get("state") == "confirmed" and actual is not None)
         if measured:
             measured_count += 1
         if overflow is not None and overflow > 1e-9:

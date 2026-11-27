@@ -463,12 +463,18 @@ def _audit_identity_issues(audit: dict, *, script: dict, scope: dict | None) -> 
     from shared.enhancement_io import sha256_file
     digest_mismatch = 0
     missing = 0
+    identity_missing: list[str] = []
     for unit in audit.get("units") or []:
         if not isinstance(unit, dict):
             continue
-        sha = str(unit.get("audio_sha256") or "")
-        path = str(unit.get("audio_path") or "")
+        state = str(unit.get("state") or "")
+        sha = str(unit.get("audio_sha256") or "").strip()
+        path = str(unit.get("audio_path") or "").strip()
+        if state != "confirmed":
+            # prepared 单元允许没有音频身份，但也不能贡献实测下限（由投影保证）。
+            continue
         if not sha or not path:
+            identity_missing.append(str(unit.get("unit_id") or "?"))
             continue
         candidate = Path(path)
         if not candidate.is_file():
@@ -479,6 +485,11 @@ def _audit_identity_issues(audit: dict, *, script: dict, scope: dict | None) -> 
                 digest_mismatch += 1
         except OSError:
             missing += 1
+    if identity_missing:
+        # 实测单元缺路径/摘要 ⇒ 拒用整份审计（不能当合法实测证据）
+        issues.append({"code": "audit_identity_missing",
+                       "units": sorted(identity_missing)[:20],
+                       "count": len(identity_missing)})
     if digest_mismatch:
         issues.append({"code": "audit_audio_digest_mismatch", "count": digest_mismatch})
     if missing:
@@ -508,12 +519,22 @@ def _load_duration_audit(shots_dir: Path, *, audit: dict | None = None,
     for path in candidates:
         if not path.is_file():
             continue
+        # 找到的第一份就是本次数据源：坏 JSON / 错 schema 必须报**拒收原因**，
+        # 不能伪装成"没有审计"再去翻下一个目录。
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(data, dict) or data.get("schema") != AUDIT_SCHEMA:
-            continue
+        except Exception as exc:  # noqa: BLE001 - 结构化原因透传
+            return None, str(path), [{"code": "audit_unreadable",
+                                      "source": str(path),
+                                      "error": "%s: %s" % (type(exc).__name__, exc)}]
+        if not isinstance(data, dict):
+            return None, str(path), [{"code": "audit_not_object",
+                                      "source": str(path),
+                                      "actual_type": type(data).__name__}]
+        if data.get("schema") != AUDIT_SCHEMA:
+            return None, str(path), [{"code": "audit_schema_mismatch",
+                                      "source": str(path),
+                                      "actual": str(data.get("schema") or "")}]
         issues = _audit_identity_issues(data, script=script or {}, scope=scope)
         return (None if issues else data), str(path), issues
     return None, "", []
@@ -536,6 +557,9 @@ def _audio_overflow(shot_audit: dict | None, shot: dict, tolerance: float) -> di
     优先用审计里的 ``window_sec``（已扣转场重叠的真实可用窗口）；没有才退回计划时长。
     """
     if not shot_audit:
+        return None
+    if shot_audit.get("measured") is not True:
+        # prepared / 未实测的投影不得作为超窗证据
         return None
     need = shot_audit.get("audio_need_sec")
     planned = shot_audit.get("window_sec")
@@ -568,6 +592,8 @@ def _narration_overflows(audit: dict | None, tolerance: float) -> list[dict]:
     out: list[dict] = []
     for unit_id, entry in (audit.get("narrations") or {}).items():
         if not isinstance(entry, dict):
+            continue
+        if str(entry.get("state") or "") != "confirmed":
             continue
         need = entry.get("actual_wav_sec")
         window = entry.get("carrier_window_sec")

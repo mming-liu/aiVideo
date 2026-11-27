@@ -652,3 +652,4 @@ start_studio.bat
 !tests/step04_merge/test_s06_merge_quality.py
 !tests/integration/test_downstream_safe_delivery_s07.py
 !tests/step04_merge/test_s05_policy_through_main.py
+!tests/step04_merge/test_s07_publication.py

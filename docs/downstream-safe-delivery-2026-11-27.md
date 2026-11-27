@@ -3,9 +3,10 @@
 - **分支**：`codex/downstream-safe-delivery`
 - **隔离 worktree**：`C:/myFloders/git/aiVideo/.tmp/worktrees/downstream-safe-delivery`
 - **冻结基线 SHA**：`3aa86304525903c3a8bb3a1d52cdbb93c2864431`
-- **本包交付状态（2026-11-27，复核整改后）**：S01–S03 保持完成；S04–S07 已按当日复核意见
-  整改（默认合同回退 strict、媒体判据回退影子评估、发布事务改为"先检查后发布"等），
-  状态为**已整改待复验**。整改后下游全量回归见「九、复核整改记录」；干净副本复跑读数同节。
+- **本包交付状态（2026-11-27，合并收口）**：S01–S03 保持完成；S04–S07 已按两轮复核意见
+  整改：默认声音合同 strict、未校准媒体判据影子评估、发布改为可恢复批次、审计身份与字幕
+  必检闭合。状态为**已整改待合并验收**；合并前在固定提交上重跑受影响与交叉套件，见
+  「九、复核整改记录」及 `docs/downstream-safe-delivery-evidence/2026-11-27/`。
   **全程 0 次外部模型调用**（TTS/视频均本地桩 + FFmpeg 合成媒体）。
 - **总体目标（零模型调用）**：在隔离环境中，通过真实 `Step03 → Step02b → Step04` 入口，证明声音完整、请求身份一致、恢复不重复提交、失败不覆盖基线，并产出可播放的合成测试片与完整报告。
 
@@ -249,3 +250,23 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 - 主线 `507ccea` 已合入本分支（`qc_http_attempt`、Step02a Phase 2B 修复与测试白名单保留），
   合并后 `tests/step02a_frame_gen tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/tts` `466 passed / 10 skipped`。
 - 仍**未**执行：真实 Step02b/Step03 付费调用、首章真实出片验收、Stage 3/4；合并预演无文本冲突不代表合并后行为已验证，需在合并后用同一组入口证据复验。
+
+### 九·补：合并收口（M01–M03，2026-11-27 复核第二轮）
+
+第二轮复核确认三处剩余缺口，本轮按"可恢复发布批次 / 审计身份拒收 / 字幕必检"闭合，
+仍为 0 次真实模型调用。
+
+| 模块 | 整改 | 验收 |
+|---|---|---|
+| M01 发布与恢复 | 新增 `step04_merge/publication.py`：成片、应交付 SRT、质量报告先全部准备并序列化，再进入发布；每个目标先备份旧内容（或记录"原先不存在"），进度逐步写 journal，失败按 journal 反向恢复；恢复失败报 `publish_unconfirmed` 并保留备份/journal；下次进入同一目标先 `recover_pending` 再开始；每批目标用 `AttemptLock` 串行化（`publish_busy`）。质量报告不再"发布后单独写、失败只告警" | `tests/step04_merge/test_s07_publication.py` 7 项：成功、替换失败回滚、恢复失败保留材料、幂等恢复、旧值=新值不误删、冲突不覆盖、同目标并发拒绝；S07 经**主入口**注入 `STEP04_PUBLISH_FAULT=srt/quality/quality,rollback`：旧成片/SRT/报告摘要不变、journal 状态正确、恢复后 PASS |
+| M02 审计身份 | confirmed 单元必须同时具备非空 `audio_path` 与 `audio_sha256`，否则整份审计拒用（`audit_identity_missing`）；`prepared` 单元允许无身份但**不贡献**实测下限（投影层把 `audio_need_sec` 限定为 confirmed）；坏 JSON / 非对象 / 错 schema 返回 `audit_unreadable` / `audit_not_object` / `audit_schema_mismatch`，不再伪装成"没有审计"；显式审计与文件装载同一套校验 | `tests/integration/test_s05_duration_audit.py` 新增 4 项：缺身份拒收、prepared 带 actual 不产生超窗、坏 JSON/错 schema 有原因、摘要不符拒收 |
+| M03 字幕必检 | `evaluate_final(subtitle_required=...)`：有字幕合同时把 `subtitle_duration` 加入必检；文件缺失/不可读/未解析 ⇒ `UNVERIFIED`；明确越界 ⇒ `BLOCK`；无字幕合同不新增要求；汇总改为"必检项必须实际产出结果"，不再只收集已返回的 `unavailable` | `tests/step04_merge/test_s06_merge_quality.py` 新增 3 项：缺失 ⇒ UNVERIFIED、不可解析 ⇒ UNVERIFIED、无字幕合同 PASS；越界仍 BLOCK |
+
+**本轮读数**
+
+- 受影响全量（tts / step02 / step02b / step03 / step04 / S01 / S05 audit / S07）：
+  **`313 passed / 6 skipped`**（skip 均为缺正式 `output/` 的既有用例）。
+- 交叉回归（含 Step02a 与主线 `507ccea` 的合并范围）与干净副本读数见
+  `docs/downstream-safe-delivery-evidence/2026-11-27/README.md`（随 M04 归档）。
+- 故障注入开关 `STEP04_PUBLISH_FAULT`（`final`/`srt`/`quality`/`rollback`）**仅用于离线
+  故障验收**，默认不设置、不影响生产路径；journal 与备份位于 `stretched/` 下，恢复成功即清理。

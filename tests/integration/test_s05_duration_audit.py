@@ -46,6 +46,29 @@ def _audit_for(script: dict, units: list[dict], *, chapter: int) -> dict:
         audio_mode="tts_mix")
 
 
+def _measured_units(tmp_path: Path, *, actual: float, window: float = 5.0,
+                    shot_index: int = 1) -> list[dict]:
+    """带真实音频文件 + SHA-256 的实测单元（通过身份校验的最小合法样本）."""
+    import hashlib
+    from tests.integration.downstream_fixtures import make_test_wav
+
+    audio = make_test_wav(tmp_path / ("measured_%s.wav" % shot_index), actual)
+    return [{
+        "unit_id": "shot-%d" % shot_index,
+        "kind": "tts_dialogue",
+        "shot_index": shot_index,
+        "speaker": "甲",
+        "text": "这是一句用于时长对账的匿名台词。",
+        "declared_sec": actual,
+        "actual_sec": actual,
+        "available_window_sec": window,
+        "state": "confirmed",
+        "measurement": "ffprobe",
+        "audio_path": str(audio),
+        "audio_sha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
+    }]
+
+
 def _script(shot_sec: float = 5.0) -> dict:
     return {
         "characters": [{"identifier": "甲", "gender": "male", "age_range": "young"}],
@@ -140,7 +163,7 @@ def test_step02b_plan_blocks_audio_overflow_with_recommended_duration(tmp_path, 
     ctx = _chapter(tmp_path, monkeypatch, chapter=14)
     ch_dir, installed = ctx["ch_dir"], ctx["installed"]
     script = installed["script"]
-    audit = _audit_for(script, _units_fixture(actual=6.2, window=5.0), chapter=14)
+    audit = _audit_for(script, _measured_units(tmp_path, actual=6.2, window=5.0), chapter=14)
     shots_dir = ch_dir / "vimax_working" / "shots"
     plan = step02b_main.build_plan(
         script, shots_dir, only_indices={1}, chapter=14, provider="volcengine",
@@ -161,7 +184,7 @@ def test_step02b_plan_rejects_foreign_audit_identity(tmp_path, monkeypatch):
     ctx = _chapter(tmp_path, monkeypatch, chapter=17)
     ch_dir, installed = ctx["ch_dir"], ctx["installed"]
     script = installed["script"]
-    stale = _audit_for(script, _units_fixture(actual=6.2, window=5.0), chapter=999)
+    stale = _audit_for(script, _measured_units(tmp_path, actual=6.2, window=5.0), chapter=999)
     stale["script_revision"] = "stale-revision"
     plan = step02b_main.build_plan(
         script, ch_dir / "vimax_working" / "shots", only_indices={1}, chapter=17,
@@ -180,8 +203,7 @@ def test_step02b_plan_allows_within_tolerance(tmp_path, monkeypatch):
     ch_dir, installed = ctx["ch_dir"], ctx["installed"]
     script = installed["script"]
     planned = float(script["shots"][0].get("duration_sec") or 5.0)
-    audit = _audit_for(script, _units_fixture(actual=planned + 0.1, window=planned),
-                       chapter=15)
+    audit = _audit_for(script, _measured_units(tmp_path, actual=planned + 0.1, window=planned), chapter=15)
     plan = step02b_main.build_plan(
         script, ch_dir / "vimax_working" / "shots", only_indices={1}, chapter=15,
         provider="volcengine", model_id="doubao-seedance-1-0-pro-250528",
@@ -244,10 +266,16 @@ def test_step02b_plan_blocks_narration_overflow(tmp_path, monkeypatch):
     ctx = _chapter(tmp_path, monkeypatch, chapter=19)
     ch_dir, installed = ctx["ch_dir"], ctx["installed"]
     script = installed["script"]
+    import hashlib
+    from tests.integration.downstream_fixtures import make_test_wav
+
+    audio = make_test_wav(tmp_path / "narration_N1.wav", 12.0)
     unit = {"unit_id": "narration-N1", "kind": "narration", "shot_index": 1,
             "shot_indexes": [1, 2], "source_index": 1, "text": "旁白。",
             "actual_sec": 12.0, "available_window_sec": 10.0,
-            "state": "confirmed", "measurement": "ffprobe", "audio_path": ""}
+            "state": "confirmed", "measurement": "ffprobe",
+            "audio_path": str(audio),
+            "audio_sha256": hashlib.sha256(audio.read_bytes()).hexdigest()}
     audit = build_duration_audit([unit], script=script,
                                  scope={"chapter": 19, "book_index": 1,
                                         "book_name": "匿名测试卷"},
@@ -265,6 +293,103 @@ def test_step02b_plan_blocks_narration_overflow(tmp_path, monkeypatch):
     assert narration_blocks[0]["narration"]["shot_indexes"] == [1, 2]
 
 
+def test_confirmed_unit_without_identity_is_rejected(tmp_path, monkeypatch):
+    """confirmed 但缺路径/摘要 ⇒ 整份审计拒用，不产生超窗裁决（复核 P1）."""
+    ctx = _chapter(tmp_path, monkeypatch, chapter=20)
+    ch_dir, installed = ctx["ch_dir"], ctx["installed"]
+    script = installed["script"]
+    unit = {"unit_id": "shot-1", "kind": "tts_dialogue", "shot_index": 1,
+            "actual_sec": 6.2, "available_window_sec": 5.0,
+            "state": "confirmed", "measurement": "ffprobe",
+            "audio_path": "", "audio_sha256": ""}
+    audit = build_duration_audit([unit], script=script,
+                                 scope={"chapter": 20, "book_index": 1,
+                                        "book_name": "匿名测试卷"},
+                                 script_revision=script.get("script_revision") or "")
+    (ch_dir / "step03_duration_audit.json").write_text(
+        json.dumps(audit, ensure_ascii=False), encoding="utf-8")
+    plan = step02b_main.build_plan(
+        script, ch_dir / "vimax_working" / "shots", only_indices={1}, chapter=20,
+        provider="volcengine", model_id="doubao-seedance-1-0-pro-250528",
+        scope={"chapter": 20, "book_index": 1, "book_name": "匿名测试卷"})
+    rejected = plan["audio_audit"]["rejected"]
+    assert any(r.get("code") == "audit_identity_missing" for r in rejected), rejected
+    assert all(e.get("code") != "audio_overflow" for e in plan["shots"])
+
+
+def test_prepared_unit_does_not_supply_measured_need(tmp_path, monkeypatch):
+    """prepared 单元即使带 actual 也不得作为实测下限（复核 P1 第二类）."""
+    ctx = _chapter(tmp_path, monkeypatch, chapter=21)
+    ch_dir, installed = ctx["ch_dir"], ctx["installed"]
+    script = installed["script"]
+    unit = {"unit_id": "shot-1", "kind": "tts_dialogue", "shot_index": 1,
+            "actual_sec": 9.0, "available_window_sec": 5.0,
+            "state": "prepared", "measurement": "planned_only",
+            "audio_path": "", "audio_sha256": ""}
+    audit = build_duration_audit([unit], script=script,
+                                 scope={"chapter": 21, "book_index": 1,
+                                        "book_name": "匿名测试卷"},
+                                 script_revision=script.get("script_revision") or "")
+    (ch_dir / "step03_duration_audit.json").write_text(
+        json.dumps(audit, ensure_ascii=False), encoding="utf-8")
+    plan = step02b_main.build_plan(
+        script, ch_dir / "vimax_working" / "shots", only_indices={1}, chapter=21,
+        provider="volcengine", model_id="doubao-seedance-1-0-pro-250528",
+        scope={"chapter": 21, "book_index": 1, "book_name": "匿名测试卷"})
+    assert plan["audio_audit"]["rejected"] == []
+    entry = plan["shots"][0]
+    assert entry.get("code") != "audio_overflow", entry
+    assert audit["shots"]["1"]["audio_need_sec"] is None
+
+
+def test_bad_json_and_wrong_schema_report_rejection(tmp_path, monkeypatch):
+    """文件存在但坏 JSON / 错 schema ⇒ 明确拒收原因，而不是"没有审计"."""
+    ctx = _chapter(tmp_path, monkeypatch, chapter=22)
+    ch_dir, installed = ctx["ch_dir"], ctx["installed"]
+    script = installed["script"]
+    scope = {"chapter": 22, "book_index": 1, "book_name": "匿名测试卷"}
+    path = ch_dir / "step03_duration_audit.json"
+
+    path.write_text("{not-json", encoding="utf-8")
+    plan = step02b_main.build_plan(
+        script, ch_dir / "vimax_working" / "shots", only_indices={1}, chapter=22,
+        provider="volcengine", model_id="doubao-seedance-1-0-pro-250528", scope=scope)
+    assert [r["code"] for r in plan["audio_audit"]["rejected"]] == ["audit_unreadable"]
+    assert plan["audio_audit"]["source"]
+
+    path.write_text(json.dumps({"schema": "wrong.v9"}), encoding="utf-8")
+    plan = step02b_main.build_plan(
+        script, ch_dir / "vimax_working" / "shots", only_indices={1}, chapter=22,
+        provider="volcengine", model_id="doubao-seedance-1-0-pro-250528", scope=scope)
+    assert [r["code"] for r in plan["audio_audit"]["rejected"]] == ["audit_schema_mismatch"]
+
+
+def test_audio_digest_mismatch_is_rejected(tmp_path, monkeypatch):
+    ctx = _chapter(tmp_path, monkeypatch, chapter=23)
+    ch_dir, installed = ctx["ch_dir"], ctx["installed"]
+    script = installed["script"]
+    scope = {"chapter": 23, "book_index": 1, "book_name": "匿名测试卷"}
+    audio = ch_dir / "audio" / "shot_1.mp3"
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    audio.write_bytes(b"voice-bytes")
+    import hashlib
+    sha = hashlib.sha256(audio.read_bytes()).hexdigest()
+    unit = {"unit_id": "shot-1", "kind": "tts_dialogue", "shot_index": 1,
+            "actual_sec": 2.0, "available_window_sec": 5.0,
+            "state": "confirmed", "measurement": "ffprobe",
+            "audio_path": str(audio), "audio_sha256": sha}
+    audit = build_duration_audit([unit], script=script, scope=scope,
+                                 script_revision=script.get("script_revision") or "")
+    (ch_dir / "step03_duration_audit.json").write_text(
+        json.dumps(audit, ensure_ascii=False), encoding="utf-8")
+    audio.write_bytes(b"tampered")
+    plan = step02b_main.build_plan(
+        script, ch_dir / "vimax_working" / "shots", only_indices={1}, chapter=23,
+        provider="volcengine", model_id="doubao-seedance-1-0-pro-250528", scope=scope)
+    assert any(r.get("code") == "audit_audio_digest_mismatch"
+               for r in plan["audio_audit"]["rejected"])
+
+
 def test_step02b_generation_entry_rejects_before_any_post(tmp_path, monkeypatch):
     """真实入口：审计超窗 ⇒ 生视频前退出码 2（不进入任何提交）。"""
     ctx = _chapter(tmp_path, monkeypatch, chapter=16)
@@ -272,8 +397,7 @@ def test_step02b_generation_entry_rejects_before_any_post(tmp_path, monkeypatch)
     script = installed["script"]
     install_step02a_acceptance(ch_dir, script, shot_policies={1: "auto", 2: "first_only"})
     planned = float(script["shots"][0].get("duration_sec") or 5.0)
-    audit = _audit_for(script, _units_fixture(actual=planned + 1.2, window=planned,
-                                              shot_index=1), chapter=16)
+    audit = _audit_for(script, _measured_units(tmp_path, actual=planned + 1.2, window=planned), chapter=16)
     (ch_dir / "step03_duration_audit.json").write_text(
         json.dumps(audit, ensure_ascii=False), encoding="utf-8")
     cand_root = ch_dir / "_enhancement" / "exp_s05" / "video"

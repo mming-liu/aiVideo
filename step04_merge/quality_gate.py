@@ -231,6 +231,7 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
                    audio_codec: str = "aac",
                    declared_black_windows=(),
                    srt_path=None,
+                   subtitle_required: bool | None = None,
                    check_loudness: bool = True,
                    required_checks=None,
                    enforce_uncalibrated: bool | None = None) -> dict:
@@ -246,7 +247,13 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
                    else required_checks)
     if not check_loudness:
         required.discard("loudness")
-    if srt_path is None:
+    # **字幕合同决定必检项**：有应交付字幕时，字幕缺失/不可读/未完成必须 UNVERIFIED，
+    # 不能因为没有检查项就 PASS（2026-11-27 复核 P1）。
+    _subtitle_required = (bool(subtitle_required) if subtitle_required is not None
+                          else srt_path is not None)
+    if _subtitle_required:
+        required.add("subtitle_duration")
+    else:
         required.discard("subtitle_duration")
     checks: list[dict] = []
     defects: list[dict] = []
@@ -277,11 +284,13 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
     video = _stream_of(probe, "video")
     audio = _stream_of(probe, "audio")
     if video is None:
+        _check("video_stream", "fail")
         _defect("video_stream_missing", "成片没有视频流")
     else:
         _check("video_stream", "pass")
     if audio is None:
         if audio_required:
+            _check("audio_stream", "fail")
             _defect("audio_stream_missing", "本次声音合同要求音频，但成片没有音频流")
         else:
             _check("audio_stream", "pass", note="不需要音频")
@@ -341,6 +350,7 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
         drift = abs(video_dur - audio_dur)
         metrics["av_drift_ms"] = round(drift * 1000.0, 1)
         if drift > AV_DRIFT_TOLERANCE_SEC:
+            _check("av_duration", "fail", drift_ms=round(drift * 1000.0, 1))
             _defect("av_duration_drift",
                     "音画时长差 %.0fms 超过 %.0fms"
                     % (drift * 1000, AV_DRIFT_TOLERANCE_SEC * 1000))
@@ -378,6 +388,8 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
             if uncovered >= UNDECLARED_BLACK_MIN_SEC:
                 unexpected.append((start, end, round(uncovered, 3)))
         if unexpected:
+            _check("black_detect", "warn", segments=len(black_events),
+                   uncovered=len(unexpected))
             _soft_defect("unexpected_black",
                          "未声明的黑场 %d 段：%s" % (len(unexpected),
                                                  [[round(s, 2), round(e, 2), u]
@@ -401,6 +413,7 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
         ratio = (frozen / total) if total else 0.0
         metrics["freeze_ratio"] = round(ratio, 4)
         if total and ratio >= FULL_FREEZE_RATIO:
+            _check("freeze_detect", "warn", ratio=round(ratio, 4))
             _soft_defect("final_frozen", "整片静帧 %.0f%%（画面卡死）" % (100 * ratio))
         elif freeze_events:
             _check("freeze_detect", "warn", ratio=round(ratio, 4))
@@ -425,17 +438,28 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
             _check("silence_detect", "pass")
 
     # ---- 6. 字幕时间戳不越过成片总时长 ----
-    if srt_path is not None and Path(srt_path).is_file():
-        last_end, srt_err = _parse_srt_last_end(Path(srt_path))
-        if srt_err:
-            _check("subtitle_duration", "unavailable", reason=srt_err)
-        elif last_end is not None and total is not None:
-            metrics["srt_last_end_sec"] = round(last_end, 3)
-            if last_end > total + 0.05:
-                _defect("subtitle_beyond_duration",
-                        "字幕最后结束 %.2fs 超过成片 %.2fs" % (last_end, total))
+    if _subtitle_required or srt_path is not None:
+        if srt_path is None:
+            _check("subtitle_duration", "unavailable", reason="subtitle_path_missing")
+        elif not Path(srt_path).is_file():
+            _check("subtitle_duration", "unavailable", reason="subtitle_file_missing",
+                   path=str(srt_path))
+        else:
+            last_end, srt_err = _parse_srt_last_end(Path(srt_path))
+            if srt_err:
+                _check("subtitle_duration", "unavailable", reason=srt_err)
+            elif last_end is None or total is None:
+                _check("subtitle_duration", "unavailable",
+                       reason="subtitle_unparsed_or_duration_unknown")
             else:
-                _check("subtitle_duration", "pass", last_end_sec=round(last_end, 3))
+                metrics["srt_last_end_sec"] = round(last_end, 3)
+                if last_end > total + 0.05:
+                    _check("subtitle_duration", "fail", last_end_sec=round(last_end, 3))
+                    _defect("subtitle_beyond_duration",
+                            "字幕最后结束 %.2fs 超过成片 %.2fs" % (last_end, total))
+                else:
+                    _check("subtitle_duration", "pass",
+                           last_end_sec=round(last_end, 3))
 
     # ---- 7. 响度（EBU R128） ----
     if check_loudness and audio is not None:
@@ -450,6 +474,8 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
                 _check("loudness", "warn", integrated_lufs=value,
                        reason="silent_track")
             elif diff > LOUDNESS_BLOCK_LU:
+                _check("loudness", "warn", integrated_lufs=value,
+                       delta_lu=round(diff, 2))
                 _soft_defect("loudness_out_of_range",
                              "实测响度 %.1f LUFS 偏离目标 %.1f LUFS 超过 %.1f LU"
                              % (value, LOUDNESS_TARGET_LUFS, LOUDNESS_BLOCK_LU))
@@ -471,6 +497,12 @@ def evaluate_final(final_path, *, expected_duration: float | None = None,
     else:
         _check("moov_faststart", "unavailable", detail=box_detail)
 
+    # 必检项必须**实际产出有效结果**：没有检查项、或结果是 unavailable，都算未验证。
+    # （只统计已返回 unavailable 的列表会漏掉"从未产生检查项"的情况——复核 P1。）
+    _by_name = {c.get("name"): c for c in checks}
+    unverified = [name for name in sorted(required)
+                  if name not in _by_name
+                  or _by_name[name].get("status") == "unavailable"]
     blocking = [d for d in defects if d.get("severity") == "block"]
     if blocking:
         status = "BLOCK"

@@ -214,6 +214,43 @@ def test_unavailable_required_check_is_unverified_not_pass(tmp_path, monkeypatch
     assert {"black_detect", "freeze_detect", "loudness"} <= set(report["unverified"])
 
 
+def test_subtitle_required_but_missing_is_unverified(tmp_path):
+    """有字幕交付合同但文件缺失 ⇒ UNVERIFIED（不是 PASS）."""
+    timeline = _timeline(tmp_path)
+    final = _render(timeline, tmp_path / "final.mp4")
+    report = evaluate_final(final, expected_duration=timeline.total_duration_sec,
+                            width=320, height=240, fps=24,
+                            srt_path=tmp_path / "missing.srt",
+                            subtitle_required=True, check_loudness=False)
+    assert report["status"] == "UNVERIFIED"
+    assert "subtitle_duration" in report["unverified"]
+    names = {c["name"]: c for c in report["checks"]}
+    assert names["subtitle_duration"]["status"] == "unavailable"
+    assert names["subtitle_duration"]["reason"] == "subtitle_file_missing"
+
+
+def test_subtitle_required_but_unparsed_is_unverified(tmp_path):
+    timeline = _timeline(tmp_path)
+    final = _render(timeline, tmp_path / "final.mp4")
+    srt = tmp_path / "garbage.srt"
+    srt.write_text("这不是一条 SRT\n", encoding="utf-8")
+    report = evaluate_final(final, expected_duration=timeline.total_duration_sec,
+                            srt_path=srt, subtitle_required=True,
+                            check_loudness=False)
+    assert report["status"] == "UNVERIFIED"
+    assert "subtitle_duration" in report["unverified"]
+
+
+def test_no_subtitle_contract_does_not_require_subtitle(tmp_path):
+    timeline = _timeline(tmp_path)
+    final = _render(timeline, tmp_path / "final.mp4")
+    report = evaluate_final(final, expected_duration=timeline.total_duration_sec,
+                            width=320, height=240, fps=24,
+                            subtitle_required=False, check_loudness=False)
+    assert report["status"] == "PASS"
+    assert "subtitle_duration" not in report["unverified"]
+
+
 def test_subtitle_beyond_duration_blocks(tmp_path):
     timeline = _timeline(tmp_path)
     final = _render(timeline, tmp_path / "final.mp4")

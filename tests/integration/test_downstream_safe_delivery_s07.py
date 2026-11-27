@@ -296,3 +296,46 @@ def test_downstream_offline_pipeline_delivers_playable_final(tmp_path):
     media = json.loads((ch / "step04_media_quality.json").read_text(encoding="utf-8"))
     assert media["status"] == "BLOCK"
     assert any(d.get("code") == "video_codec_unsupported" for d in media["defects"])
+
+    # ---- 4c. 发布中途失败（SRT / 质量报告）：可恢复批次回滚，不留下混合版本 ----
+    journal = ch / "stretched" / "publish_journal.json"
+    for fault, label in (("srt", "字幕替换失败"), ("quality", "报告发布失败")):
+        broken = dict(env)
+        broken["STEP04_PUBLISH_FAULT"] = fault
+        path = tmp_path / ("stage_step04_%s.py" % fault)
+        path.write_text(_STEP04_SCRIPT % {"repo": str(REPO)}, encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(path)], cwd=str(REPO), env=broken,
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=900)
+        assert proc.returncode != 0, (label, proc.stdout[-800:])
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        assert "publish_failed" in combined or "发布失败" in combined, combined[-1500:]
+        assert _sha(final) == final_sha, label
+        assert _sha(srt) == srt_sha, label
+        assert json.loads((ch / "step04_quality.json").read_text(
+            encoding="utf-8")) == quality4, label
+        state = json.loads(journal.read_text(encoding="utf-8"))
+        assert state["status"] == "rolled_back", (label, state["status"])
+
+    # ---- 4d. 恢复失败 → 发布未确认保留材料；下次运行先恢复再发布 ----
+    broken = dict(env)
+    broken["STEP04_PUBLISH_FAULT"] = "quality,rollback"
+    path = tmp_path / "stage_step04_unconfirmed.py"
+    path.write_text(_STEP04_SCRIPT % {"repo": str(REPO)}, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(path)], cwd=str(REPO), env=broken,
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=900)
+    assert proc.returncode != 0, (proc.stdout[-1200:], proc.stderr[-1200:])
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    assert "publish_unconfirmed" in combined or "发布未确认" in combined, combined[-1500:]
+    assert journal.is_file()
+    assert json.loads(journal.read_text(encoding="utf-8"))["status"] == "rollback_failed"
+
+    # 不带故障再跑：启动时先恢复未完成批次，然后正常发布
+    _run_stage(_STEP04_SCRIPT % {"repo": str(REPO)}, env, tmp_path, "step04_recover")
+    assert not journal.exists()
+    recovered_quality = json.loads((ch / "step04_quality.json").read_text(
+        encoding="utf-8"))
+    assert recovered_quality["status"] == "PASS"
+    assert recovered_quality["media_check"]["status"] == "PASS"
+    assert (ch / "final.mp4").is_file() and (ch / "subtitles.srt").is_file()

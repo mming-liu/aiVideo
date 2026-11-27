@@ -1166,6 +1166,15 @@ def _run_merge(options, attempt):
     FINAL_OUT = CHAPTER_DIR / ("final_shots_%s.mp4" % _tag)
     SRT_OUT = CHAPTER_DIR / ("subtitles_shots_%s.srt" % _tag)
   _logger.info(" Output: %s (native, 语音/背景音由视频模型生成)" % FINAL_OUT.name)
+  # 先处理**上次未完成**的发布批次（同一目标），再开始本次任务；恢复失败即停。
+  try:
+    from step04_merge.publication import JOURNAL_FILENAME as _PUB_JOURNAL
+    from step04_merge.publication import PublicationError as _PubErr
+    from step04_merge.publication import recover_pending as _recover_publish
+    _recover_publish(Path(TEMP_DIR) / _PUB_JOURNAL, logger=_logger)
+  except _PubErr as _rec_err:
+    raise RenderError(_rec_err.code, "publish", str(_rec_err),
+                      exit_code=_rec_err.exit_code) from _rec_err
   if attempt is not None:
     _logger.info(f"[CANDIDATE] 实验={attempt.experiment_id} attempt={attempt.attempt_id}")
     _logger.info(f"[CANDIDATE] 候选输出={attempt.candidate_out}")
@@ -1709,7 +1718,8 @@ def _run_merge(options, attempt):
       video_codec=os.getenv("MERGE_QUALITY_EXPECT_VIDEO_CODEC", "h264").strip() or "h264",
       audio_codec=os.getenv("MERGE_QUALITY_EXPECT_AUDIO_CODEC", "aac").strip() or "aac",
       declared_black_windows=_declared_black_windows(timeline),
-      srt_path=(None if _dry_run else _srt_publish_tmp))
+      srt_path=(None if _dry_run else _srt_publish_tmp),
+      subtitle_required=bool(not _dry_run and subtitle_plan.cues))
   _logger.info("[STEP04-MEDIA] status=%s checks=%d defects=%s"
                % (_media_quality["status"], len(_media_quality["checks"]),
                   [d.get("code") for d in _media_quality["defects"]]))
@@ -1736,26 +1746,77 @@ def _run_merge(options, attempt):
                       "成片终检缺少必要检测（%s），未验证的成片不得替换正式产物"
                       % ",".join(str(n) for n in _unverified), exit_code=2)
 
-  # ---- 发布事务：检查全过 → 原子替换正式成片 → 再写对应质量报告 ----
-  Path(FINAL_OUT).parent.mkdir(parents=True, exist_ok=True)
+  # ---- 发布批次：成片 / 应交付 SRT / 质量报告一起准备，检查通过后一起发布 ----
+  # 多个 os.replace 不是原子事务：由 `publication.publish_batch` 记录旧值、逐步替换、
+  # 失败回滚；恢复失败报"发布未确认"并保留 journal/备份，下次运行先恢复。
+  from step04_merge.publication import PublicationError, publish_batch
+  _quality_target = None
+  _quality_staged = None
+  if attempt is None:
+    import hashlib as _hashlib
+    from shared.quality_gate import attach_gate_metadata as _attach
+    from step01_script_gen.quality_issues import RULE_VERSION as _RULE_VERSION
+    _h = _hashlib.sha256()
+    with open(_publish_tmp, "rb") as _fh:
+      for _chunk in iter(lambda: _fh.read(1 << 20), b""):
+        _h.update(_chunk)
+    _ok = float(duration) > 0
+    _payload = {
+        "source": "step04.product_acceptance",
+        "report_type": "product_acceptance",
+        "rule_version": _RULE_VERSION,
+        "status": "PASS" if _ok else "BLOCK",
+        "blocking": not _ok,
+        "missing": [] if _ok else ["final video duration probe failed"],
+        "outputs": {"final": {
+            "path": str(FINAL_OUT), "sha256": _h.hexdigest(),
+            "duration_sec": round(float(duration), 3),
+            "width": result.width, "height": result.height,
+            "has_audio": bool(result.has_audio)}},
+        "scope": {
+            "shots": (sorted(int(i) for i in only_indices)
+                      if only_indices is not None else
+                      sorted(int(s.get("index", 0))
+                             for s in (script.get("shots") or [])
+                             if isinstance(s, dict))),
+            "subset": only_indices is not None,
+        },
+        "audio_mode": str(_AUDIO_MODE),
+        "audio_fit": (_audio_fit.to_dict() if _audio_fit is not None else None),
+        "media_check": _media_quality,
+    }
+    _attach(_payload, script, stage="step04.product_acceptance")
+    _quality_name = ("step04_shots_%s_quality.json" % "-".join(
+        str(i) for i in sorted(only_indices))) if only_indices is not None \
+        else "step04_quality.json"
+    _quality_target = CHAPTER_DIR / _quality_name
+    _quality_staged = Path(TEMP_DIR) / "step04_quality.staged.json"
+    from shared.json_io import atomic_dump_json as _dump_staged
+    _dump_staged(_quality_staged, _payload, ensure_ascii=False, indent=2)
+
+  _moves = [{"role": "final", "staged": _publish_tmp, "target": FINAL_OUT}]
+  if _srt_publish_tmp is not None and _srt_publish_tmp.is_file():
+    _moves.append({"role": "srt", "staged": _srt_publish_tmp, "target": SRT_OUT})
+  if _quality_staged is not None and _quality_target is not None:
+    _moves.append({"role": "quality", "staged": _quality_staged,
+                   "target": _quality_target})
   try:
-    os.replace(_publish_tmp, FINAL_OUT)
-  except OSError as _pub_exc:
-    raise RenderError("publish_failed", "publish",
-                      "成片发布失败（既有成片保留原样）: %s" % _pub_exc,
-                      exit_code=3) from _pub_exc
+    _published = publish_batch(
+        _moves, work_dir=Path(TEMP_DIR) / "publish",
+        journal_path=Path(TEMP_DIR) / "publish_journal.json",
+        batch_id="%s-%s" % (scope.get("chapter") if isinstance(scope, dict) else "",
+                            _time.strftime("%Y%m%d%H%M%S")),
+        logger=_logger)
+  except PublicationError as _pub_err:
+    raise RenderError(_pub_err.code, "publish", str(_pub_err),
+                      exit_code=_pub_err.exit_code) from _pub_err
   result = _replace_dataclass_path(result, FINAL_OUT)
   _logger.info(f"[OK] Final video generated: {FINAL_OUT}")
-  # SRT 与成片同批发布（检查已全部通过）；失败只保留旧 SRT 并显式报错。
-  if _srt_publish_tmp is not None and _srt_publish_tmp.is_file():
-    try:
-      Path(SRT_OUT).parent.mkdir(parents=True, exist_ok=True)
-      os.replace(_srt_publish_tmp, SRT_OUT)
-      _logger.info(f"[OK] SRT generated: {SRT_OUT}")
-    except OSError as _srt_exc:
-      raise RenderError("srt_publish_failed", "publish",
-                        "字幕发布失败（成片已更新，SRT 仍为旧文件）: %s" % _srt_exc,
-                        exit_code=3) from _srt_exc
+  if _srt_publish_tmp is not None:
+    _logger.info(f"[OK] SRT generated: {SRT_OUT}")
+  if _quality_target is not None:
+    _logger.info(f"[STEP04-QUALITY] status={_published['status']} "
+                 f"report={_quality_target}")
 
   # 8. 候选提交（只在增强模式）：冻结输入 → manifest → accepted 替换 + 读回
   if attempt is not None:
@@ -1777,54 +1838,8 @@ def _run_merge(options, attempt):
   _logger.info(f" Final duration: {duration:.2f}s")
   _logger.info(f" Total video duration: {audio_duration:.2f}s")
 
-  # S19-4：生产模式写出成片验收报告（候选模式不写正式章目录）。
-  if attempt is None:
-    try:
-      import hashlib as _hashlib
-      from shared.json_io import atomic_dump_json as _dump
-      from shared.quality_gate import attach_gate_metadata as _attach
-      from step01_script_gen.quality_issues import RULE_VERSION as _RULE_VERSION
-      _h = _hashlib.sha256()
-      with open(FINAL_OUT, "rb") as _fh:
-        for _chunk in iter(lambda: _fh.read(1 << 20), b""):
-          _h.update(_chunk)
-      _ok = float(duration) > 0
-      _payload = {
-          "source": "step04.product_acceptance",
-          "report_type": "product_acceptance",
-          "rule_version": _RULE_VERSION,
-          "status": "PASS" if _ok else "BLOCK",
-          "blocking": not _ok,
-          "missing": [] if _ok else ["final video duration probe failed"],
-          "outputs": {"final": {
-              "path": str(FINAL_OUT), "sha256": _h.hexdigest(),
-              "duration_sec": round(float(duration), 3),
-              "width": result.width, "height": result.height,
-              "has_audio": bool(result.has_audio)}},
-          "scope": {
-              "shots": (sorted(int(i) for i in only_indices)
-                        if only_indices is not None else
-                        sorted(int(s.get("index", 0))
-                               for s in (script.get("shots") or [])
-                               if isinstance(s, dict))),
-              "subset": only_indices is not None,
-          },
-          "audio_mode": str(_AUDIO_MODE),
-          # S05/M1：超窗策略与逐条调整（补齐/加速/显式截断都留痕，不静默）
-          "audio_fit": (_audio_fit.to_dict() if _audio_fit is not None else None),
-          # S06/M3：成片终检（编码/音画/黑场/静帧/静音/字幕/响度/moov）
-          "media_check": _media_quality,
-      }
-      _attach(_payload, script, stage="step04.product_acceptance")
-      if only_indices is not None:
-        _tag = "-".join(str(i) for i in sorted(only_indices))
-        _quality_name = "step04_shots_%s_quality.json" % _tag
-      else:
-        _quality_name = "step04_quality.json"
-      _dump(CHAPTER_DIR / _quality_name, _payload, ensure_ascii=False, indent=2)
-      _logger.info(f"[STEP04-QUALITY] status={_payload['status']}")
-    except Exception as _qe:
-      _logger.warn(f"[WARN] step04_quality.json 写入失败（不阻断已生成的成片）: {_qe}")
+  # 成片质量报告已在上面的发布批次中与成片/字幕一起发布（失败可回滚）。
+  # 候选模式不写正式章目录的报告。
 
 if __name__ == "__main__":
   try:
