@@ -13,9 +13,11 @@
 """
 from __future__ import annotations
 
-#: 合并/动效统一帧率。产品上**不提供**第二个帧率开关；脚本级 fps/RENDER_FPS
-#: 只影响 step01 的时长量化（见 §15「转场表示」与 §1）。
-MERGE_FPS = 24
+from shared.config import RENDER_FPS as _RENDER_FPS
+
+#: 合并/动效统一帧率。2026-11-27 配置解耦：由 RENDER_FPS 决定（默认 24），
+#: 脚本级 fps 与合并帧率共用同一值；改 RENDER_FPS 会真实改变 Step04 输出。
+MERGE_FPS = _RENDER_FPS
 
 #: 边界可用的 xfade 转场名（原 step04_merge.main._VALID_XFADE，19 项）。
 LEGAL_XFADE_TRANSITIONS = frozenset({

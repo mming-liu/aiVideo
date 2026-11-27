@@ -100,12 +100,11 @@ def _duration_setting(name: str, default: float) -> float:
 # S10R：先尝试从采纳收据继承时长带（显式 env 优先）。
 _inherit_adoption_duration_band()
 
-# The lower bound is fixed: timecode/runtime_extend still implement the 60s floor.
-# S46：新生产默认时长带为 60–120s（优先目标 85–110s）；已采纳章节仍由上方的
+# The lower bound is configurable（2026-11-27 配置解耦）：timecode/runtime_extend
+# 的硬下限统一读 DURATION_MIN_SEC，不再固定 60s；短集/预告片可配 30/45s。
+# 生产默认仍为 60–120s（优先目标 85–110s）；已采纳章节仍由上方的
 # `_inherit_adoption_duration_band()` / `production_context` 继承收据历史配置。
 DURATION_MIN_SEC = _duration_setting("DURATION_MIN_SEC", 60)
-if DURATION_MIN_SEC != 60:
-    raise ValueError("DURATION_MIN_SEC must equal 60; configurable lower bounds are not supported")
 DURATION_MAX_SEC = _duration_setting("DURATION_MAX_SEC", 120)
 DURATION_TARGET_MIN_SEC = _duration_setting("DURATION_TARGET_MIN_SEC", 85)
 DURATION_TARGET_MAX_SEC = _duration_setting("DURATION_TARGET_MAX_SEC", 110)
@@ -607,13 +606,27 @@ VIDEO_MAX_RETRIES = int(os.getenv("VIDEO_MAX_RETRIES", "3"))
 # 合并配置（step04）
 # ============================================================================
 MERGE_PRESET = os.getenv("MERGE_PRESET", "medium")
+# 生成画布统一默认（2026-11-27 配置解耦）：VIDEO_SIZE 缺失/不可解析时唯一回退。
+# 其他模块不要再写 1080*1920、1024x1792、720x1280 等各自默认。
+DEFAULT_VIDEO_SIZE = "1440*2560"
+# 成片分辨率默认（合并阶段按成本单独取值；VIDEO_SIZE 不自动套用到成片）。
+DEFAULT_MERGE_RESOLUTION = "720x1280"
+
 # 成片分辨率（宽x高）。调试期保持 720x1280 省生成额度；上线提到 1080x1920
 # 时同步把 BAILIAN_VIDEO_RESOLUTION 改 1080P（视频按秒计费，0.6→1 元/秒）
-MERGE_RESOLUTION = os.getenv("MERGE_RESOLUTION", "720x1280")
+MERGE_RESOLUTION = os.getenv("MERGE_RESOLUTION", DEFAULT_MERGE_RESOLUTION)
 # 成片编码质量（x264 CRF，越小越清晰、文件越大；18=高质量，20=均衡）
 MERGE_CRF = os.getenv("MERGE_CRF", "18")
 # 音频模式：native=只保留视频原声（默认）；tts_mix=TTS 对白轨叠加 +
 # 视频原声闪避（对视频原声不满意时切换，需先跑 step03 生成 audio/shot_N.mp3）
 MERGE_AUDIO_MODE = os.getenv("MERGE_AUDIO_MODE", "native")
+# 成片帧率（2026-11-27 配置解耦）：RENDER_FPS 现在是合并/动效的真实帧率，
+# 不再只是 step01 的展示元数据。shared.media_contract.MERGE_FPS 从这里取值。
+try:
+    RENDER_FPS = int(os.getenv("RENDER_FPS", "24"))
+except ValueError:
+    RENDER_FPS = 24
+if RENDER_FPS <= 0:
+    RENDER_FPS = 24
 # 逐镜响度归一（EBU R128，消除镜头间音量跳变；关闭则退回固定增益）
 MERGE_AUDIO_LOUDNORM = os.getenv("MERGE_AUDIO_LOUDNORM", "1")

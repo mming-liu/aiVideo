@@ -436,7 +436,8 @@ def active_video_duration_cap() -> int:
         #   判 1080P=6s，而 provider 实发 768P=10s），切 minimax 前先对齐 VIDEO_SIZE。
         if "01" in model:
             return MINIMAX_V1_ONLY_DURATION  # 01 系列固定 720P=6s
-        size = (os.getenv("VIDEO_SIZE", "720x1280") or "720x1280").strip().lower().replace("*", "x")
+        from shared.config import DEFAULT_VIDEO_SIZE
+        size = (os.getenv("VIDEO_SIZE") or DEFAULT_VIDEO_SIZE).strip().lower().replace("*", "x")
         try:
             w, h = size.split("x")
             short = min(int(w), int(h))

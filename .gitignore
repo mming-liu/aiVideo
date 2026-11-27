@@ -296,6 +296,8 @@ tests/shared/*
 !tests/shared/test_delta_reconcile_r0.py
 # 2026-11-26 S46/S52：采纳收据生效配置继承回归（含 60-90 历史带与 env 还原）
 !tests/shared/test_adoption_config_inheritance.py
+# 2026-11-27 配置解耦：画幅/分辨率/时长/帧率/参考上限单源回归
+!tests/shared/test_config_single_source.py
 # 2026-11-08：本轮修复涉及的契约回归**入库**（干净 clone 可复现同一套 0 failed）
 !tests/_text_gen/test_agent_plan_provider.py
 !tests/_text_gen/test_agent_plan_guard.py

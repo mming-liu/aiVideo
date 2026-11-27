@@ -71,6 +71,9 @@ def test_silent_model_key_stable_across_merge_audio_mode(volcengine):
 
 def test_audio_capable_model_still_reflects_effective_policy(volcengine):
     volcengine.setenv("VOLCENGINE_I2V_MODEL", "doubao-seedance-1-5-pro-251215")
+    # .env.content 默认 VIDEO_MODEL_VOICE=0（当前主模型静音）；本用例验证
+    # “有声模型”分支，必须显式打开，避免受项目配置默认值影响。
+    volcengine.setenv("VIDEO_MODEL_VOICE", "1")
     volcengine.setenv("MERGE_AUDIO_MODE", "native")
     a = _merge_key()
     volcengine.setenv("MERGE_AUDIO_MODE", "tts_mix")

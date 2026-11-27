@@ -132,23 +132,24 @@ def model_supports_reference_image(model: str | None) -> bool:
 
 
 def get_ref_limit(model: str | None, default: int | None = None) -> int:
-    """按模型名查参考图上限；未注册模型统一兜底 IMAGE_MAX_REFS（默认 3）.
+    """按模型名查参考图上限；IMAGE_MAX_REFS 作为**全模型上限**与能力取小.
 
-    ⚠️ 2026-09 决策：provider 不再传 default= 抄注册表值——未注册新模型的兜底
-    统一走 IMAGE_MAX_REFS env。新增模型务必先在 MODEL_REF_LIMITS 注册，否则
-    参考图上限与真实能力可能不符（多传报错、少传浪费一致性）。
-    保留 default= 形参仅为向后兼容，生产代码勿再使用。
+    2026-11-27 配置解耦：此前 IMAGE_MAX_REFS 只作用于未注册模型，注册模型
+    （如 seedream-5-0-pro=10）完全不受配置约束。现在显式设置 IMAGE_MAX_REFS
+    时，注册模型也取 min(模型能力, 配置值)，让 .env 的预算上限真正生效；
+    未设置时保持模型能力原值（未注册模型仍回退 3）。
     """
+    env_raw = os.getenv("IMAGE_MAX_REFS")
+    env_cap = int(env_raw) if env_raw else None
     if default is None:
-        env = os.getenv("IMAGE_MAX_REFS")
-        default = int(env) if env else 3
+        default = env_cap if env_cap else 3
     if not model:
-        return default
+        return min(default, env_cap) if env_cap else default
     m = normalize_model_name(model)
     for pat, lim in MODEL_REF_LIMITS:
         if pat in m:
-            return lim
-    return default
+            return min(lim, env_cap) if env_cap else lim
+    return min(default, env_cap) if env_cap else default
 
 
 # (模型名子串, 视频参考上限)。顺序敏感：具体在前。

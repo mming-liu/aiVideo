@@ -42,10 +42,12 @@ NARRATION_FIXED_DURATION = 4.0
 # 仍与模型取严：换成 cap 更小的模型（如 Seedance 1.0 = 12s）时自动跟随。
 # 钩子时长另算（见 _compute_timecodes hook 段）。
 MAX_SHOT_DURATION = 15.0
-# 正片分镜总时长硬下限（08-23 用户规则）：不含钩子 ≥ 60s。
-# 实际拉伸动作在 constraints/runtime_extend.py（W6，目标 65s 留裕度），
-# 此处仅用于日志告警。钩子时长另算，不计入该下限。
-MIN_TOTAL_SHOTS_DURATION = 60.0
+# 正片分镜总时长硬下限（08-23 用户规则）：不含钩子；2026-11-27 起跟随
+# DURATION_MIN_SEC（默认 60s），短集/预告片可在 .env.content 调低。
+# 实际拉伸动作在 constraints/runtime_extend.py（目标留裕度），此处用于日志告警。
+# 钩子时长另算，不计入该下限。
+from shared.config import DURATION_MIN_SEC as _DURATION_MIN_SEC
+MIN_TOTAL_SHOTS_DURATION = float(_DURATION_MIN_SEC)
 
 
 def active_shot_cap() -> float:

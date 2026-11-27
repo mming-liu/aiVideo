@@ -82,8 +82,9 @@ class ImageGeneratorAiVideoAdapter:
     ):
         # 2026-08-22：默认从 .env 读 VIDEO_SIZE，2026-08 升级 1440*2560 满足 Seedream 4.5 像素下限 3686400
         if size is None:
+            from shared.config import DEFAULT_VIDEO_SIZE
             env_size = (os.getenv("VIDEO_SIZE", "") or "").strip().replace("*", "x").lower()
-            size = env_size if env_size else "1024x1792"  # 9:16 竖屏 fallback
+            size = env_size if env_size else DEFAULT_VIDEO_SIZE.replace("*", "x")  # 9:16 竖屏 fallback
         self.size = size
         # 追加图片防幻觉负向词；英文 token 仅 Agnes 使用，中文模型用纯中文版
         base_np = negative_prompt if negative_prompt is not None else image_negative_prompt()

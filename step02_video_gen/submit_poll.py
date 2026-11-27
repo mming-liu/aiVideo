@@ -279,9 +279,9 @@ def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None, *,
         return t
 
     from step02_video_gen.prompt_builder import _build_prompt
-    from shared.style_prefix import style_profile
+    from shared.style_prefix import frame_canvas_ratio, style_profile
 
-    _style = style_profile(ratio="9:16")
+    _style = style_profile(ratio=frame_canvas_ratio())
 
     # Seedance 系（volcengine / agent_plan）走精简路径，缓存哈希必须跟随
     # （否则旧完整 prompt 生成的视频会被错误复用，refit 错乱）

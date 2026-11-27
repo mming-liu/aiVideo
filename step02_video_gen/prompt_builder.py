@@ -18,7 +18,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from shared import style_prefix
 from shared.style_prefix import (
     style_profile, ensure_prefix, sanitize_prompt,
-    is_empty_scene, style_lock_prompt,
+    is_empty_scene, style_lock_prompt, frame_canvas_ratio,
 )
 from shared.style_cinematic import get_cinematic_prefix, get_director_negative
 from shared.config import CINEMATIC_STYLE
@@ -1448,8 +1448,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
     cinematic_prefix = (
         get_cinematic_prefix(CINEMATIC_STYLE) if CINEMATIC_STYLE else ""
     )
-    # 画风口径一次取齐：前缀（含 9:16 画幅）+ 视频负向词同一预设、同一时刻。
-    profile = style_profile(ratio="9:16")
+    # 画风口径一次取齐：前缀（画幅跟随 VIDEO_SIZE）+ 视频负向词同一预设、同一时刻。
+    profile = style_profile(ratio=frame_canvas_ratio())
 
     # Seedance 专用精简路径（2026-08-20 方案 2 上游精简）：从源头减少注入量，
     # 让 prompt 自然 ≤500 字符，provider 侧 compress 沦为兜底。

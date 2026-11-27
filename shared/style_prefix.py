@@ -153,7 +153,9 @@ def image_lock_prompt(layout_lock: bool = True) -> str:
 # ===========================================================================
 
 _GLOBAL_RENDER_DEFAULTS = {
-    "resolution": "1080*1920",
+    # resolution / fps 由 get_global_render_config() 从 shared.config 动态取
+    # （2026-11-27 配置解耦：不再在 4 个文件各写一套分辨率默认）。
+    "resolution": "",
     "ratio": "9:16",
     "fps": 24,
     # render_style / negative_prompt 由 get_global_render_config() 按当前
@@ -305,7 +307,9 @@ def frame_canvas_ratio() -> str:
     """
     import math
 
-    raw = (os.getenv("VIDEO_SIZE") or "1440*2560").strip().lower().replace("*", "x")
+    from shared.config import DEFAULT_VIDEO_SIZE
+
+    raw = (os.getenv("VIDEO_SIZE") or DEFAULT_VIDEO_SIZE).strip().lower().replace("*", "x")
     m = re.fullmatch(r"(\d+)\s*x\s*(\d+)", raw)
     if not m:
         return "9:16"
@@ -418,6 +422,10 @@ def get_global_render_config() -> dict:
     VIDEO_SIZE 才是真值（与 step04 MERGE_RESOLUTION 一致）。
     """
     config = dict(_GLOBAL_RENDER_DEFAULTS)
+    # 分辨率/帧率从 shared.config 单源取（VIDEO_SIZE 是生成画布真值）。
+    from shared.config import DEFAULT_VIDEO_SIZE, RENDER_FPS
+    config["resolution"] = os.getenv("VIDEO_SIZE") or DEFAULT_VIDEO_SIZE
+    config["fps"] = RENDER_FPS
     # 画风相关元数据跟随当前 VIDEO_STYLE 动态派生（不再写死古风口径）。
     profile = style_profile()
     config["render_style"] = profile.label
