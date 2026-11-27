@@ -637,3 +637,8 @@ start_studio.bat
 !tests/step01_script_gen/test_media_cleanup_after_commit.py
 !tests/step01_script_gen/test_first_version_registration_projection.py
 !tests/step01_script_gen/test_verify_stability_advisory.py
+
+# 2026-11-27 下游安全出片基础包（S01–S07）：交付账本与自足测试逐条放行
+!docs/downstream-safe-delivery-2026-11-27.md
+!tests/integration/downstream_fixtures.py
+!tests/integration/test_s01_isolation_baseline.py
