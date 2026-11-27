@@ -56,6 +56,8 @@ class VideoGenerationRequest:
     #: G3（参考清单先行）：``参考图k=身份`` 绑定清单与正文绑定段。
     #: 只作解释性事实（正文已含该段），不单独参与 request_key。
     ref_binding: Optional[dict] = None
+    #: S03（逐镜策略透传）：本镜解析后的合法素材策略（auto/first_last/first_only/reference）。
+    media_policy: Optional[str] = None
 
     def __post_init__(self):
         if self.extra_keyframe_paths is None:

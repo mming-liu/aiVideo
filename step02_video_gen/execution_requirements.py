@@ -126,13 +126,14 @@ def _start_end_state(shot: dict) -> dict:
     }
 
 
-def _reference_facts(frame_paths: list, reference_mode: str) -> dict:
+def _reference_facts(frame_paths: list, reference_mode: str, *,
+                     media_policy: str | None = None) -> dict:
     # 2026-11-18 O1：只记录**策略后实际会下发**的素材；被丢弃的 lf/kf 不得
     # 进入 requirements（它整体进 request_key），否则改未用素材也会让缓存失效。
     try:
         from shared.video_media_plan import filter_frame_paths_by_policy
         frame_paths = filter_frame_paths_by_policy(
-            list(frame_paths or []), os.getenv("VIDEO_MEDIA_POLICY", "auto"))
+            list(frame_paths or []), media_policy or os.getenv("VIDEO_MEDIA_POLICY", "auto"))
     except Exception:  # noqa: BLE001 - 过滤不可用时保持旧行为，不静默丢素材
         frame_paths = list(frame_paths or [])
     materials = []
@@ -158,12 +159,16 @@ def _reference_facts(frame_paths: list, reference_mode: str) -> dict:
                     unsupported.append(material["role"])
     except Exception:
         unsupported = []
-    return {
+    eff_policy = (media_policy or os.getenv("VIDEO_MEDIA_POLICY", "auto") or "auto").strip().lower()
+    out = {
         "mode": reference_mode,
         "materials": materials,
         "unsupported_roles": sorted(set(unsupported)),
         "unverified": [] if materials else ["no_reference_material_used"],
     }
+    if eff_policy != "auto":
+        out["media_policy"] = eff_policy
+    return out
 
 
 def _audio_facts(script: dict, shot: dict) -> dict:
@@ -204,7 +209,8 @@ def _audio_facts(script: dict, shot: dict) -> dict:
 def build_requirements(shot: dict, script: dict, *, visual_plan: dict | None = None,
                        frame_paths: list | None = None,
                        reference_mode: str | None = None,
-                       model_id: str | None = None) -> dict:
+                       model_id: str | None = None,
+                       media_policy: str | None = None) -> dict:
     """构建执行要求（纯函数）."""
     mode = reference_mode or os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
     index = shot.get("index")
@@ -274,7 +280,7 @@ def build_requirements(shot: dict, script: dict, *, visual_plan: dict | None = N
         if not (float(lo) <= float(planned) <= float(hi)):
             issues.append({"code": "bad_duration", "path": f"shots[{index}].duration_sec",
                            "message": f"计划时长 {planned}s 超出模型区间 {lo}-{hi}s"})
-    refs = _reference_facts(list(frame_paths or []), mode)
+    refs = _reference_facts(list(frame_paths or []), mode, media_policy=media_policy)
     for role in refs.get("unsupported_roles") or []:
         issues.append({"code": "role_unsupported", "path": f"shots[{index}].references",
                        "message": f"当前 provider 不支持参考角色 {role}"})

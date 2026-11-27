@@ -1388,7 +1388,8 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
                   continuity_ref_image: str | None = None, mode: str = "A",
                   retry_attempt: int = 0,
                   continuity_ref_video: str | None = None,
-                  ref_sheet_dir: Path | str | None = None):
+                  ref_sheet_dir: Path | str | None = None,
+                  media_policy: str | None = None):
     """构建 VideoGenerationRequest.
 
     frame_paths: [首帧路径, 尾帧路径(可选), 中间关键帧...]
@@ -1405,13 +1406,19 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
       生产 ``shots/``；未给时 `_collect_r2v_references` 使用系统临时目录。
     """
     from _video_gen import VideoGenerationRequest
-    from shared.video_media_plan import (active_media_policy, derive_media_mode,
-                                         plan_image_media,
+    from shared.video_media_plan import (VALID_MEDIA_POLICIES, active_media_policy,
+                                         derive_media_mode, plan_image_media,
                                          validate_media_policy_context)
 
-    # S01：显式素材策略（auto/first_last/first_only/reference）。
-    # 非 auto 只支持 Seedance 的 image 路径；冲突在请求构造期 fail-closed。
-    policy = active_media_policy()
+    # S01/S03：显式素材策略（优先按镜头传入，否则读 env）；非法值与上下文冲突均 fail-closed。
+    policy = (media_policy or active_media_policy()).strip().lower()
+    if policy not in VALID_MEDIA_POLICIES:
+        from _video_gen.models import VideoCapabilityError
+        raise VideoCapabilityError(
+            "invalid_media_policy",
+            f"非法素材策略 {policy!r}；合法值：{', '.join(VALID_MEDIA_POLICIES)}",
+            field_path="media_policy",
+        )
     _conflict = validate_media_policy_context(
         policy=policy,
         provider=os.getenv("VIDEO_PROVIDER", ""),
@@ -1724,6 +1731,7 @@ def _make_request(video_adapter, prompt: str, frame_paths: list, shot: dict,
         camera_movement=camera_movement,
         media_selection=_media_selection,
         ref_binding=_ref_binding or None,
+        media_policy=policy,
     )
 
 

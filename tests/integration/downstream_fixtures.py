@@ -171,6 +171,10 @@ def build_anonymous_story_pack(
                 "narration_segment": "甲道：雨快落下来了。",
                 "clip_transition": "硬切",
                 "keyframes": [],
+                "frame_layouts": {
+                    "ff": [{"name": "甲", "on_screen": True, "pose": "站立抬头"}],
+                    "lf": [{"name": "甲", "on_screen": True, "pose": "迈步上桥"}],
+                },
                 "plan_refs": {"beats": [1], "lines": [1]},
             },
             {
@@ -186,6 +190,10 @@ def build_anonymous_story_pack(
                 "narration_segment": "乙道：我们早点过桥。",
                 "clip_transition": "硬切",
                 "keyframes": [],
+                "frame_layouts": {
+                    "ff": [{"name": "乙", "on_screen": True, "pose": "收拢纸伞"}],
+                    "lf": [{"name": "乙", "on_screen": True, "pose": "面向点头"}],
+                },
                 "plan_refs": {"beats": [2], "lines": [2]},
             },
         ]
@@ -239,6 +247,10 @@ def build_anonymous_story_pack(
                 "narration_segment": line,
                 "clip_transition": "硬切",
                 "keyframes": [],
+                "frame_layouts": {
+                    "ff": [{"name": name, "on_screen": True, "pose": "站立"}],
+                    "lf": [{"name": name, "on_screen": True, "pose": "开门"}],
+                },
                 "plan_refs": {"beats": [idx], "lines": [idx]},
             })
         outline = {
@@ -282,6 +294,10 @@ def build_anonymous_story_pack(
                 "narration_segment": "甲道：风向变了，按原路撤。",
                 "clip_transition": "交叉溶解 0.5秒",
                 "keyframes": [],
+                "frame_layouts": {
+                    "ff": [{"name": "甲", "on_screen": True, "pose": "提箱站立"}],
+                    "lf": [{"name": "甲", "on_screen": True, "pose": "放下木箱"}],
+                },
                 "plan_refs": {"beats": [2], "lines": [1]},
             },
             {
@@ -297,6 +313,10 @@ def build_anonymous_story_pack(
                 "narration_segment": "丙道：渡船立刻离岸。",
                 "clip_transition": "硬切",
                 "keyframes": [],
+                "frame_layouts": {
+                    "ff": [{"name": "丙", "on_screen": True, "pose": "握住缆绳"}],
+                    "lf": [{"name": "丙", "on_screen": True, "pose": "后退半步"}],
+                },
                 "plan_refs": {"beats": [3], "lines": [2]},
             },
         ]
@@ -382,26 +402,52 @@ def install_step02a_acceptance(
     shot_policies: dict[int, str],
     media_policy: str = "auto",
 ) -> Path:
-    """Write a valid step02a_quality.json and corresponding PNG frames under vimax_working/shots."""
+    """Write a valid step02a_quality.json and verified PNG/sidecar frames under vimax_working/shots."""
+    from shared.image_qc import (
+        QcResult,
+        build_qc_frame_meta,
+        qc_state,
+        write_frame_request_snapshot,
+        write_sidecar,
+    )
+
     ch_dir = Path(ch_dir)
     shots_dir = ch_dir / "vimax_working" / "shots"
+    shots_by_idx = {int(s["index"]): s for s in (script.get("shots") or []) if isinstance(s, dict)}
+    characters = list(script.get("characters") or [])
     outputs: dict = {}
     issues_by_shot: dict = {}
+    reqs_by_shot: dict = {}
     for idx in sorted(shot_policies):
         pol = shot_policies[idx]
+        shot = shots_by_idx.get(int(idx), {"index": int(idx)})
         sdir = shots_dir / str(idx)
         ff = make_test_png(sdir / "first_frame.png", color=(40 + idx * 20, 80, 140))
-        entry = {"ff": {"path": str(ff), "sha1": sha1_file(ff)}, "keyframes": {}}
+        write_frame_request_snapshot(ff, shot=shot, frame_kind="first_frame", prompt=shot.get("ff_desc") or f"ff-{idx}", refs=[])
+        ff_meta = build_qc_frame_meta(shot, "first_frame", characters, frame_path=ff)
+        write_sidecar(ff, QcResult(ok=True, has_hallucination=False, issues=[]), frame_meta=ff_meta, status="qc_passed")
+        qc_states = {"ff": qc_state(ff, expected_frame=ff_meta, require_request_snapshot=True)}
+        entry = {"ff": {"path": str(ff), "sha1": sha1_file(ff)}, "lf": None, "keyframes": {}, "qc_states": qc_states}
+        needed_frames = ["ff"]
         if pol in ("auto", "first_last", "reference"):
             lf = make_test_png(sdir / "last_frame.png", color=(160, 60 + idx * 15, 50))
+            write_frame_request_snapshot(lf, shot=shot, frame_kind="last_frame", prompt=shot.get("lf_desc") or f"lf-{idx}", refs=[])
+            lf_meta = build_qc_frame_meta(shot, "last_frame", characters, frame_path=lf)
+            write_sidecar(lf, QcResult(ok=True, has_hallucination=False, issues=[]), frame_meta=lf_meta, status="qc_passed")
+            qc_states["lf"] = qc_state(lf, expected_frame=lf_meta, require_request_snapshot=True)
             entry["lf"] = {"path": str(lf), "sha1": sha1_file(lf)}
+            needed_frames.append("lf")
         outputs[str(idx)] = entry
         issues_by_shot[str(idx)] = []
+        reqs_by_shot[str(idx)] = {"frames": needed_frames, "keyframes": False}
     report = {
+        "schema_version": "step02a.product_acceptance/2",
         "source": "step02a.product_acceptance",
         "report_type": "product_acceptance",
         "rule_version": QUALITY_RULE_VERSION,
         "status": "PASS",
+        "admission_status": "PASS",
+        "admitted": True,
         "blocking": False,
         "missing": [],
         "outputs": outputs,
@@ -411,6 +457,7 @@ def install_step02a_acceptance(
             "keyframes_required": False,
             "media_policy": media_policy,
             "policies": {str(k): v for k, v in sorted(shot_policies.items())},
+            "requirements": reqs_by_shot,
         },
     }
     attach_gate_metadata(report, script, stage="step02a.product_acceptance")

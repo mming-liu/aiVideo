@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="恢复指定 attempt 目录里**已有**的 task（无 ID 不许新生成）")
     parser.add_argument("--all-shots", action="store_true",
                         help="候选模式下显式确认全量镜头（未给 --shots 时必须显式声明）")
+    parser.add_argument("--media-policy-source", choices=["env", "step02a"], default=None,
+                        help="每镜素材策略来源：env（默认，读 VIDEO_MEDIA_POLICY）| "
+                             "step02a（从 step02a_quality.json 继承逐镜混合策略）")
     add_scope_arguments(parser)
     return parser
 

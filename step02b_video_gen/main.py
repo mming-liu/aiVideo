@@ -104,7 +104,9 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
                          only_indices: set[int] | None = None,
                          force: bool = False,
                          candidate_factory=None,
-                         log_path: Path | None = None) -> int:
+                         log_path: Path | None = None,
+                         policy_source: str | None = None,
+                         qa_report: dict | None = None) -> int:
     """按 VIDEO_REFERENCE_MODE 统一生成全部镜头视频，并行提交 + 后台轮询。
 
     统一模式：全部镜头按 .env.content 的 VIDEO_REFERENCE_MODE（text/r2v/image）
@@ -162,6 +164,19 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
 
     polls = []
     from shared import post_budget
+    from shared.video_media_plan import (active_media_policy_source,
+                                         resolve_shot_media_policy)
+    _policy_source = (policy_source or active_media_policy_source()).strip().lower()
+    if _policy_source == "step02a" and qa_report is None:
+        _qa_path = Path(working_dir) / "step02a_quality.json"
+        if _qa_path.is_file():
+            qa_report = json.loads(_qa_path.read_text(encoding="utf-8"))
+    _resolved_policies: dict[int, str] = {}
+    for shot in tasks:
+        _sidx = int(shot["index"])
+        _resolved_policies[_sidx] = resolve_shot_media_policy(
+            _sidx, qa_report=qa_report, policy_source=_policy_source,
+        )
     for shot in tasks:
         if post_budget.quota_exhausted("video"):
             logger.warn("  [BUDGET] 视频额度已耗尽/熔断：停止后续镜头提交；"
@@ -174,6 +189,7 @@ async def gen_all_videos(script: dict, working_dir: Path, script_file_path: Path
             force=force,
             candidate_context=(candidate_factory(shot["index"])
                                if candidate_factory is not None else None),
+            media_policy=_resolved_policies[int(shot["index"])],
         )
         if poll_task is not None:
             polls.append((shot["index"], poll_task))
@@ -205,6 +221,7 @@ async def _process_one_shot_skip_frames(
     poll_semaphore: asyncio.Semaphore,
     force: bool = False,
     candidate_context=None,
+    media_policy: str | None = None,
 ):
     """处理单个镜头：跳过帧生成，直接提交视频（复用已有帧）。
 
@@ -241,10 +258,9 @@ async def _process_one_shot_skip_frames(
         logger = get_logger(chapter_dir() / "step02b.log", console_level="INFO")
         _clip_dst = clip_file(idx)
 
-    # S02：按策略先定素材（必需项缺失即失败），再判缓存。非 auto 策略在命中缓存前
-    # 必须证明旧产物对应当前实际素材模式（S01 缓存门：require_exact）。
+    # S02/S03：按单镜解析后的策略定素材（必需项缺失即失败），再判缓存。
     from shared.video_media_plan import active_media_policy
-    policy = active_media_policy()
+    policy = (media_policy or active_media_policy()).strip().lower()
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
     if REFERENCE_MODE == "r2v" or REFERENCE_MODE == "text":
         # r2v：参考图由 prompt_builder._make_request 权威收集（角色肖像），
@@ -262,9 +278,10 @@ async def _process_one_shot_skip_frames(
     from shared.model_caps import active_video_model
     _visual_plan = _load_visual_plan(shots_dir.parent)
     _reqs = _execution_requirements(shot, script, _visual_plan, frame_paths,
-                                    str(active_video_model() or ""))
+                                    str(active_video_model() or ""),
+                                    media_policy=policy)
     _req_issues = list(_reqs.get("issues") or [])
-    shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir)
+    shot_hash = _get_shot_hash(shot, script, shot_dir=frames_dir, media_policy=policy)
     _prepared_facts = None
     if _req_issues:
         logger.warn(f"  [Shot {idx}] 执行要求问题: {_req_issues[:3]}")
@@ -290,7 +307,8 @@ async def _process_one_shot_skip_frames(
                 provider=os.getenv("VIDEO_PROVIDER", ""),
                 model_id=active_video_model(),
                 execution_requirements=_reqs,
-                candidate_context=candidate_context)
+                candidate_context=candidate_context,
+                media_policy=policy)
             if _prepared_facts.status == "prepared":
                 _cache = cache_decision(
                     shot, script, shot_dir, video_path, clip_path=_clip_dst,
@@ -331,6 +349,7 @@ async def _process_one_shot_skip_frames(
         candidate_context=candidate_context,
         execution_requirements=_reqs,
         prepared_facts=_prepared_facts,
+        media_policy=policy,
     )
 
 
@@ -392,12 +411,13 @@ def _load_visual_plan(working_dir: Path) -> dict | None:
 
 
 def _execution_requirements(shot: dict, script: dict, visual_plan: dict | None,
-                            frame_paths: list, model_id: str | None) -> dict:
+                            frame_paths: list, model_id: str | None,
+                            *, media_policy: str | None = None) -> dict:
     from step02_video_gen.execution_requirements import build_requirements
     return build_requirements(
         shot, script, visual_plan=visual_plan, frame_paths=frame_paths,
         reference_mode=os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower(),
-        model_id=model_id)
+        model_id=model_id, media_policy=media_policy)
 
 
 def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
@@ -405,7 +425,9 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                precheck_ledger: Path | None = None,
                visual_plan: dict | None = None,
                ref_work_dir: Path | None = None,
-               scope: dict | None = None) -> dict:
+               scope: dict | None = None,
+               policy_source: str | None = None,
+               qa_report: dict | None = None) -> dict:
     """只组装**冻结请求 + 结构预检**（零网络、零生成 POST，§V2「plan-only+force 仍零网络」）。
 
     M4：image 模式下额外做首尾帧 SHA-256 / 差异度预检；给了
@@ -419,10 +441,20 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
     时 `_make_request` 用系统临时目录，绝不写生产 ``shots/``（F2）。
     """
     from shared.model_caps import active_video_model
-    from shared.video_media_plan import active_media_policy
+    from shared.video_media_plan import (active_media_policy_source,
+                                         resolve_shot_media_policy,
+                                         validate_media_policy_context)
     from step02_video_gen import request_plan as rp
 
-    _policy = active_media_policy()
+    _policy_source = (policy_source or active_media_policy_source()).strip().lower()
+    if _policy_source == "step02a" and qa_report is None:
+        _qa_disk = Path(shots_dir).parent / "step02a_quality.json"
+        if _qa_disk.is_file():
+            qa_report = json.loads(_qa_disk.read_text(encoding="utf-8"))
+        else:
+            raise ValueError(
+                f"VIDEO_MEDIA_POLICY_SOURCE=step02a 需要 step02a 验收报告，但未找到 {_qa_disk}"
+            )
     from shared.run_scope import current_scope_identity, scope_identity
     _scope = dict(scope_identity(scope)) if scope is not None else dict(current_scope_identity())
     resolved_model = model_id if model_id is not None else str(active_video_model() or "")
@@ -454,12 +486,24 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
         idx = shot.get("index")
         if only_indices is not None and idx not in only_indices:
             continue
+        _shot_policy = resolve_shot_media_policy(
+            int(idx), qa_report=qa_report, policy_source=_policy_source,
+        )
         mode = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
-        entry = {"shot_index": idx, "mode": mode, "generations": 0}
+        entry = {"shot_index": idx, "mode": mode, "media_policy": _shot_policy, "generations": 0}
+        _p_conflict = validate_media_policy_context(
+            policy=_shot_policy, provider=provider, reference_mode=mode,
+        )
+        if _p_conflict:
+            entry.update({"verdict": "blocked", "code": _p_conflict["code"],
+                          "field_path": _p_conflict["field_path"],
+                          "message": _p_conflict["message"]})
+            entries.append(entry)
+            continue
         if mode == "image":
             dd = shots_dir / str(idx)
             try:
-                frame_paths = _collect_frame_paths(idx, dd, _policy)
+                frame_paths = _collect_frame_paths(idx, dd, _shot_policy)
             except FileNotFoundError as exc:
                 entry.update({"verdict": "blocked", "code": "frames_missing",
                               "field_path": f"shots[{idx}].frames",
@@ -471,7 +515,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
             # 只在策略**同时要求** ff/lf 时做 pair 预检；first_only/reference
             # 没有尾帧，不能按「缺尾帧」误判 blocked。
             from shared.video_media_plan import required_frames as _required_frames
-            _need = set(_required_frames(_policy))
+            _need = set(_required_frames(_shot_policy))
             if {"ff", "lf"} <= _need:
                 from shared import frame_precheck as _fpc
                 _frame_check = _fpc.precheck_shot(shot, frame_paths)
@@ -497,7 +541,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
         else:
             frame_paths = []
         _reqs = _execution_requirements(shot, script, visual_plan, frame_paths,
-                                        resolved_model)
+                                        resolved_model, media_policy=_shot_policy)
         entry["execution_requirements"] = _reqs
         _prepared_status = "not_prepared"
         _prep_block = None
@@ -506,6 +550,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                 shot=shot, script=script, video_adapter=None, frame_paths=frame_paths,
                 mode="A", scope=_scope, provider=provider,
                 model_id=resolved_model, execution_requirements=_reqs,
+                media_policy=_shot_policy,
                 ref_sheet_dir=((Path(ref_work_dir) / str(idx))
                                if ref_work_dir is not None else None))
             # S04：预检走与实发相同的 prepare 链路（纯离线，不提交）。
@@ -527,6 +572,7 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
                             mode="A", scope=_scope, provider=provider,
                             model_id=resolved_model, prepared=_prepared,
                             execution_requirements=_reqs,
+                            media_policy=_shot_policy,
                             ref_sheet_dir=((Path(ref_work_dir) / str(idx))
                                            if ref_work_dir is not None else None))
                         _prepared_status = "prepared"
@@ -589,7 +635,9 @@ def build_plan(script: dict, shots_dir: Path, *, only_indices: set[int] | None,
 
 
 def _plan_only(options, script: dict, shots_dir: Path, chapter: int,
-               scope: dict | None = None) -> int:
+               scope: dict | None = None,
+               policy_source: str | None = None,
+               qa_report: dict | None = None) -> int:
     """plan-only：零网络规划，落计划文件到候选实验根（不写正式产物）。
 
     2026-11-13（F2）：plan-only 也做 production snapshot 前后比对——r2v 参考表
@@ -598,25 +646,39 @@ def _plan_only(options, script: dict, shots_dir: Path, chapter: int,
     """
     from shared import enhancement_io as _eio
     from shared.enhancement_io import package_root
+    from shared.quality_gate import QualityGateError, require_gate
+    from shared.video_media_plan import active_media_policy_source
     from step02b_video_gen import cli
 
     experiment_id = cli.resolve_experiment_root(options.candidate_root, chapter=chapter)
     out_root = package_root("video", experiment_id, chapter) / "plans"
     out_root.mkdir(parents=True, exist_ok=True)
 
-    # WP1b（2026-11-14）：plan-only 对章目录必须**真正**零写入。正式入口已在 main()
-    # 里设好候选日志上下文；这里再兜一层——万一被别的入口直接调用，也不能让
-    # vimax_bridge 之类按 chapter_dir() 建 step02.log（那一笔就会被 snapshot 判成
-    # production_write_detected，exit 3）。
-    #
-    # 2026-11-14 复核 P2：兜底上下文必须在退出时**恢复**。它是进程级全局状态，
-    # 不恢复会让同进程的下一次调用（例如另一个实验根）继续把日志写进第一次的目录。
     from shared import log_utils as _log_utils
     _prev_log_dir = _log_utils.current_log_dir()
     if _prev_log_dir is None:
         _log_utils.set_log_context(out_root.parent / "logs")
     try:
         only_indices = parse_shot_selector(options.shots)
+        _src = (policy_source or active_media_policy_source()).strip().lower()
+        if _src == "step02a":
+            if qa_report is None:
+                try:
+                    qa_report = require_gate(
+                        chapter_dir() / "step02a_quality.json",
+                        script,
+                        stage="step02a",
+                        required_report_type="product_acceptance",
+                        verify_outputs=False,
+                    )
+                except (FileNotFoundError, QualityGateError, ValueError, OSError) as _qa_exc:
+                    print(f"[ERROR] {_qa_exc}", flush=True)
+                    return _eio.EXIT_REJECTED
+            try:
+                _assert_step02a_scope(qa_report, only_indices, script, policy_source=_src)
+            except (QualityGateError, ValueError) as _sc_exc:
+                print(f"[ERROR] {_sc_exc}", flush=True)
+                return _eio.EXIT_REJECTED
         ledger = out_root / "step02b_frame_precheck.json"
         before = production_snapshot(chapter)
         # 参考表/清单落点也钉到实验根：拼表逻辑只认参数，不知道"现在是只读预检"，
@@ -628,7 +690,10 @@ def _plan_only(options, script: dict, shots_dir: Path, chapter: int,
             plan = build_plan(script, shots_dir, only_indices=only_indices, chapter=chapter,
                               provider=str(os.getenv("VIDEO_PROVIDER", "")),
                               precheck_ledger=ledger, ref_work_dir=out_root / "refs",
-                              scope=scope)
+                              scope=scope, policy_source=_src, qa_report=qa_report)
+        except ValueError as _plan_exc:
+            print(f"[ERROR] {_plan_exc}", flush=True)
+            return _eio.EXIT_INVALID_INPUT
         finally:
             _ref_compose.set_ref_dir_context(_prev_ref_dir)
         path = out_root / f"plan_{len(list(out_root.glob('plan_*.json'))) + 1:04d}.json"
@@ -712,7 +777,9 @@ def candidate_exit_code(failed: int, codes) -> int:
 
 
 def _run_candidate(options, script: dict, work_dir: Path, script_path: Path,
-                   chapter: int, shots_dir: Path) -> int:
+                   chapter: int, shots_dir: Path, *,
+                   policy_source: str | None = None,
+                   qa_report: dict | None = None) -> int:
     """候选模式生成：每镜一个 attempt，产物/日志全隔离；正式产物只读。
 
     跑前/跑后各取一次 ``production_snapshot`` 并逐路径比对；一旦正式 ``clips/``、
@@ -762,7 +829,8 @@ def _run_candidate(options, script: dict, work_dir: Path, script_path: Path,
     try:
         failed = asyncio.run(gen_all_videos(
             script, work_dir, script_path, only_indices=only_indices, force=options.force,
-            candidate_factory=_factory, log_path=batch_log))
+            candidate_factory=_factory, log_path=batch_log,
+            policy_source=policy_source, qa_report=qa_report))
     finally:
         _req_ev.reset_step02b_events_path(_ev_tok)
     after = production_snapshot(chapter)
@@ -808,7 +876,8 @@ def _run_candidate(options, script: dict, work_dir: Path, script_path: Path,
     return 0
 
 
-def _assert_step02a_scope(report: dict, only_indices, script: dict) -> None:
+def _assert_step02a_scope(report: dict, only_indices, script: dict, *,
+                          policy_source: str | None = None) -> None:
     """子集运行的门禁范围核对：报告覆盖的镜头必须包含本次要跑的镜头。
 
     step02a 的成品验收报告现在带 scope.shots（--shots 子集运行时只覆盖子集）。
@@ -816,43 +885,53 @@ def _assert_step02a_scope(report: dict, only_indices, script: dict) -> None:
     给整章放行。
     """
     from shared.quality_gate import QualityGateError
-
-    from shared.video_media_plan import active_media_policy
+    from shared.video_media_plan import (active_media_policy,
+                                         active_media_policy_source,
+                                         resolve_shot_media_policy)
 
     scope = (report or {}).get("scope") or {}
-    _current_policy = active_media_policy()
+    _policy_source = (policy_source or active_media_policy_source()).strip().lower()
     wanted = set(only_indices) if only_indices is not None else None
     if wanted is None:
         wanted = {int(s.get("index", 0)) for s in script.get("shots", [])}
         if script.get("hook"):
             wanted.add(0)
-    # 2026-11-18 O2：报告可带**逐镜策略**（shot 1 auto / shot 2 first_only）。
-    # 有 policies 时按本次请求的每个镜头核它自己的策略；没有时才退回全报告
-    # 单一 media_policy 的旧口径。
-    _policies = scope.get("policies")
-    if isinstance(_policies, dict) and _policies:
+
+    if _policy_source == "step02a":
         for idx in sorted(wanted):
-            declared = _policies.get(str(idx))
-            if declared is None:
-                raise QualityGateError(
-                    "step02a 验收缺少 shot %s 的逐镜策略（报告覆盖 %s）"
-                    % (idx, sorted(_policies)))
-            if str(declared) != _current_policy:
-                raise QualityGateError(
-                    "step02a shot %s 策略 %s 与当前策略 %s 不一致，需重跑 step02a"
-                    % (idx, declared, _current_policy))
+            try:
+                resolve_shot_media_policy(idx, qa_report=report, policy_source="step02a")
+            except ValueError as exc:
+                raise QualityGateError(str(exc)) from None
     else:
-        # S02：成品报告必须与当前素材策略同一口径；旧报告（无 media_policy）只在 auto 下沿用。
-        _report_policy = scope.get("media_policy")
-        if _report_policy is None:
-            if _current_policy != "auto":
+        _current_policy = active_media_policy()
+        # 2026-11-18 O2：报告可带**逐镜策略**（shot 1 auto / shot 2 first_only）。
+        # 有 policies 时按本次请求的每个镜头核它自己的策略；没有时才退回全报告
+        # 单一 media_policy 的旧口径。
+        _policies = scope.get("policies")
+        if isinstance(_policies, dict) and _policies:
+            for idx in sorted(wanted):
+                declared = _policies.get(str(idx))
+                if declared is None:
+                    raise QualityGateError(
+                        "step02a 验收缺少 shot %s 的逐镜策略（报告覆盖 %s）"
+                        % (idx, sorted(_policies)))
+                if str(declared) != _current_policy:
+                    raise QualityGateError(
+                        "step02a shot %s 策略 %s 与当前策略 %s 不一致，需重跑 step02a"
+                        % (idx, declared, _current_policy))
+        else:
+            # S02：成品报告必须与当前素材策略同一口径；旧报告（无 media_policy）只在 auto 下沿用。
+            _report_policy = scope.get("media_policy")
+            if _report_policy is None:
+                if _current_policy != "auto":
+                    raise QualityGateError(
+                        "step02a 成品报告缺少 media_policy（旧报告），当前策略 %s 需重跑 step02a"
+                        % _current_policy)
+            elif str(_report_policy) != _current_policy:
                 raise QualityGateError(
-                    "step02a 成品报告缺少 media_policy（旧报告），当前策略 %s 需重跑 step02a"
-                    % _current_policy)
-        elif str(_report_policy) != _current_policy:
-            raise QualityGateError(
-                "step02a 成品报告策略 %s 与当前策略 %s 不一致，需重跑 step02a"
-                % (_report_policy, _current_policy))
+                    "step02a 成品报告策略 %s 与当前策略 %s 不一致，需重跑 step02a"
+                    % (_report_policy, _current_policy))
     scoped = {int(i) for i in (scope.get("shots") or [])}
     if not scoped:
         return
@@ -928,19 +1007,32 @@ def main(options=None):
         logger.info(f"[INFO] {scope_log_line(scope)}")
 
     REFERENCE_MODE = os.getenv("VIDEO_REFERENCE_MODE", "text").strip().lower()
-    # S01：显式策略与运行上下文冲突时启动即阻断（不进入任何提交）。
+    # S01/S03：显式策略来源与运行上下文校验（支持按镜头从 step02a 继承混合策略）。
     from shared.video_media_plan import (active_media_policy,
+                                         active_media_policy_source,
+                                         resolve_shot_media_policy,
                                          validate_media_policy_context)
     try:
-        _policy = active_media_policy()
+        _policy_source = (getattr(options, "media_policy_source", None)
+                          or active_media_policy_source()).strip().lower()
+        _policy = active_media_policy() if _policy_source == "env" else "auto"
     except ValueError as _policy_exc:
         print(f"[ERROR] {_policy_exc}", flush=True)
         raise SystemExit(2) from None
-    _policy_conflict = validate_media_policy_context(
-        policy=_policy, provider=os.getenv("VIDEO_PROVIDER", ""),
-        reference_mode=REFERENCE_MODE)
-    if _policy_conflict:
-        print(f"[ERROR] {_policy_conflict['message']}", flush=True)
+    if _policy_source == "env":
+        _policy_conflict = validate_media_policy_context(
+            policy=_policy, provider=os.getenv("VIDEO_PROVIDER", ""),
+            reference_mode=REFERENCE_MODE)
+        if _policy_conflict:
+            print(f"[ERROR] {_policy_conflict['message']}", flush=True)
+            raise SystemExit(2)
+    elif REFERENCE_MODE != "image":
+        # S03：逐镜策略的唯一事实源是 step02a 帧验收报告（scope.policies），
+        # 只有 image 通道才有该报告与逐镜素材。别的通道显式要求它 = 配置错误，
+        # 启动即拒绝，不等到提交前才抛未捕获异常。
+        print(f"[ERROR] --media-policy-source=step02a 只适用于 VIDEO_REFERENCE_MODE=image"
+              f"（当前 {REFERENCE_MODE}）：逐镜混合策略来自 step02a 帧验收报告",
+              flush=True)
         raise SystemExit(2)
     shots_dir = vimax_shots_dir()
 
@@ -955,6 +1047,7 @@ def main(options=None):
     # v6.103：三份 step01 产物必须属于同一个提交批次（见 shared/quality_gate）
     verify_step01_commit_manifest(chapter_dir(), script, stage="step01",
                                   expected_chapter=scope["chapter"])
+    _qa_report = None
     # 2026-10-28（M10）：`--plan-only` 是**零网络结构预检**，它的输出本身就是
     # 「哪些镜头缺帧/缺参考」（`frames_missing` 等 blocked 条目）。此前它排在
     # step02a 成品验收门**之后**，没有帧的章节走不到预检就先被门拦住，
@@ -965,7 +1058,7 @@ def main(options=None):
                                   stage="step02a",
                                   required_report_type="product_acceptance",
                                   verify_outputs=True, output_indices=only_indices)
-        _assert_step02a_scope(_qa_report, only_indices, script)
+        _assert_step02a_scope(_qa_report, only_indices, script, policy_source=_policy_source)
 
     # ---- 候选模式分支（plan-only / resume / 候选生成）----
     if options.resume:
@@ -975,7 +1068,8 @@ def main(options=None):
             logger.error("[ERROR] --plan-only 必须配合 --candidate-root 使用")
             raise SystemExit(2)
         raise SystemExit(_plan_only(options, script, shots_dir, scope["chapter"],
-                                    scope=scope))
+                                    scope=scope, policy_source=_policy_source,
+                                    qa_report=_qa_report))
 
     # r2v/text 模式不需要帧图片（r2v 参考图来自角色肖像注册表，非帧）
     if REFERENCE_MODE in ("r2v", "text"):
@@ -994,9 +1088,18 @@ def main(options=None):
             if only_indices is None or idx in only_indices:
                 expected.append(idx)
         from shared.video_media_plan import required_frames
-        _need = required_frames(_policy)
         missing_frames = []
         for idx in expected:
+            shot_policy = resolve_shot_media_policy(
+                int(idx), qa_report=_qa_report, policy_source=_policy_source,
+            )
+            _s_conflict = validate_media_policy_context(
+                policy=shot_policy, provider=os.getenv("VIDEO_PROVIDER", ""),
+                reference_mode=REFERENCE_MODE)
+            if _s_conflict:
+                print(f"[ERROR] Shot {idx}: {_s_conflict['message']}", flush=True)
+                raise SystemExit(2)
+            _need = required_frames(shot_policy)
             d = shots_dir / str(idx)
             ff = d / FIRST_FRAME_FILENAME
             lf = d / LAST_FRAME_FILENAME
@@ -1005,7 +1108,7 @@ def main(options=None):
                 _miss.append("ff")
             if "lf" in _need and not lf.exists():
                 _miss.append("lf")
-            if _policy == "reference":
+            if shot_policy == "reference":
                 _kfs = [p for p in _core_keyframes_in(d) if p.exists()]
                 if not (ff.exists() or lf.exists() or _kfs):
                     _miss.append("ff/lf/kf")
@@ -1019,7 +1122,9 @@ def main(options=None):
 
     if options.candidate_root:
         raise SystemExit(_run_candidate(options, script, work_dir, script_path,
-                                        scope["chapter"], shots_dir))
+                                        scope["chapter"], shots_dir,
+                                        policy_source=_policy_source,
+                                        qa_report=_qa_report))
 
     logger.info(f"[INFO] step02b_video_gen start")
     logger.info(f"  script: {script_path}")
@@ -1042,6 +1147,7 @@ def main(options=None):
     failed = asyncio.run(gen_all_videos(
         script, work_dir, script_path,
         only_indices=only_indices, force=options.force,
+        policy_source=_policy_source, qa_report=_qa_report,
     ))
 
     # Separate product acceptance from the pre-generation prompt report.

@@ -372,7 +372,11 @@ class VolcengineVideoService(VideoGenerationService):
             key_slot=0, binding_version=1,
             capability_revision=_capability_revision(model))
         prepared.content_plan = items
-        prepared.source = {"shot_index": req.clip_index}
+        _req_policy = (getattr(req, "media_policy", None) or "").strip().lower()
+        prepared.source = {
+            "shot_index": req.clip_index,
+            **({"media_policy": _req_policy} if _req_policy else {}),
+        }
         prepared.compute_content_key()
         return prepared
 
@@ -436,11 +440,17 @@ class VolcengineVideoService(VideoGenerationService):
         - 图生视频-首帧/首尾帧：role=first_frame / last_frame（所有 Seedance 支持）
         """
         from shared.model_caps import get_seedance_cap
-        from shared.video_media_plan import (active_media_policy, plan_image_media,
-                                             validate_media_policy_context)
+        from shared.video_media_plan import (VALID_MEDIA_POLICIES, active_media_policy,
+                                             plan_image_media, validate_media_policy_context)
         cap = get_seedance_cap(model)
-        # S01：显式素材策略的冲突检查（直接调用 provider 也必须 fail-closed）。
-        policy = active_media_policy()
+        # S01/S03：优先消费单镜显式策略，否则读 env；直接调用 provider 也必须 fail-closed。
+        policy = (getattr(req, "media_policy", None) or active_media_policy()).strip().lower()
+        if policy not in VALID_MEDIA_POLICIES:
+            raise VideoCapabilityError(
+                "invalid_media_policy",
+                f"非法素材策略 {policy!r}；合法值：{', '.join(VALID_MEDIA_POLICIES)}",
+                field_path="media_policy",
+            )
         _conflict = validate_media_policy_context(
             policy=policy, provider="volcengine", reference_mode=_req_mode(req))
         if _conflict:

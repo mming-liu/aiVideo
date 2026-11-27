@@ -485,7 +485,7 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                           scope=None, provider=None, model_id=None, prompt=None,
                           requirements=None, prepared=None,
                           execution_requirements=None, ref_sheet_dir=None,
-                          capability_revision=None):
+                          capability_revision=None, media_policy=None):
     """按**当前输入**组装冻结请求（提交冻结与缓存关系核对共用同一份组装）。
 
     ``ref_sheet_dir`` 是 r2v 超限参考表的落盘目录（attempt / 临时目录）；不给时
@@ -505,6 +505,7 @@ def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
                         characters=script.get("characters", []),
                         continuity_ref_image=continuity_ref_image, mode=mode,
                         retry_attempt=_read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0,
+                        media_policy=media_policy,
                         **({"ref_sheet_dir": ref_sheet_dir} if ref_sheet_dir is not None else {}))
     if prepared is not None:
         provider = str(getattr(prepared, "provider", "") or provider or "")
@@ -568,7 +569,8 @@ def _service_supports_prepared(svc) -> bool:
 def build_prepared_facts(*, shot, script, video_adapter, frame_paths, mode,
                          scope=None, script_revision=None, provider=None,
                          model_id=None, execution_requirements=None,
-                         candidate_context=None, ref_sheet_dir=None) -> PreparedFacts:
+                         candidate_context=None, ref_sheet_dir=None,
+                         media_policy=None) -> PreparedFacts:
     """组装 + prepare 一次，返回结构化事实；失败不再重试（S02-C1）。
 
     与提交路径同源：``provider/model_id/capability_revision`` 取 prepared；执行要求
@@ -590,7 +592,8 @@ def build_prepared_facts(*, shot, script, video_adapter, frame_paths, mode,
             frame_paths=frame_paths, mode=mode, scope=_scope,
             script_revision=_revision, provider=_provider, model_id=_model,
             requirements=generation_requirements(),
-            ref_sheet_dir=ref_sheet_dir)
+            ref_sheet_dir=ref_sheet_dir,
+            media_policy=media_policy)
     except Exception as exc:  # noqa: BLE001 - 组装失败是确定阻断，结构化返回
         return PreparedFacts(status="blocked", error=_prepare_error(exc, stage="request_assembly"))
 
@@ -625,7 +628,8 @@ def build_prepared_facts(*, shot, script, video_adapter, frame_paths, mode,
             script_revision=_revision, provider=_provider, model_id=_model,
             requirements=generation_requirements(), prepared=prepared,
             execution_requirements=execution_requirements,
-            ref_sheet_dir=ref_sheet_dir)
+            ref_sheet_dir=ref_sheet_dir,
+            media_policy=media_policy)
     except Exception as exc:  # noqa: BLE001
         return PreparedFacts(status="blocked", req=req, prepared=prepared,
                              error=_prepare_error(exc, stage="frozen_assembly"))
@@ -1847,7 +1851,8 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                                   poll_semaphore, script: dict, idx: int, prompt: str,
                                   characters: list, continuity_ref_image, mode: str,
                                   candidate_context, logger, make_request, production_output=False,
-                                  execution_requirements=None, prepared_facts=None):
+                                  execution_requirements=None, prepared_facts=None,
+                                  media_policy=None):
     """候选模式提交：**一次尝试 = 至多一个生成 POST**（计划 §V1/§V2 改动 1/2/6）。
 
     与旧路的区别（本函数是候选模式的**唯一**提交入口）：
@@ -1932,11 +1937,20 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
                                    or "execution_requirements_blocked"))
         prepared.request_key = frozen.request_key
     else:
-        req = make_request(video_adapter, prompt, frame_paths, shot, characters=characters,
-                           continuity_ref_image=continuity_ref_image, mode=mode,
-                           ref_sheet_dir=attempt / "refs",
-                           **({"retry_attempt": _read_qc_retry_state(shot_dir)["count"]}
-                              if production_output else {}))
+        try:
+            req = make_request(video_adapter, prompt, frame_paths, shot, characters=characters,
+                               continuity_ref_image=continuity_ref_image, mode=mode,
+                               ref_sheet_dir=attempt / "refs",
+                               media_policy=media_policy,
+                               **({"retry_attempt": _read_qc_retry_state(shot_dir)["count"]}
+                                  if production_output else {}))
+        except VideoCapabilityError as exc:
+            va.open_attempt(package_root, attempt_id, request_key="", scope=scope,
+                            script_revision=script_revision,
+                            provider=str(os.getenv("VIDEO_PROVIDER", "")), model_id="")
+            eio.append_event(attempt, "preflight_blocked", code=exc.code,
+                             message=exc.message, field_path=exc.fields.get("field_path"))
+            return _fail(f"preflight_blocked({exc.code}): {exc.message}", code=exc.code)
         # 候选落盘路径 + 执行上下文（适配器原样透传请求对象；provider 据此下载进 attempt）
         if not production_output:
             req.candidate_path = str(video_path)
@@ -2122,7 +2136,7 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
         "scope": scope,
         "script_revision": script_revision,
         "shot_index": idx,
-        "media_policy": str(prepared.media_mode or (prepared.source or {}).get("media_policy", "")),
+        "media_policy": str(media_policy or prepared.media_mode or (prepared.source or {}).get("media_policy", "")),
     }
     va.open_attempt(package_root, attempt_id, request_key=frozen.request_key, scope=scope,
                     script_revision=script_revision, provider=prepared.provider,
@@ -2377,6 +2391,7 @@ async def _submit_video(
     candidate_context=None,
     execution_requirements=None,
     prepared_facts=None,
+    media_policy: str | None = None,
 ) -> asyncio.Task | None:
     """提交视频任务并返回轮询 task.
 
@@ -2409,7 +2424,7 @@ async def _submit_video(
             continuity_ref_image=continuity_ref_image, mode=mode,
             candidate_context=candidate_context, logger=logger,
             make_request=_make_request, execution_requirements=execution_requirements,
-            prepared_facts=prepared_facts)
+            prepared_facts=prepared_facts, media_policy=media_policy)
 
     from types import SimpleNamespace
     from shared.paths import production_video_attempts_root
@@ -2425,7 +2440,8 @@ async def _submit_video(
             script=script, idx=idx, prompt=prompt, characters=characters,
             continuity_ref_image=continuity_ref_image, mode=mode, candidate_context=ctx,
             logger=logger, make_request=_make_request, production_output=True,
-            execution_requirements=execution_requirements, prepared_facts=prepared_facts)
+            execution_requirements=execution_requirements, prepared_facts=prepared_facts,
+            media_policy=media_policy)
     except Exception as exc:
         # Includes post-submit persistence failure: never turn it into another POST.
         _failed_videos[idx].append({"attempt": str(ctx.attempt_dir),

@@ -28,6 +28,8 @@ from pathlib import Path
 VALID_MEDIA_POLICIES = ("auto", "first_last", "first_only", "reference")
 
 POLICY_ENV = "VIDEO_MEDIA_POLICY"
+POLICY_SOURCE_ENV = "VIDEO_MEDIA_POLICY_SOURCE"
+VALID_POLICY_SOURCES = ("env", "step02a")
 
 #: 只在这些 provider 的 image 路径上支持显式策略（S01 冲突矩阵）。
 _POLICY_PROVIDERS = ("volcengine", "agent_plan")
@@ -40,6 +42,63 @@ def active_media_policy() -> str:
         raise ValueError(
             f"{POLICY_ENV}={raw!r} 非法；合法值：{', '.join(VALID_MEDIA_POLICIES)}")
     return raw
+
+
+def active_media_policy_source() -> str:
+    """Read policy resolution source (`env` default, or `step02a` per-shot inheritance)."""
+    raw = (os.getenv(POLICY_SOURCE_ENV, "env") or "env").strip().lower()
+    if raw not in VALID_POLICY_SOURCES:
+        raise ValueError(
+            f"{POLICY_SOURCE_ENV}={raw!r} 非法；合法值：{', '.join(VALID_POLICY_SOURCES)}")
+    return raw
+
+
+def resolve_shot_media_policy(
+    shot_idx: int,
+    *,
+    qa_report: dict | None = None,
+    policy_source: str | None = None,
+    default_policy: str | None = None,
+) -> str:
+    """Resolve concrete media policy for one shot without mutating process env.
+
+    ``policy_source='step02a'`` reads ``qa_report['scope']['policies'][str(shot_idx)]``
+    (or uniform ``scope['media_policy']``) and fails closed on missing report/shot/value.
+    """
+    src = (policy_source or active_media_policy_source()).strip().lower()
+    if src not in VALID_POLICY_SOURCES:
+        raise ValueError(
+            f"{POLICY_SOURCE_ENV}={src!r} 非法；合法值：{', '.join(VALID_POLICY_SOURCES)}")
+    if src == "env":
+        policy = (default_policy or active_media_policy()).strip().lower()
+        if policy not in VALID_MEDIA_POLICIES:
+            raise ValueError(f"非法策略 {policy!r}；合法值：{', '.join(VALID_MEDIA_POLICIES)}")
+        return policy
+
+    if not isinstance(qa_report, dict) or not qa_report:
+        raise ValueError(
+            f"{POLICY_SOURCE_ENV}=step02a 缺少 step02a_quality.json，无法解析 shot {shot_idx} 策略")
+    scope = qa_report.get("scope") or {}
+    policies = scope.get("policies")
+    raw_policy = None
+    if isinstance(policies, dict) and policies:
+        raw_policy = policies.get(str(shot_idx))
+        if raw_policy is None:
+            raw_policy = policies.get(shot_idx)
+        if raw_policy is None:
+            raise ValueError(
+                f"step02a 验收缺少 shot {shot_idx} 的逐镜策略（报告覆盖 {sorted(policies)}）")
+    else:
+        raw_policy = scope.get("media_policy")
+        if raw_policy is None:
+            raise ValueError(
+                f"step02a 验收报告缺少 scope.policies 与 scope.media_policy（shot {shot_idx}）")
+    policy = str(raw_policy).strip().lower()
+    if policy not in VALID_MEDIA_POLICIES:
+        raise ValueError(
+            f"step02a shot {shot_idx} 策略 {raw_policy!r} 非法；"
+            f"合法值：{', '.join(VALID_MEDIA_POLICIES)}")
+    return policy
 
 
 def _blocked(code: str, message: str, field_path: str = "") -> dict:
