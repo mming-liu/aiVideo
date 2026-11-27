@@ -8,10 +8,12 @@
 
 | 项目 | 值 |
 |---|---|
-| 验收代码提交 | `482676b`（`M01-M03: recoverable publish batch, audited duration identity, subtitle required checks`） |
-| 合并目标 | master（合并前 HEAD `507ccea`） |
-| 分支 | `codex/downstream-safe-delivery` |
-| 合并方式 | `git merge --ff-only <验收提交>` |
+| 首次验收代码提交 | `482676b`（`M01-M03: recoverable publish batch, audited duration identity, subtitle required checks`） |
+| 合并提交 | `c55cc4c`（docs/证据 + `.gitignore`；`482676b..c55cc4c` 无生产源码变化） |
+| M01 崩溃/并发修复提交 | `631e269`（`fix(step04): persist publish intent before backup, verify recovery digests and hold one lock across recover/publish/cleanup`） |
+| 合并目标 | master（首次合并前 HEAD `507ccea`；当前基线 `631e269`） |
+| 分支 | `codex/downstream-safe-delivery`（已合并并删除） |
+| 合并方式 | `git merge --ff-only` |
 
 ## 2. 本轮整改（M01–M03）
 
@@ -25,13 +27,28 @@
 - **M03 字幕必检**：有字幕合同即把 `subtitle_duration` 计入必检；缺失/不可读/未解析 ⇒
   `UNVERIFIED`，明确越界 ⇒ `BLOCK`；无字幕合同不新增要求；汇总按"必检项是否产出结果"判定。
 
+### 2.1 M01 崩溃窗口与并发恢复（第二轮复核后，`631e269`）
+
+- **先写意图再移动**：journal 在备份移动**之前**记录 `backup_pending` + 备份路径 + 旧摘要；
+  崩溃落在"已移动、未写状态"的窗口时，恢复仍能凭 journal 找到备份。
+- **恢复校验摘要与终态**：备份缺失/摘要不符/目标版本不明 ⇒ `publish_unconfirmed` 或
+  `publish_conflict`，保留 journal 与备份，不再宣布 `recovered`；只有全部条目确定归位才删 journal。
+- **单一目标锁**：主入口取得发布锁后把锁对象传给 `recover_pending` 与 `publish_batch`；
+  恢复、旧状态读取、发布、读回确认、备份与 journal 清理都在同一锁内。第二个进程得到
+  `publish_busy`，不会把别人正在发布的 journal 当残留恢复。
+- 新增崩溃切点与并发测试：`STEP04_PUBLISH_FAULT=crash` 在"备份完成、状态未落盘"处退出 99，
+  下一次运行先恢复再发布；另持锁进程使主入口失败且旧产物不变。
+
 ## 3. 离线验收读数（0 次真实模型调用）
 
 | 范围 | 命令要点 | 读数 |
 |---|---|---|
-| 受影响全量 | `pytest tests/tts tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/integration/test_s01_isolation_baseline.py tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **313 passed / 6 skipped** |
-| 合并交叉 | 上述 + `tests/step02a_frame_gen` | **501 passed / 10 skipped** |
-| 干净副本（`git archive 482676b`，无 `.env.keys`、无 `output/`） | 上述相关 10 份测试 + 新增发布/身份/字幕用例 | **85 passed** |
+| 受影响全量（首轮） | `pytest tests/tts tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/integration/test_s01_isolation_baseline.py tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **313 passed / 6 skipped** |
+| 合并交叉（首轮） | 上述 + `tests/step02a_frame_gen` | **501 passed / 10 skipped** |
+| 干净副本（`git archive 482676b`） | 相关 10 份测试 | **85 passed** |
+| M01 修复后 step04+integration | `pytest tests/step04_merge tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **117 passed / 2 skipped** |
+| M01 修复后合并交叉（主仓库，`output/` 在场） | `pytest tests/step02a_frame_gen tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/tts` + S01/S05/S07 | **626 passed / 10 skipped** |
+| 干净副本（`git archive 631e269`，无 `.env.keys`/`output/`） | 发布/质量/身份/策略/样片相关 7 份测试 | **62 passed** |
 
 skip 均为缺少正式 `output/` 章节产物的既有用例，已逐项核对原因；新增用例无 skip/xfail。
 
@@ -55,11 +72,28 @@ skip 均为缺少正式 `output/` 章节产物的既有用例，已逐项核对�
 
 ## 5. 保护清单
 
-- 主仓库未跟踪文件 8 项（7 个文件 + 1 个目录）的路径与 SHA-256 见 `baseline.json`；
-  清理前后用同一脚本复核。
-- 主仓库正式 `output/`：3191 个文件 / 989,104,390 字节，未做任何写入；
-  本包只在隔离 worktree 的 `output/` 与 `tmp_path` 内产生测试产物。
+- 主仓库未跟踪文件 7 项（文件）的路径与 SHA-256 见 `baseline.json`，本轮复核后重新哈希一致；
+  第 8 项 `baselines/2026-11-12-pre-layered/s06_ab/tools/__pycache__/` 是目录，原基线只记路径，
+  现按内部 1 个文件的摘要记录在 `output-baseline.json`。
+- 主仓库正式 `output/`：3191 个文件 / 989,104,390 字节，自 M06 起数量与总字节未变；
+  **逐文件 SHA-256 清单**在仓库外
+  `C:\myFloders\git\aiVideo\.archive\output-baseline-2026-11-27\sha256.txt`
+  （清单文件 SHA-256 `a63b8255…a7f4b9`，见 `output-baseline.json`）。
+  说明：M06 当时只有数量/总字节，**不能回溯证明历史内容未变**；逐文件清单是本次补充的
+  前向基线，可证明此后未变。
 - 未触碰 `.tmp/s14a`、`aiVideo-s14base`。
+
+## 5.1 样片重建（新验证，非原运行产物）
+
+首次合并前的 S07 样片已随 worktree 清理删除，归档中没有实体媒体。本轮从固定提交
+`631e269` 隔离重建（0 模型调用），保存在仓库外：
+
+`C:\myFloders\git\aiVideo\.archive\downstream-s07-rebuild-631e269\`
+
+包含 `final.mp4`（10.0s，5,240,172 字节，SHA-256 `139c53da…99e91d`）、`subtitles.srt`、
+`step04_quality.json`、`step04_media_quality.json`、`step03_duration_audit.json`、
+`voice_state.json`、`step02b_quality.json` 与 `manifest.json`。
+`manifest.json` 明确标注"新验证，非 2026-11-27 原运行产物"，并记录生成提交、生成器与模型调用数=0。
 
 ## 6. 未执行
 

@@ -289,3 +289,25 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
   `output/`（1 个测试泄漏文件）、快照 zip 与已合并分支均已按 `cleanup-manifest.md` 移除；
   `git worktree list` 只剩主仓库、`.tmp/s14a` 与 `aiVideo-s14base`。清理前后用户未跟踪
   文件与正式 `output/` 摘要不变。
+
+### 九·补二：M01 崩溃窗口与并发恢复（2026-11-27 第三轮复核后，`631e269`）
+
+第三轮复核指出两项 P1：备份移动早于 journal 记录，崩溃窗口会被错误宣布恢复成功；
+恢复与发布不在同一锁范围。本轮在 master 上窄修复，不回退已合并内容：
+
+| 修复 | 实现 | 验收 |
+|---|---|---|
+| 先意图后移动 | journal 在备份移动**前**写入 `backup_pending` + 备份路径 + 旧摘要；移动后校验备份摘要再转 `backed_up` | `test_backup_intent_persisted_before_move_is_recoverable`；`STEP04_PUBLISH_FAULT=crash` 在移动后、状态落盘前退出 99，journal 仍为 `backup_pending`，下一次运行恢复后再发布 |
+| 恢复校验摘要与终态 | 备份缺失/摘要不符/目标版本不明 ⇒ `publish_unconfirmed`/`publish_conflict`，保留 journal；全部归位才删 | `test_recover_refuses_when_backup_missing`、`test_recover_refuses_corrupt_backup`、`test_crash_after_backup_move_is_recoverable` |
+| 单一目标锁 | 主入口先取发布锁，把锁对象传给 `recover_pending`/`publish_batch`；恢复→发布→读回→备份/journal 清理同锁；第二进程 `publish_busy` | `test_recover_busy_when_another_writer_holds_lock`、`test_publish_busy_when_same_target_locked`；S07 持锁进程使主入口失败且旧产物不变 |
+
+**读数（`631e269`）**：step04+integration `117 passed / 2 skipped`；合并交叉（主仓库
+`output/` 在场）`626 passed / 10 skipped`；干净副本（`git archive 631e269`）`62 passed`。
+
+**证据补齐**：`output/` 逐文件 SHA-256 清单（3191 文件，清单摘要 `a63b8255…a7f4b9`）与
+第 8 项目录内部文件摘要已生成在仓库外归档；S07 样片从 `631e269` 隔离重建（0 模型调用），
+明确标注"新验证，非原运行产物"，详见 `docs/downstream-safe-delivery-evidence/2026-11-27/`。
+
+**交付说明收窄**：7 个用户文件为字节级核验；`baselines/.../__pycache__/` 原基线只有路径，
+现补内部 1 个文件摘要；`output/` 自 M06 起数量/总字节未变，逐文件基线为本次新增，不能
+回溯证明更早内容未变。

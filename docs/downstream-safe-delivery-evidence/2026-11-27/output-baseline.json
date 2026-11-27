@@ -1,0 +1,68 @@
+﻿{
+    "captured_at":  "2026-11-27T19:56:59+08:00",
+    "commit":  "631e2694731a313e1fc07f8438b65f20cd410ee7",
+    "output":  {
+                   "path":  "C:\\myFloders\\git\\aiVideo\\output",
+                   "list_path":  "C:\\myFloders\\git\\aiVideo\\.archive\\output-baseline-2026-11-27\\sha256.txt",
+                   "files":  3191,
+                   "bytes":  989104390,
+                   "list_sha256":  "a63b8255a3c7f7063b36a2ea1231f743e4dd59f27b1555939ca6aef6f3a7f4b9"
+               },
+    "untracked_entries":  [
+                              {
+                                  "path":  "baselines/2026-11-12-pre-layered/s06_ab/tools/__pycache__/",
+                                  "sha256":  "",
+                                  "kind":  "dir"
+                              },
+                              {
+                                  "path":  "docs/dsh-handoff/offline_dispatch_20261118.md",
+                                  "sha256":  "00e09dccc5c0632454d7c705f521a65d139f7e9ac7e4084453e28c6ea74c62c1",
+                                  "kind":  "file"
+                              },
+                              {
+                                  "path":  "docs/dsh-handoff/session-reuse-lock-screen-decision-20261116.md",
+                                  "sha256":  "b0eedf83aaa247f4c637a6cf126fff49cda9b56c43c8d7fa32833a25e670adf3",
+                                  "kind":  "file"
+                              },
+                              {
+                                  "path":  "docs/dsh-handoff/shot2_lf_redraw_20261121.md",
+                                  "sha256":  "d30dfeda8168e1d3e38ddf78b6cd793f3e54145aa906eec0b4e6a6c921ae634b",
+                                  "kind":  "file"
+                              },
+                              {
+                                  "path":  "docs/step01-layered-execution/R7.2-offline-projection-20261121.md",
+                                  "sha256":  "582ffa30abbe6559776bd6f5cc7a7cfad110f35c83954ca2aafd53865bfdfac8",
+                                  "kind":  "file"
+                              },
+                              {
+                                  "path":  "docs/step01-layered-execution/coordination-2026-11-22.md",
+                                  "sha256":  "32942be59fcc80180517638a91289f5fd0bb84f5d454aae5492c1aabf50f4f2a",
+                                  "kind":  "file"
+                              },
+                              {
+                                  "path":  "docs/step01-layered-execution/shot2-lf-redraw-20261121.md",
+                                  "sha256":  "d992d1d1614d074fdf6b9cc2e1b6e3d703d0323f239ab3e4633e944c65af4b6f",
+                                  "kind":  "file"
+                              },
+                              {
+                                  "path":  "docs/step02a-frame-contract/experiments.md",
+                                  "sha256":  "2f75e3efb9c0e71ea8af4630d68f1719ad60da4e04d785d9de6b9a6fc3dfb926",
+                                  "kind":  "file"
+                              }
+                          ],
+    "untracked_dir":  {
+                          "path":  "baselines/2026-11-12-pre-layered/s06_ab/tools/__pycache__",
+                          "list_path":  "C:\\myFloders\\git\\aiVideo\\.archive\\output-baseline-2026-11-27\\untracked-dir-sha256.txt",
+                          "files":  1,
+                          "list_sha256":  "c463d126cca36d41b0b9a403b17724273e6ae82777385a30e8682ae3de14f4b3"
+                      },
+    "sample":  {
+                   "commit":  "631e2694731a313e1fc07f8438b65f20cd410ee7",
+                   "label":  "S07 重建样片（新验证，非原运行产物）",
+                   "final_sha256":  "139c53da64f135dd83494d06b036d3f72d1c6a4d0b37c213c4645a1daf99e91d",
+                   "path":  "C:\\myFloders\\git\\aiVideo\\.archive\\downstream-s07-rebuild-631e269",
+                   "duration_sec":  10,
+                   "final_bytes":  5240172
+               },
+    "caveat":  "M06 基线只有数量/总字节（3191 文件 / 989,104,390 字节），本文件是本次补充的逐文件前向基线；不能据此回溯证明历史内容未变，只能证明与本记录一致。7 个未跟踪文件本次重新哈希并与 baseline.json 一致；第 8 项目录现按其内部 1 个文件的摘要记录。"
+}
