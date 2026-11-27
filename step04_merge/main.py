@@ -1451,13 +1451,17 @@ def _run_merge(options, attempt):
     script_revision=script_revision,
     shot_audio_sha256=(_shot_audio_hashes(valid_shots, audio_resolve)
                        if validated_timings is not None else None))
+  _srt_publish_tmp = None
   if _dry_run:
     _logger.info(f"[DRY-RUN] 字幕计划已构建：{len(subtitle_plan.cues)} cues，"
                  f"source={subtitle_plan.source}（不写 SRT）")
   else:
-    write_srt(subtitle_plan, SRT_OUT)
-    _logger.info(f"[OK] SRT generated: {SRT_OUT} ({len(subtitle_plan.cues)} subtitles, "
-                 f"source={subtitle_plan.source})")
+    # P1（复核）：SRT 与成片是同一交付物，**不能**在终检前覆盖正式 SRT。
+    # 先写临时候选，检查通过后与成片一起发布。
+    _srt_publish_tmp = Path(TEMP_DIR) / "subtitles_publish_candidate.srt"
+    write_srt(subtitle_plan, _srt_publish_tmp)
+    _logger.info(f"[INFO] SRT 候选已生成: {_srt_publish_tmp} "
+                 f"({len(subtitle_plan.cues)} subtitles, source={subtitle_plan.source})")
   if subtitle_plan.fallbacks:
     _logger.warn(f"[WARN] 对齐候选逐镜降级 {len(subtitle_plan.fallbacks)} 处: "
                  f"{subtitle_plan.fallbacks[:4]}")
@@ -1595,7 +1599,7 @@ def _run_merge(options, attempt):
   _dry_srt = None
   if subtitle_plan.cues:
     try:
-      _srt_for_filter = SRT_OUT
+      _srt_for_filter = _srt_publish_tmp or SRT_OUT
       if _dry_run:
         # dry-run 不写正式 SRT，但在临时文件里验证「cue 列表 ↔ SRT 文本」契约与字形。
         import tempfile
@@ -1705,7 +1709,7 @@ def _run_merge(options, attempt):
       video_codec=os.getenv("MERGE_QUALITY_EXPECT_VIDEO_CODEC", "h264").strip() or "h264",
       audio_codec=os.getenv("MERGE_QUALITY_EXPECT_AUDIO_CODEC", "aac").strip() or "aac",
       declared_black_windows=_declared_black_windows(timeline),
-      srt_path=(None if _dry_run else SRT_OUT))
+      srt_path=(None if _dry_run else _srt_publish_tmp))
   _logger.info("[STEP04-MEDIA] status=%s checks=%d defects=%s"
                % (_media_quality["status"], len(_media_quality["checks"]),
                   [d.get("code") for d in _media_quality["defects"]]))
@@ -1742,6 +1746,16 @@ def _run_merge(options, attempt):
                       exit_code=3) from _pub_exc
   result = _replace_dataclass_path(result, FINAL_OUT)
   _logger.info(f"[OK] Final video generated: {FINAL_OUT}")
+  # SRT 与成片同批发布（检查已全部通过）；失败只保留旧 SRT 并显式报错。
+  if _srt_publish_tmp is not None and _srt_publish_tmp.is_file():
+    try:
+      Path(SRT_OUT).parent.mkdir(parents=True, exist_ok=True)
+      os.replace(_srt_publish_tmp, SRT_OUT)
+      _logger.info(f"[OK] SRT generated: {SRT_OUT}")
+    except OSError as _srt_exc:
+      raise RenderError("srt_publish_failed", "publish",
+                        "字幕发布失败（成片已更新，SRT 仍为旧文件）: %s" % _srt_exc,
+                        exit_code=3) from _srt_exc
 
   # 8. 候选提交（只在增强模式）：冻结输入 → manifest → accepted 替换 + 读回
   if attempt is not None:

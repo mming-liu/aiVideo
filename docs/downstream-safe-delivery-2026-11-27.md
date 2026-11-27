@@ -220,7 +220,7 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 
 | 条目 | 整改 | 验证 |
 |---|---|---|
-| P1-1 终检拒收时正式成片已被覆盖 | Step04 主入口改为**先渲染到 `TEMP_DIR/final_publish_candidate.*` → 合成后复核 → 全部终检 → `os.replace` 发布 → 再写质量报告**；BLOCK/UNVERIFIED/发布失败都只丢临时文件，旧成片与旧报告保留 | S07 新增"编码后拒收"用例：`MERGE_QUALITY_EXPECT_VIDEO_CODEC=h265` 令终检 BLOCK，断言 `final.mp4` sha256 与 `step04_quality.json` 原样、`step04_media_quality.json` 为 BLOCK |
+| P1-1 终检拒收时正式成片已被覆盖 | Step04 主入口改为**先渲染到 `TEMP_DIR/final_publish_candidate.*` → 合成后复核 → 全部终检 → `os.replace` 发布 → 再写质量报告**；BLOCK/UNVERIFIED/发布失败都只丢临时文件，旧成片与旧报告保留。SRT 同样是交付物：先写临时候选供字幕滤镜使用，检查通过后与成片同批发布 | S07 新增"编码后拒收"用例：`MERGE_QUALITY_EXPECT_VIDEO_CODEC=h265` 令终检 BLOCK，断言 `final.mp4`、`subtitles.srt` 的 sha256 与 `step04_quality.json` 原样、`step04_media_quality.json` 为 BLOCK |
 | P1-2 候选时长审计不会成功生成 | 删除未定义的 `only_indices`；候选审计按 **attempt 产物路径**（`audio_paths={unit_id: artifact}`）实测；正式路径在合成**前**先落估算审计（prepared），合成后再写实测，失败分支也有可读审计；plan-only 同样落审计 | `tests/integration/test_s05_duration_audit.py::test_candidate_audit_reads_artifact_paths` 断言从产物路径测得 3.0s；`ruff check` 无新增 F821 |
 | P1-3 Step02b 接受未核身份的审计 | `_load_duration_audit` 增加身份校验：schema / scope 五字段 / `script_revision` / 每单元 `audio_sha256`；不符即**拒用**并在 plan `audio_audit.rejected` 列原因，不再静默当"没有审计" | `test_step02b_plan_rejects_foreign_audit_identity`（第 999 章 + 旧 revision 被拒，无超窗裁决）；身份一致用例仍正常阻断 |
 | P1-4 旁白序号当镜头号 | `build_duration_audit` 旁白只记 `shot_indexes`（真实承载）与 `carrier_window_sec`，**不折进任何单镜 `audio_need`**；`_write_duration_audit` 用 `voice_units(...).shot_indexes` 映射；Step02b 新增 `_narration_overflows` 按整段窗口阻断 | `test_narration_uses_carrier_shots_not_index_number`、`test_step02b_plan_blocks_narration_overflow` |

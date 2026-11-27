@@ -218,6 +218,8 @@ def test_downstream_offline_pipeline_delivers_playable_final(tmp_path):
     final = ch / "final.mp4"
     assert final.is_file() and final.stat().st_size > 20 * 1024
     final_sha = _sha(final)
+    srt = ch / "subtitles.srt"
+    srt_sha = _sha(srt)
     quality4 = json.loads((ch / "step04_quality.json").read_text(encoding="utf-8"))
     assert quality4["status"] == "PASS", quality4
     assert quality4["media_check"]["status"] == "PASS", quality4["media_check"]["defects"]
@@ -289,6 +291,7 @@ def test_downstream_offline_pipeline_delivers_playable_final(tmp_path):
     combined = (blocked.stdout or "") + (blocked.stderr or "")
     assert "final_quality_blocked" in combined or "最终" in combined, combined[-1500:]
     assert _sha(final) == final_sha                          # 旧成片未被覆盖
+    assert _sha(srt) == srt_sha                              # 旧字幕后置未被覆盖
     assert json.loads((ch / "step04_quality.json").read_text(encoding="utf-8")) == quality4
     media = json.loads((ch / "step04_media_quality.json").read_text(encoding="utf-8"))
     assert media["status"] == "BLOCK"
