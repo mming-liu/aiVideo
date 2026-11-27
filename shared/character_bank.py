@@ -473,7 +473,7 @@ class StyleBank:
         if expected_persons is not None and int(expected_persons) > 0 and not allow_characters:
             print(
                 f"[bank] 拒绝将含人物图像({expected_persons}人)锁为画风锚点: {src}；"
-                "请使用纯空镜/纯环境 2D 漫剧标准帧，避免串人/串景"
+                "请使用纯空镜/纯环境画风标准帧，避免串人/串景"
             )
             return False
 
@@ -485,7 +485,7 @@ class StyleBank:
                 if isinstance(pc, int) and pc > 0:
                     print(
                         f"[bank] 拒绝将含 {pc} 名人物的帧锁为画风锚点 ({src})；"
-                        "请改用无人物纯环境 2D 漫剧标准帧"
+                        "请改用无人物纯环境画风标准帧"
                     )
                     return False
             except Exception:

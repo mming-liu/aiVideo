@@ -88,8 +88,8 @@ class CharacterPortraitsGenerator:
         if style_reference_path and Path(str(style_reference_path)).is_file():
             ref_paths = [str(style_reference_path)]
             prompt = (
-                f"{prompt} Use the reference image ONLY for 2D anime linework, cel shading, "
-                "color palette and artistic style; DO NOT copy its background, landscape, props or "
+                f"{prompt} Use the reference image ONLY for visual style, lighting, "
+                "color palette and rendering texture; DO NOT copy its background, landscape, props or "
                 "composition — isolate the single character on a clean pure solid white background."
             )
 
