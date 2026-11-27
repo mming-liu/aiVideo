@@ -1,59 +1,112 @@
-﻿# 涓嬫父瀹夊叏鍑虹墖鍖咃紙S01鈥揝07锛夎瘉鎹綊妗?鈥?2026-11-27
+# 下游安全出片包（S01–S07）证据归档 — 2026-11-27
 
-鏈洰褰曚綅浜庝换鍔?worktree 涔嬪锛坄docs/` 宸查殢 fast-forward 鍚堝叆 master锛夛紝淇濆瓨鍙鏍哥殑鏈€灏忚瘉鎹€?**浠诲姟 worktree銆侀獙璇佸壇鏈€佺紦瀛樹笌鍙啀鐢熶复鏃舵枃浠跺凡浜?2026-11-27 娓呯悊瀹屾瘯**锛岃
-`cleanup-manifest.md`锛涙湰鐩綍涓庝富浠撳簱 `output/`锛堟湭鏀瑰姩锛夋槸鍞竴淇濈暀璇佹嵁銆?
-## 1. 浜や粯韬唤
+本目录位于任务 worktree 之外（`docs/` 已随 fast-forward 合入 master），保存可复核的最小证据。
+**任务 worktree、验证副本、缓存与可再生临时文件已于 2026-11-27 清理完毕**，见
+`cleanup-manifest.md`；本目录与主仓库 `output/`（未改动）是唯一保留证据。
 
-| 椤圭洰 | 鍊?|
+## 1. 交付身份
+
+| 项目 | 值 |
 |---|---|
-| 棣栨楠屾敹浠ｇ爜鎻愪氦 | `482676b`锛坄M01-M03: recoverable publish batch, audited duration identity, subtitle required checks`锛?|
-| 鍚堝苟鎻愪氦 | `c55cc4c`锛坉ocs/璇佹嵁 + `.gitignore`锛沗482676b..c55cc4c` 鏃犵敓浜ф簮鐮佸彉鍖栵級 |
-| M01 宕╂簝/骞跺彂淇鎻愪氦 | `631e269`锛坄fix(step04): persist publish intent before backup, verify recovery digests and hold one lock across recover/publish/cleanup`锛?|
-| 鍚堝苟鐩爣 | master锛堥娆″悎骞跺墠 HEAD `507ccea`锛涘綋鍓嶅熀绾?`631e269`锛?|
-| 鍒嗘敮 | `codex/downstream-safe-delivery`锛堝凡鍚堝苟骞跺垹闄わ級 |
-| 鍚堝苟鏂瑰紡 | `git merge --ff-only` |
+| 首次验收代码提交 | `482676b`（`M01-M03: recoverable publish batch, audited duration identity, subtitle required checks`） |
+| 合并提交 | `c55cc4c`（docs/证据 + `.gitignore`；`482676b..c55cc4c` 无生产源码变化） |
+| M01 崩溃/并发修复提交 | `631e269`（`fix(step04): persist publish intent before backup, verify recovery digests and hold one lock across recover/publish/cleanup`） |
+| 合并目标 | master（首次合并前 HEAD `507ccea`；M01 修复 `631e269`；其后为 docs/`.gitignore` 收尾） |
+| 分支 | `codex/downstream-safe-delivery`（已合并并删除） |
+| 合并方式 | `git merge --ff-only` |
 
-## 2. 鏈疆鏁存敼锛圡01鈥揗03锛?
-- **M01 鍙戝竷鎵规**锛氭柊澧?`step04_merge/publication.py`銆傛垚鐗囥€佸簲浜や粯 SRT銆佽川閲忔姤鍛婂厛鍏ㄩ儴鍑嗗锛?  鍐嶆寜"澶囦唤鏃у€?鈫?鏇挎崲 鈫?璇诲洖 鈫?澶辫触鍥炴粴"鍙戝竷锛沯ournal 璁板綍杩涘害锛屾仮澶嶅け璐ユ姤
-  `publish_unconfirmed` 骞朵繚鐣欐潗鏂欙紱鍚岀洰鏍囩敤 `AttemptLock` 涓茶鍖栵紱涓嬫杩愯鍏堟仮澶嶅啀寮€濮嬨€?  鏃х殑"鍙戝竷鍚庡崟鐙啓鎶ュ憡銆佸け璐ュ彧鍛婅"宸茬Щ闄ゃ€?- **M02 瀹¤韬唤**锛歚confirmed` 鍗曞厓蹇呴』鍚屾椂鏈夐潪绌?`audio_path` + `audio_sha256`锛屽惁鍒欐暣浠藉璁?  鎷掔敤骞剁粰鍑?`audit_identity_missing`锛沗prepared` 涓嶈础鐚疄娴嬩笅闄愶紱鍧?JSON / 闈炲璞?/ 閿?schema
-  鍒嗗埆杩斿洖 `audit_unreadable` / `audit_not_object` / `audit_schema_mismatch`銆?- **M03 瀛楀箷蹇呮**锛氭湁瀛楀箷鍚堝悓鍗虫妸 `subtitle_duration` 璁″叆蹇呮锛涚己澶?涓嶅彲璇?鏈В鏋?鈬?  `UNVERIFIED`锛屾槑纭秺鐣?鈬?`BLOCK`锛涙棤瀛楀箷鍚堝悓涓嶆柊澧炶姹傦紱姹囨€绘寜"蹇呮椤规槸鍚︿骇鍑虹粨鏋?鍒ゅ畾銆?
-### 2.1 M01 宕╂簝绐楀彛涓庡苟鍙戞仮澶嶏紙绗簩杞鏍稿悗锛宍631e269`锛?
-- **鍏堝啓鎰忓浘鍐嶇Щ鍔?*锛歫ournal 鍦ㄥ浠界Щ鍔?*涔嬪墠**璁板綍 `backup_pending` + 澶囦唤璺緞 + 鏃ф憳瑕侊紱
-  宕╂簝钀藉湪"宸茬Щ鍔ㄣ€佹湭鍐欑姸鎬?鐨勭獥鍙ｆ椂锛屾仮澶嶄粛鑳藉嚟 journal 鎵惧埌澶囦唤銆?- **鎭㈠鏍￠獙鎽樿涓庣粓鎬?*锛氬浠界己澶?鎽樿涓嶇/鐩爣鐗堟湰涓嶆槑 鈬?`publish_unconfirmed` 鎴?  `publish_conflict`锛屼繚鐣?journal 涓庡浠斤紝涓嶅啀瀹ｅ竷 `recovered`锛涘彧鏈夊叏閮ㄦ潯鐩‘瀹氬綊浣嶆墠鍒?journal銆?- **鍗曚竴鐩爣閿?*锛氫富鍏ュ彛鍙栧緱鍙戝竷閿佸悗鎶婇攣瀵硅薄浼犵粰 `recover_pending` 涓?`publish_batch`锛?  鎭㈠銆佹棫鐘舵€佽鍙栥€佸彂甯冦€佽鍥炵‘璁ゃ€佸浠戒笌 journal 娓呯悊閮藉湪鍚屼竴閿佸唴銆傜浜屼釜杩涚▼寰楀埌
-  `publish_busy`锛屼笉浼氭妸鍒汉姝ｅ湪鍙戝竷鐨?journal 褰撴畫鐣欐仮澶嶃€?- 鏂板宕╂簝鍒囩偣涓庡苟鍙戞祴璇曪細`STEP04_PUBLISH_FAULT=crash` 鍦?澶囦唤瀹屾垚銆佺姸鎬佹湭钀界洏"澶勯€€鍑?99锛?  涓嬩竴娆¤繍琛屽厛鎭㈠鍐嶅彂甯冿紱鍙︽寔閿佽繘绋嬩娇涓诲叆鍙ｅけ璐ヤ笖鏃т骇鐗╀笉鍙樸€?
-## 3. 绂荤嚎楠屾敹璇绘暟锛? 娆＄湡瀹炴ā鍨嬭皟鐢級
+## 2. 本轮整改（M01–M03）
 
-| 鑼冨洿 | 鍛戒护瑕佺偣 | 璇绘暟 |
+- **M01 发布批次**：新增 `step04_merge/publication.py`。成片、应交付 SRT、质量报告先全部准备，
+  再按"备份旧值 → 替换 → 读回 → 失败回滚"发布；journal 记录进度，恢复失败报
+  `publish_unconfirmed` 并保留材料；同目标用 `AttemptLock` 串行化；下次运行先恢复再开始。
+  旧的"发布后单独写报告、失败只告警"已移除。
+- **M02 审计身份**：`confirmed` 单元必须同时有非空 `audio_path` + `audio_sha256`，否则整份审计
+  拒用并给出 `audit_identity_missing`；`prepared` 不贡献实测下限；坏 JSON / 非对象 / 错 schema
+  分别返回 `audit_unreadable` / `audit_not_object` / `audit_schema_mismatch`。
+- **M03 字幕必检**：有字幕合同即把 `subtitle_duration` 计入必检；缺失/不可读/未解析 ⇒
+  `UNVERIFIED`，明确越界 ⇒ `BLOCK`；无字幕合同不新增要求；汇总按"必检项是否产出结果"判定。
+
+### 2.1 M01 崩溃窗口与并发恢复（第二轮复核后，`631e269`）
+
+- **先写意图再移动**：journal 在备份移动**之前**记录 `backup_pending` + 备份路径 + 旧摘要；
+  崩溃落在"已移动、未写状态"的窗口时，恢复仍能凭 journal 找到备份。
+- **恢复校验摘要与终态**：备份缺失/摘要不符/目标版本不明 ⇒ `publish_unconfirmed` 或
+  `publish_conflict`，保留 journal 与备份，不再宣布 `recovered`；只有全部条目确定归位才删 journal。
+- **单一目标锁**：主入口取得发布锁后把锁对象传给 `recover_pending` 与 `publish_batch`；
+  恢复、旧状态读取、发布、读回确认、备份与 journal 清理都在同一锁内。第二个进程得到
+  `publish_busy`，不会把别人正在发布的 journal 当残留恢复。
+- 新增崩溃切点与并发测试：`STEP04_PUBLISH_FAULT=crash` 在"备份完成、状态未落盘"处退出 99，
+  下一次运行先恢复再发布；另持锁进程使主入口失败且旧产物不变。
+
+### 2.2 M01 恢复状态机（第三轮复核后，`fd2b124` 之后）
+
+- **先验证再修改**：恢复时先确认备份有效，再决定是否改动目标；备份缺失/损坏时
+  **不删除现存目标**，报 `publish_unconfirmed` 并保留 journal。
+- **目标终态可识别**：目标摘要等于 `target_sha_before` 即视为"已完成恢复"（包括恢复移动
+  成功、状态未落盘的窗口；旧值与新值相同时同样按已恢复处理）。
+- **逐条持久化、可重复执行**：每恢复一个条目就写回 journal；中途失败后重试时，已恢复条目
+  凭目标摘要识别为完成，不会重复消耗已用掉的备份。
+- 新增失败对照：备份损坏且目标为合法新文件（目标保留）、旧值=新值且备份损坏（识别为已恢复）、
+  多条目中途失败后重试（幂等）、恢复移动后状态未落盘（幂等）。
+
+## 3. 离线验收读数（0 次真实模型调用）
+
+| 范围 | 命令要点 | 读数 |
 |---|---|---|
-| 鍙楀奖鍝嶅叏閲忥紙棣栬疆锛?| `pytest tests/tts tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/integration/test_s01_isolation_baseline.py tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **313 passed / 6 skipped** |
-| 鍚堝苟浜ゅ弶锛堥杞級 | 涓婅堪 + `tests/step02a_frame_gen` | **501 passed / 10 skipped** |
-| 骞插噣鍓湰锛坄git archive 482676b`锛?| 鐩稿叧 10 浠芥祴璇?| **85 passed** |
-| M01 淇鍚?step04+integration | `pytest tests/step04_merge tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **117 passed / 2 skipped** |
-| M01 淇鍚庡悎骞朵氦鍙夛紙涓讳粨搴擄紝`output/` 鍦ㄥ満锛?| `pytest tests/step02a_frame_gen tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/tts` + S01/S05/S07 | **626 passed / 10 skipped** |
-| 骞插噣鍓湰锛坄git archive 631e269`锛屾棤 `.env.keys`/`output/`锛?| 鍙戝竷/璐ㄩ噺/韬唤/绛栫暐/鏍风墖鐩稿叧 7 浠芥祴璇?| **62 passed** |
+| 受影响全量（首轮） | `pytest tests/tts tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/integration/test_s01_isolation_baseline.py tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **313 passed / 6 skipped** |
+| 合并交叉（首轮） | 上述 + `tests/step02a_frame_gen` | **501 passed / 10 skipped** |
+| 干净副本（`git archive 482676b`） | 相关 10 份测试 | **85 passed** |
+| M01 修复后 step04+integration | `pytest tests/step04_merge tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py` | **117 passed / 2 skipped** |
+| 恢复状态机修复后 step04+integration | 同上 | **121 passed / 2 skipped**（发布单测 `16 passed`） |
+| M01 修复后合并交叉（主仓库，`output/` 在场） | `pytest tests/step02a_frame_gen tests/step02_video_gen tests/step02b_video_gen tests/step03_tts_audio tests/step04_merge tests/tts` + S01/S05/S07 | **626 passed / 10 skipped** |
+| 干净副本（`git archive 631e269`，无 `.env.keys`/`output/`） | 发布/质量/身份/策略/样片相关 7 份测试 | **62 passed** |
 
-skip 鍧囦负缂哄皯姝ｅ紡 `output/` 绔犺妭浜х墿鐨勬棦鏈夌敤渚嬶紝宸查€愰」鏍稿鍘熷洜锛涙柊澧炵敤渚嬫棤 skip/xfail銆?
-鍏抽敭鏁呴殰鐢ㄤ緥锛堝潎缁忕湡瀹炲叆鍙?/ 鐙珛涓存椂鏍癸級锛?
-- `STEP04_PUBLISH_FAULT=srt|quality`锛氬洖婊氬悗鏃ф垚鐗囥€佹棫 SRT銆佹棫璐ㄩ噺鎶ュ憡鎽樿涓嶅彉锛?  journal=`rolled_back`锛?- `STEP04_PUBLISH_FAULT=quality,rollback`锛歚publish_unconfirmed`锛屽浠戒笌 journal 淇濈暀锛?  鍘绘帀鏁呴殰閲嶈窇鏃跺厛鎭㈠鍐嶅彂甯冿紝鏈€缁?`PASS` 涓?journal 娓呯悊锛?- 缂栫爜鍚庣粓妫€ BLOCK锛坄MERGE_QUALITY_EXPECT_VIDEO_CODEC=h265`锛夛細鏃т氦浠樼墿涓嶅彉锛?- 瀹¤韬唤锛氱己璺緞/鎽樿銆佹憳瑕佷笉绗︺€佸潖 JSON銆侀敊 schema 鍧囨嫆鏀朵笖涓嶄骇鐢熻秴绐楄鍐筹紱
-  `prepared` 甯?`actual` 涔熶笉璐＄尞瀹炴祴涓嬮檺锛?- 瀛楀箷锛氱己澶?涓嶅彲瑙ｆ瀽 鈬?`UNVERIFIED`锛涜秺鐣?鈬?`BLOCK`锛涙棤瀛楀箷鍚堝悓 鈬?`PASS`銆?
-## 4. 鐢熸晥閰嶇疆
+skip 均为缺少正式 `output/` 章节产物的既有用例，已逐项核对原因；新增用例无 skip/xfail。
 
-瑙?`config.json`銆傚叏閮ㄤ负榛樿鍊硷細`VOICE_TIER_POLICY=strict`銆?`VIDEO_MEDIA_ENFORCE=0`銆乣MERGE_QUALITY_ENFORCE=0`銆?`MERGE_AUDIO_OVERFLOW_POLICY=fail`銆傛樉寮?`tiered` / `enforce=1` 鐨勮兘鍔涗粛鐢辨棦鏈夋祴璇曡鐩栵紝
-鏈负閫氳繃榛樿娴嬭瘯鑰屽垹闄ゃ€?
-## 5. 淇濇姢娓呭崟
+关键故障用例（均经真实入口 / 独立临时根）：
 
-- 涓讳粨搴撴湭璺熻釜鏂囦欢 7 椤癸紙鏂囦欢锛夌殑璺緞涓?SHA-256 瑙?`baseline.json`锛屾湰杞鏍稿悗閲嶆柊鍝堝笇涓€鑷达紱
-  绗?8 椤?`baselines/2026-11-12-pre-layered/s06_ab/tools/__pycache__/` 鏄洰褰曪紝鍘熷熀绾垮彧璁拌矾寰勶紝
-  鐜版寜鍐呴儴 1 涓枃浠剁殑鎽樿璁板綍鍦?`output-baseline.json`銆?- 涓讳粨搴撴寮?`output/`锛?191 涓枃浠?/ 989,104,390 瀛楄妭锛岃嚜 M06 璧锋暟閲忎笌鎬诲瓧鑺傛湭鍙橈紱
-  **閫愭枃浠?SHA-256 娓呭崟**鍦ㄤ粨搴撳
+- `STEP04_PUBLISH_FAULT=srt|quality`：回滚后旧成片、旧 SRT、旧质量报告摘要不变，
+  journal=`rolled_back`；
+- `STEP04_PUBLISH_FAULT=quality,rollback`：`publish_unconfirmed`，备份与 journal 保留；
+  去掉故障重跑时先恢复再发布，最终 `PASS` 且 journal 清理；
+- 编码后终检 BLOCK（`MERGE_QUALITY_EXPECT_VIDEO_CODEC=h265`）：旧交付物不变；
+- 审计身份：缺路径/摘要、摘要不符、坏 JSON、错 schema 均拒收且不产生超窗裁决；
+  `prepared` 带 `actual` 也不贡献实测下限；
+- 字幕：缺失/不可解析 ⇒ `UNVERIFIED`；越界 ⇒ `BLOCK`；无字幕合同 ⇒ `PASS`。
+
+## 4. 生效配置
+
+见 `config.json`。全部为默认值：`VOICE_TIER_POLICY=strict`、
+`VIDEO_MEDIA_ENFORCE=0`、`MERGE_QUALITY_ENFORCE=0`、
+`MERGE_AUDIO_OVERFLOW_POLICY=fail`。显式 `tiered` / `enforce=1` 的能力仍由既有测试覆盖，
+未为通过默认测试而删除。
+
+## 5. 保护清单
+
+- 主仓库未跟踪文件 7 项（文件）的路径与 SHA-256 见 `baseline.json`，本轮复核后重新哈希一致；
+  第 8 项 `baselines/2026-11-12-pre-layered/s06_ab/tools/__pycache__/` 是目录，原基线只记路径，
+  现按内部 1 个文件的摘要记录在 `output-baseline.json`。
+- 主仓库正式 `output/`：3191 个文件 / 989,104,390 字节，自 M06 起数量与总字节未变；
+  **逐文件 SHA-256 清单**在仓库外
   `C:\myFloders\git\aiVideo\.archive\output-baseline-2026-11-27\sha256.txt`
-  锛堟竻鍗曟枃浠?SHA-256 `a63b8255鈥7f4b9`锛岃 `output-baseline.json`锛夈€?  璇存槑锛歁06 褰撴椂鍙湁鏁伴噺/鎬诲瓧鑺傦紝**涓嶈兘鍥炴函璇佹槑鍘嗗彶鍐呭鏈彉**锛涢€愭枃浠舵竻鍗曟槸鏈琛ュ厖鐨?  鍓嶅悜鍩虹嚎锛屽彲璇佹槑姝ゅ悗鏈彉銆?- 鏈Е纰?`.tmp/s14a`銆乣aiVideo-s14base`銆?
-## 5.1 鏍风墖閲嶅缓锛堟柊楠岃瘉锛岄潪鍘熻繍琛屼骇鐗╋級
+  （清单文件 SHA-256 `a63b8255…a7f4b9`，见 `output-baseline.json`）。
+  说明：M06 当时只有数量/总字节，**不能回溯证明历史内容未变**；逐文件清单是本次补充的
+  前向基线，可证明此后未变。
+- 未触碰 `.tmp/s14a`、`aiVideo-s14base`。
 
-棣栨鍚堝苟鍓嶇殑 S07 鏍风墖宸查殢 worktree 娓呯悊鍒犻櫎锛屽綊妗ｄ腑娌℃湁瀹炰綋濯掍綋銆傛湰杞粠鍥哄畾鎻愪氦
-`631e269` 闅旂閲嶅缓锛? 妯″瀷璋冪敤锛夛紝淇濆瓨鍦ㄤ粨搴撳锛?
+## 5.1 样片重建（新验证，非原运行产物）
+
+首次合并前的 S07 样片已随 worktree 清理删除，归档中没有实体媒体。修复后从固定提交
+`631e269` 隔离重建（0 模型调用），保存在仓库外：
+
 `C:\myFloders\git\aiVideo\.archive\downstream-s07-rebuild-631e269\`
 
-鍖呭惈 `final.mp4`锛?0.0s锛?,240,172 瀛楄妭锛孲HA-256 `139c53da鈥?9e91d`锛夈€乣subtitles.srt`銆?`step04_quality.json`銆乣step04_media_quality.json`銆乣step03_duration_audit.json`銆?`voice_state.json`銆乣step02b_quality.json` 涓?`manifest.json`銆?`manifest.json` 鏄庣‘鏍囨敞"鏂伴獙璇侊紝闈?2026-11-27 鍘熻繍琛屼骇鐗?锛屽苟璁板綍鐢熸垚鎻愪氦銆佺敓鎴愬櫒涓庢ā鍨嬭皟鐢ㄦ暟=0銆?
-## 6. 鏈墽琛?
-鐪熷疄 Step02b/Step03 浠樿垂璋冪敤銆佹寮忓獟浣撻噰绾炽€佺敓浜х珷鑺傞噸璺戙€佽繙绔帹閫併€丼tage 3/4銆?
+包含 `final.mp4`（10.0s，5,240,172 字节，SHA-256 `139c53da…99e91d`）、`subtitles.srt`、
+`step04_quality.json`、`step04_media_quality.json`、`step03_duration_audit.json`、
+`voice_state.json`、`step02b_quality.json` 与 `manifest.json`。
+`manifest.json` 明确标注"新验证，非 2026-11-27 原运行产物"，并记录生成提交、生成器与模型调用数=0。
+
+## 6. 未执行
+
+真实 Step02b/Step03 付费调用、正式媒体采纳、生产章节重跑、远端推送、Stage 3/4。

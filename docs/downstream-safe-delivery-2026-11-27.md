@@ -311,3 +311,19 @@ BLOCK 时在候选提交前 `RenderError(final_quality_blocked)` 退出（退出
 **交付说明收窄**：7 个用户文件为字节级核验；`baselines/.../__pycache__/` 原基线只有路径，
 现补内部 1 个文件摘要；`output/` 自 M06 起数量/总字节未变，逐文件基线为本次新增，不能
 回溯证明更早内容未变。
+
+### 九·补三：M01 恢复状态机（2026-11-27 第四轮复核后）
+
+第四轮复核指出：恢复时先删目标再校验备份（备份损坏会破坏合法新文件）、多条目恢复中途
+失败后重试不幂等。本轮只收敛恢复机制：
+
+| 修复 | 实现 | 验收 |
+|---|---|---|
+| 先验证再修改 | 恢复任何目标前先确认备份存在且摘要等于旧值；不满足即 `publish_unconfirmed`，**不删除、不覆盖现存目标** | `test_recover_corrupt_backup_keeps_new_target`（目标为合法新文件时原样保留） |
+| 目标终态可识别 | 目标摘要 == `target_sha_before` 即视为已完成恢复（含"恢复移动成功、状态未落盘"窗口；旧值==新值同样按已恢复处理） | `test_recover_after_restore_move_without_state_update`、`test_recover_same_value_with_corrupt_backup_recognizes_already_old` |
+| 恢复进度逐条持久化、可重复执行 | 每恢复一条立即写 journal；重试时已完成条目按目标摘要识别，不再依赖已消耗的备份 | `test_recover_partial_then_retry_is_idempotent`（B 恢复后 A 失败，修好 A 重试两边均归位） |
+
+**读数**：`pytest tests/step04_merge tests/integration/test_s05_duration_audit.py tests/integration/test_downstream_safe_delivery_s07.py`
+→ **`121 passed / 2 skipped`**（发布单测 `16 passed`，含 4 个新失败对照）。
+**文档修复**：`README.md` 与 `cleanup-manifest.md` 因上一轮 PowerShell 写入产生乱码，已从
+`e431e69` 的正常版本恢复并重新补入本轮内容；`output-baseline.json`、账本等经 UTF-8 复核无乱码。

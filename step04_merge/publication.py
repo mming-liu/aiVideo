@@ -215,81 +215,48 @@ def _recover_locked(path: Path, data: dict, *, logger=None) -> dict:
                 "entries": len(entries)}
     for entry in reversed(entries):
         target = Path(entry.get("target") or "")
-        staged = Path(entry["staged"]) if entry.get("staged") else None
         before = str(entry.get("target_sha_before") or "")
         staged_sha = str(entry.get("staged_sha") or "")
-        state = str(entry.get("state") or "")
         target_exists = target.is_file()
         current = _sha256(target) if target_exists else ""
+        # "目标已是旧值"是**已完成恢复**的唯一可靠标志（含恢复移动成功但状态未落盘）。
+        already_old = bool(before) and target_exists and current == before
+        # 旧值与新值字节相同时，按"已是旧值"优先，不能当新文件删除。
+        target_is_new = bool(staged_sha) and target_exists and current == staged_sha \
+            and not already_old
+        backup = Path(entry["backup"]) if entry.get("backup") else None
         backup_ok = _backup_ok(entry)
 
-        if state == STATE_BACKUP_PENDING:
-            # 意图已记录、移动可能发生也可能没发生：靠 target/backup 的实际状态判定。
-            if target_exists and (not before or current == before):
-                if entry.get("backup") and Path(entry["backup"]).is_file() and not backup_ok:
-                    raise _conflict(target, path, "备份摘要与旧值不符")
-                if entry.get("backup"):
-                    Path(entry["backup"]).unlink(missing_ok=True)
-                entry["state"] = STATE_RESTORED
-                continue
-            if not target_exists and backup_ok:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(Path(entry["backup"]), target)
-                entry["state"] = STATE_RESTORED
-                continue
-            raise _unconfirmed(
-                path, "备份意图条目的目标缺失且无有效备份：%s" % target)
-        if state == STATE_BACKED_UP:
-            if not backup_ok:
-                raise _unconfirmed(path, "备份缺失或摘要不符：%s" % target)
-            if target_exists:
-                if before and current == before:
-                    Path(entry["backup"]).unlink(missing_ok=True)
-                    entry["state"] = STATE_RESTORED
-                    continue
-                if staged_sha and current == staged_sha:
-                    target.unlink()
-                else:
-                    raise _conflict(target, path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(Path(entry["backup"]), target)
+        if already_old:
+            # 已完成：备份若还在且有效/无效都不再需要；清理交给批次末尾统一处理。
             entry["state"] = STATE_RESTORED
+            _atomic_json(path, data)       # 逐条持久化恢复进度（可重复执行）
             continue
-        if state in (STATE_PUBLISHED, STATE_PUBLISH_PENDING):
+
+        if not before:
+            # 原本就没有旧文件：只需撤掉本批新文件。
             if target_exists:
-                if staged_sha and current == staged_sha:
+                if target_is_new:
                     target.unlink()
-                elif before and current == before:
-                    pass
                 else:
-                    raise _conflict(target, path)
-            if entry.get("backup"):
-                if not backup_ok:
-                    raise _unconfirmed(path, "备份缺失或摘要不符：%s" % target)
-                if target.is_file():
-                    target.unlink()
-                target.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(Path(entry["backup"]), target)
-                entry["state"] = STATE_RESTORED
-            elif before:
-                raise _unconfirmed(path, "目标缺失但 journal 无备份：%s" % target)
+                    raise _conflict(target, path, "目标存在但 journal 记录原本不存在")
+            entry["state"] = STATE_RESTORED
+            _atomic_json(path, data)
             continue
-        # pending / absent / 其它未开始状态
+
+        # 有旧文件但目标尚不是旧值：先确认恢复材料有效，**再**修改目标。
+        if target_exists and not target_is_new:
+            raise _conflict(target, path, "目标版本既非旧值也非本批新值")
+        if not backup_ok:
+            raise _unconfirmed(path, "备份缺失或摘要不符，未修改目标：%s" % target)
         if target_exists:
-            if before and current == before:
-                pass
-            elif staged_sha and current == staged_sha:
-                target.unlink()
-            elif before or staged_sha:
-                raise _conflict(target, path)
-        if entry.get("backup") and Path(entry["backup"]).is_file():
-            if not backup_ok:
-                raise _conflict(target, path, "备份摘要与旧值不符")
-            if target.is_file():
-                target.unlink()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(Path(entry["backup"]), target)
-            entry["state"] = STATE_RESTORED
+            target.unlink()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(Path(entry["backup"]), target)
+        if _sha256(target) != before:
+            raise _unconfirmed(path, "恢复后目标摘要与旧值不符：%s" % target)
+        entry["state"] = STATE_RESTORED
+        _atomic_json(path, data)
     data["status"] = STATUS_RECOVERED
     data["recovered_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     _atomic_json(path, data)

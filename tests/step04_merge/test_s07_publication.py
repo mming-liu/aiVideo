@@ -220,6 +220,107 @@ def test_recover_busy_when_another_writer_holds_lock(tmp_path):
         assert exc.value.code == pub._CODE_BUSY
 
 
+def test_recover_corrupt_backup_keeps_new_target(tmp_path):
+    """备份损坏时不得先删目标再报错：目标是合法新文件也应原样保留（P1）."""
+    import hashlib
+
+    work = tmp_path / "work"
+    target = _file(tmp_path / "deliver" / "final.mp4", "NEW")
+    backup = _file(work / "backup-1" / "final.mp4", "TAMPERED")
+    staged = _file(work / "staged_final", "NEW")
+    journal = {"schema": pub.SCHEMA, "status": pub.STATUS_PUBLISHING, "entries": [{
+        "role": "final", "staged": str(staged), "target": str(target),
+        "backup": str(backup), "staged_sha": hashlib.sha256(b"NEW").hexdigest(),
+        "target_sha_before": hashlib.sha256(b"OLD").hexdigest(),
+        "state": pub.STATE_PUBLISHED,
+    }]}
+    (work / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    with pytest.raises(pub.PublicationError) as exc:
+        pub.recover_pending(work / "journal.json", work_dir=work)
+    assert exc.value.code == pub._CODE_UNCONFIRMED
+    assert target.read_text(encoding="utf-8") == "NEW"      # 目标未被删除
+    assert (work / "journal.json").is_file()
+
+
+def test_recover_same_value_with_corrupt_backup_recognizes_already_old(tmp_path):
+    """旧值==新值：目标已等于旧值即视为恢复完成，不因备份损坏再次失败."""
+    import hashlib
+
+    work = tmp_path / "work"
+    same = "SAME"
+    target = _file(tmp_path / "deliver" / "final.mp4", same)
+    backup = _file(work / "backup-1" / "final.mp4", "TAMPERED")
+    staged = _file(work / "staged_final", same)
+    sha = hashlib.sha256(same.encode("utf-8")).hexdigest()
+    journal = {"schema": pub.SCHEMA, "status": pub.STATUS_PUBLISHING, "entries": [{
+        "role": "final", "staged": str(staged), "target": str(target),
+        "backup": str(backup), "staged_sha": sha,
+        "target_sha_before": sha, "state": pub.STATE_PUBLISHED,
+    }]}
+    (work / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    assert pub.recover_pending(work / "journal.json", work_dir=work)["action"] == "restored"
+    assert target.read_text(encoding="utf-8") == same
+    assert not (work / "journal.json").exists()
+
+
+def test_recover_partial_then_retry_is_idempotent(tmp_path):
+    """多条目恢复：一条成功、一条因备份损坏失败；修好后重试必须幂等完成."""
+    import hashlib
+
+    work = tmp_path / "work"
+    old_a, new_a = "OLD-A", "NEW-A"
+    old_b, new_b = "OLD-B", "NEW-B"
+    target_a = _file(tmp_path / "deliver" / "a.mp4", new_a)
+    target_b = _file(tmp_path / "deliver" / "b.mp4", new_b)
+    backup_a = _file(work / "backup-1" / "a.mp4", "TAMPERED")
+    backup_b = _file(work / "backup-1" / "b.mp4", old_b)
+    journal = {"schema": pub.SCHEMA, "status": pub.STATUS_PUBLISHING, "entries": [
+        {"role": "a", "staged": str(work / "staged_a"), "target": str(target_a),
+         "backup": str(backup_a), "staged_sha": hashlib.sha256(new_a.encode()).hexdigest(),
+         "target_sha_before": hashlib.sha256(old_a.encode()).hexdigest(),
+         "state": pub.STATE_PUBLISHED},
+        {"role": "b", "staged": str(work / "staged_b"), "target": str(target_b),
+         "backup": str(backup_b), "staged_sha": hashlib.sha256(new_b.encode()).hexdigest(),
+         "target_sha_before": hashlib.sha256(old_b.encode()).hexdigest(),
+         "state": pub.STATE_PUBLISHED},
+    ]}
+    (work / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    with pytest.raises(pub.PublicationError) as exc:
+        pub.recover_pending(work / "journal.json", work_dir=work)
+    assert exc.value.code == pub._CODE_UNCONFIRMED
+    assert target_b.read_text(encoding="utf-8") == old_b          # B 已恢复
+    data = json.loads((work / "journal.json").read_text(encoding="utf-8"))
+    states = {e["role"]: e["state"] for e in data["entries"]}
+    assert states["b"] == pub.STATE_RESTORED                    # 进度已持久化
+    assert states["a"] == pub.STATE_PUBLISHED
+
+    backup_a.write_text(old_a, encoding="utf-8")                # “修好”备份
+    pub.recover_pending(work / "journal.json", work_dir=work)
+    assert target_a.read_text(encoding="utf-8") == old_a
+    assert target_b.read_text(encoding="utf-8") == old_b
+    assert not (work / "journal.json").exists()
+
+
+def test_recover_after_restore_move_without_state_update(tmp_path):
+    """恢复移动成功、状态未落盘：目标已是旧值 ⇒ 视为已完成，可重复执行."""
+    import hashlib
+
+    work = tmp_path / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    target = _file(tmp_path / "deliver" / "final.mp4", "OLD")
+    journal = {"schema": pub.SCHEMA, "status": pub.STATUS_PUBLISHING, "entries": [{
+        "role": "final", "staged": str(work / "staged_final"), "target": str(target),
+        "backup": str(work / "backup-1" / "final.mp4"),
+        "staged_sha": hashlib.sha256(b"NEW").hexdigest(),
+        "target_sha_before": hashlib.sha256(b"OLD").hexdigest(),
+        "state": pub.STATE_RESTORED,
+    }]}
+    (work / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    pub.recover_pending(work / "journal.json", work_dir=work)
+    assert target.read_text(encoding="utf-8") == "OLD"
+    assert not (work / "journal.json").exists()
+
+
 def test_publish_busy_when_same_target_locked(tmp_path):
     from shared.enhancement_io import AttemptLock
 
