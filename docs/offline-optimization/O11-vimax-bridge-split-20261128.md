@@ -82,3 +82,27 @@ python -c "import shared.vimax_bridge_parts.contract_and_refs"    # 52 exports
 3. `_forward` 代理每次调用多一次 `importlib.import_module` + `getattr`（模块已缓存，
    开销在微秒级）；若将来 `gen_shot_frames` 这类热路径出现可测开销，可在启动时
    一次性绑定并在补丁点显式刷新。
+
+## 5. 下一个文件的前置分析：`step04_merge/main.py`（1,891 行）
+
+AST 依赖分析（照此施工即可）：
+
+| 候选 | 行数 | 依赖的模块级名字 | 外部调用 |
+| --- | ---: | --- | --- |
+| `_resolve_dialogue_path` / `_resolve_narration_path` | 12 | — | — |
+| `_collect_shot_tts_paths` | 100 | — | `_logger` |
+| `_collect_narration_tracks` | 210 | `_AUDIO_MODE` | `_logger`、`_narration_subset_decision` |
+| `_parse_transition` | 55 | `_EXPLICIT_KIND_RE`、`_TRANSITION_MAP` | — |
+| `_compute_clip_windows` / `_assert_step02b_scope` | 43 | — | — |
+| `_build_timeline` | 55 | `_TTS_BASE_GAIN`、`_NARRATION_GAIN` | `_logger` |
+| `_resolve_hook_clip` | 30 | `CLIP_SOURCE` | — |
+| `_run_identity` / `_ensure_attempt` / `_record_failure` | 33 | — | — |
+
+合计约 **555 行（29.3%）**；再加 `_color_filter`（7）与 `_declared_black_windows`（22）
+即过 30%。建议结构：`parts/state.py`（上表常量 + `_logger`，父模块 `from .parts.state
+import *` 保持名字可见）+ `parts/track_collector.py`（上表函数，连同
+`_narration_subset_decision` 一起迁移）。`_build_native_transition_filter` 依赖父模块的
+`_encode_settings`，本批不迁。
+
+该文件**没有**模块级 monkeypatch 目标（已扫字符串与别名两种 `setattr` 形式，0 命中），
+因此不需要 `_forward` 代理层，风险低于 `vimax_bridge`。
