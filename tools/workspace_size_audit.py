@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import os
 import subprocess
@@ -141,6 +142,177 @@ def audit(root: Path, top_n: int = 30) -> dict:
     }
 
 
+#: 核心代码区红线（2026-11-28 O13）：代码+测试的磁盘占用不得超过 200 MB。
+CORE_RED_LINE_MB = 200.0
+#: `.tmp/` 子目录超过这么多天没有更新就算过期孤儿。
+STALE_DAYS = 14
+#: 重复大文件检查的起算大小（更小的文件哈希成本高、清理收益小）。
+DUP_MIN_BYTES = 16 * 1024 * 1024
+#: 单章 `snapshots/` 超过这个数量就提示堆积。
+SNAPSHOT_WARN_COUNT = 30
+
+CORE_PREFIXES = ("shared", "step01_script_gen", "step02a_frame_gen",
+                 "step02b_video_gen", "step03_tts_audio", "step04_merge",
+                 "tts", "tools", "_text_gen", "_image_gen", "_video_gen", "tests")
+
+
+def _tree_bytes(path: Path) -> int:
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += (Path(dirpath) / name).stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _newest_mtime(path: Path) -> float:
+    """目录内**最新内容**的 mtime；目录本身被 touch 过不算（避免误判为新鲜）."""
+    newest = 0.0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                newest = max(newest, (Path(dirpath) / name).stat().st_mtime)
+            except OSError:
+                continue
+    if newest:
+        return newest
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
+def check_thresholds(root: Path, *, stale_days: int = STALE_DAYS,
+                     core_limit_bytes: int = int(CORE_RED_LINE_MB * 1024 * 1024),
+                     now: float | None = None,
+                     dup_min_bytes: int = DUP_MIN_BYTES,
+                     snapshot_warn: int = SNAPSHOT_WARN_COUNT) -> dict:
+    """只读水位巡检：**绝不删除**，只报告越界项与清理建议（确定性，无随机）."""
+    root = Path(root)
+    now_ts = float(now if now is not None else _dt.datetime.now().timestamp())
+    checks: list[dict] = []
+    suggestions: list[str] = []
+
+    # 1) 核心代码区体积红线
+    core_bytes = 0
+    for name in CORE_PREFIXES:
+        target = root / name
+        if target.is_dir():
+            core_bytes += _tree_bytes(target)
+    for path in sorted(root.glob("*.py")):
+        try:
+            core_bytes += path.stat().st_size
+        except OSError:
+            continue
+    core_ok = core_bytes <= core_limit_bytes
+    checks.append({"id": "core_code_size", "ok": core_ok, "bytes": core_bytes,
+                   "limit_bytes": core_limit_bytes,
+                   "detail": "%s / %s" % (_human(core_bytes), _human(core_limit_bytes))})
+    if not core_ok:
+        suggestions.append("核心代码区 %s 超过红线 %s：检查是否误提交了产物/日志"
+                           % (_human(core_bytes), _human(core_limit_bytes)))
+
+    # 2) `.tmp/` 过期孤儿目录
+    tmp = root / ".tmp"
+    stale: list[dict] = []
+    if tmp.is_dir():
+        cutoff = now_ts - max(0, int(stale_days)) * 86400
+        for child in sorted(tmp.iterdir()):
+            newest = _newest_mtime(child)
+            if newest and newest < cutoff:
+                stale.append({"path": child.name,
+                              "age_days": int((now_ts - newest) // 86400),
+                              "bytes": _tree_bytes(child)})
+    stale.sort(key=lambda item: item["bytes"], reverse=True)
+    checks.append({"id": "tmp_stale_dirs", "ok": not stale,
+                   "stale_days": int(stale_days), "count": len(stale),
+                   "items": stale[:20], "total_bytes": sum(i["bytes"] for i in stale)})
+    if stale:
+        suggestions.append("`.tmp/` 有 %d 个超过 %d 天的孤儿目录（共 %s）：确认后可删除 %s"
+                           % (len(stale), stale_days,
+                              _human(sum(i["bytes"] for i in stale)),
+                              "、".join(i["path"] for i in stale[:5])))
+
+    # 3) 重复大文件（同大小 + 同 sha256；跳过 .git 与受控基线）
+    by_size: dict[int, list[Path]] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in (".git", "node_modules", "__pycache__")]
+        for name in filenames:
+            path = Path(dirpath) / name
+            rel = _rel(path, root)
+            if rel.startswith("baselines/"):
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size >= dup_min_bytes:
+                by_size.setdefault(size, []).append(path)
+    duplicates: list[dict] = []
+    for size, paths in sorted(by_size.items(), reverse=True):
+        if len(paths) < 2:
+            continue
+        groups: dict[str, list[str]] = defaultdict(list)
+        for path in paths:
+            digest = _sha256_file(path)
+            if digest:
+                groups[digest].append(_rel(path, root))
+        for digest, members in groups.items():
+            if len(members) > 1:
+                duplicates.append({"bytes": size, "sha256": digest[:16],
+                                   "paths": sorted(members)[:6],
+                                   "count": len(members)})
+    duplicates.sort(key=lambda item: item["bytes"], reverse=True)
+    checks.append({"id": "duplicate_large_files", "ok": not duplicates,
+                   "min_bytes": dup_min_bytes, "count": len(duplicates),
+                   "items": duplicates[:10],
+                   "wasted_bytes": sum(i["bytes"] * (i["count"] - 1)
+                                       for i in duplicates)})
+    if duplicates:
+        suggestions.append("发现 %d 组重复大文件（可回收 %s）：%s"
+                           % (len(duplicates),
+                              _human(sum(i["bytes"] * (i["count"] - 1)
+                                         for i in duplicates)),
+                              duplicates[0]["paths"][0]))
+
+    # 4) `snapshots/` 堆积
+    crowded: list[dict] = []
+    for chapter in sorted(root.glob("output/*/*/chapter_*")):
+        snaps = chapter / "snapshots"
+        if not snaps.is_dir():
+            continue
+        count = sum(1 for p in snaps.iterdir() if p.is_dir())
+        if count > snapshot_warn:
+            crowded.append({"chapter": _rel(chapter, root), "snapshots": count,
+                            "bytes": _tree_bytes(snaps)})
+    checks.append({"id": "snapshot_accumulation", "ok": not crowded,
+                   "warn_count": snapshot_warn, "count": len(crowded),
+                   "items": crowded[:10]})
+    if crowded:
+        suggestions.append("%d 个章节的 snapshots/ 超过 %d 份（%s）：确认后可清理最旧快照"
+                           % (len(crowded), snapshot_warn,
+                              crowded[0]["chapter"]))
+
+    violations = [c["id"] for c in checks if not c["ok"]]
+    return {"schema": "workspace.thresholds/1", "root": str(root),
+            "ok": not violations, "violations": violations, "checks": checks,
+            "suggestions": suggestions, "writes": []}
+
+
 def _human(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
@@ -181,12 +353,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out-dir", default="docs/step01-layered-execution/artifacts",
                     help="报告输出目录（默认 docs/.../artifacts）")
     ap.add_argument("--no-write", action="store_true", help="只打印 JSON，不写报告")
+    # 2026-11-28 O13：只读水位巡检（不删任何文件，只给清理建议）
+    ap.add_argument("--check-thresholds", action="store_true",
+                    help="只读阈值巡检：核心代码体积/过期 .tmp 目录/重复大文件/snapshots 堆积"
+                         "；有越界项退出码 1")
+    ap.add_argument("--stale-days", type=int, default=STALE_DAYS,
+                    help="`.tmp/` 子目录超过多少天算过期（默认 %d）" % STALE_DAYS)
+    ap.add_argument("--core-limit-mb", type=float, default=CORE_RED_LINE_MB,
+                    help="核心代码区红线（MB，默认 %.0f）" % CORE_RED_LINE_MB)
     # 报告名里的日期戳**不再写死**：写死会让第二天重跑覆盖同一份文件、
     # 让"最新体检"变成"某一天的体检"，也让回归无法断言产出文件名。
     ap.add_argument("--stamp", default=_dt.date.today().isoformat(),
                     help="报告文件名日期戳，默认今天（YYYY-MM-DD）")
     args = ap.parse_args(argv)
     root = Path(args.root).resolve()
+    if args.check_thresholds:
+        report = check_thresholds(root, stale_days=max(0, int(args.stale_days)),
+                                  core_limit_bytes=int(args.core_limit_mb * 1024 * 1024))
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        for item in report["suggestions"]:
+            print("[建议] %s" % item)
+        return 0 if report["ok"] else 1
     report = audit(root)
     payload = json.dumps(report, ensure_ascii=False, indent=1)
     if args.no_write:

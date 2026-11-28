@@ -1,3 +1,15 @@
+# 2026-11-28 O13：行尾规范（根治 Windows/Linux 混用导致的 CRLF 假 diff）
+# 通用规则放最前；下面文件里显式的 -text / eol 钉住规则优先级更高（Git 后规则覆盖前规则）。
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.env.content text eol=lf
+.env.keys text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
 # baselines/ 里的证据文件保留原始字节（多数为 CRLF），manifest.json 的 sha256
 # 按原始字节记录；core.autocrlf=true 会在 add/checkout 时改写它们，导致摘要失配。
 # -text 禁止任何 eol 转换，保证干净 checkout 后 compare.py --verify 成立。

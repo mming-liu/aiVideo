@@ -683,3 +683,5 @@ start_studio.bat
 !tests/shared/test_asset_style_isolation.py
 # 2026-11-28：O9 跨章连续性用例
 !tests/shared/test_chapter_continuity.py
+# 2026-11-28：O13 行尾/水位卫生用例
+!tests/tools/test_workspace_hygiene.py
