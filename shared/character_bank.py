@@ -24,6 +24,84 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
+# ---------------------------------------------------------------------------
+# 资产画风隔离（2026-11-28 O9）
+#
+# 历史问题：`global/` 下的肖像与画风锚点没有画风标记，从 `anime` 切到 `gufeng`
+# 真人风后，旧动漫肖像/锚点仍会被解析器命中并塞进新画风镜头。
+#
+# 解决：资产与锚点都带 `video_style` + `asset_contract_version`。缺字段的**历史**
+# 资产按「风格纪元（style epoch）」处理：首次在某个画风下使用本代码时，把该画风记进
+# `meta.style_stamp`，此后缺字段的旧资产视为**属于该纪元**；一旦 `VIDEO_STYLE` 换到
+# 另一个画风，缺字段的旧资产就变成 `legacy_unstamped` 拒绝复用（因为无法证明它属于
+# 新画风），而带标记的资产只在 `video_style == 当前画风` 时可用。
+#
+# 这样既不会在切换画风后串用旧资产，又不会把当前书已有的资产一次性判死。
+# ---------------------------------------------------------------------------
+
+ASSET_CONTRACT_VERSION = 2
+#: 逃生开关：`0` 时把 `style_mismatch` 降级为告警（仍记录原因，不静默）。
+STYLE_STRICT_ENV = "ASSET_STYLE_STRICT"
+
+
+def normalize_video_style(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def current_video_style() -> str:
+    """当前生效画风（`VIDEO_STYLE`）；读不到时返回空串（不做过滤）.
+
+    解析顺序与全仓配置一致：进程环境优先（shell 覆盖 `.env*`），其次
+    `shared.config` 里的同名常量（若有）。`shared.config` 目前不导出 `VIDEO_STYLE`，
+    所以以环境变量为准。
+    """
+    value = normalize_video_style(os.getenv("VIDEO_STYLE", ""))
+    if value:
+        return value
+    try:
+        from shared.config import VIDEO_STYLE  # type: ignore[attr-defined]
+        return normalize_video_style(VIDEO_STYLE)
+    except Exception:
+        return ""
+
+
+def style_strict() -> bool:
+    return str(os.getenv(STYLE_STRICT_ENV, "1")).strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def resolve_style_state(entry_style, *, current: str, epoch: str) -> str:
+    """判定单个资产在当前画风下能否复用.
+
+    返回：`ok`（带标记且一致）/ `style_mismatch`（带标记但不一致）/
+    `legacy_in_epoch`（无标记，但纪元就是当前画风 ⇒ 允许）/
+    `legacy_unstamped`（无标记，且纪元已是别的画风 ⇒ 拒绝）/ `style_unknown`
+    （当前画风读不到，不做过滤）。
+    """
+    current = normalize_video_style(current)
+    entry = normalize_video_style(entry_style)
+    if not current:
+        return "style_unknown"
+    if entry:
+        return "ok" if entry == current else "style_mismatch"
+    if not normalize_video_style(epoch):
+        return "legacy_adopted"
+    return "legacy_in_epoch" if normalize_video_style(epoch) == current \
+        else "legacy_unstamped"
+
+
+_STYLE_REASON_TEXT = {
+    "style_mismatch": "资产画风与当前 VIDEO_STYLE 不一致",
+    "legacy_unstamped": "历史资产无画风标记，且当前已不在其风格纪元内",
+    "style_unknown": "无法读取当前 VIDEO_STYLE，未做画风过滤",
+    "no_portraits": "没有肖像",
+    "not_found": "角色/锚点不存在",
+}
+
+
+def style_reason_text(reason: str) -> str:
+    return _STYLE_REASON_TEXT.get(str(reason), str(reason))
+
 
 def _book_global_dir() -> Path:
     """本书跨章节共享目录（统一路径来源: shared/paths.py）."""
@@ -157,6 +235,8 @@ class CharacterBank:
         Returns: `True` = 真的写进了盘（调用方据此才可以说"已保存"）。
         """
         _rid = str(run_id or "").strip() or _current_run_id()
+        # 2026-11-28 O9：写盘前确保风格纪元已钉住（首次使用时可能还没解析过资产）
+        self.ensure_style_stamp()
         # **候选副本**：失败 ⇒ 基线（内存与盘上）一个字节不改
         _cand = copy.deepcopy(self._data)
         # 统计也在**副本**上（复核 2026-10-02 之八 P1：save 期的改动一律不落在内存上，
@@ -248,18 +328,96 @@ class CharacterBank:
         """返回角色肖像目录（如 characters_bank/杨旭/）."""
         return self._bank_dir / identifier
 
-    def get_all_portraits_as_registry(self) -> dict:
+    def get_all_portraits_as_registry(self, *, style: str | None = None) -> dict:
         """返回 ViMax 兼容的 character_portraits_registry dict.
 
         格式: {identifier: {front/side/back: {path, description}}}
         只包含已生成肖像的角色.
+
+        2026-11-28 O9：按**当前画风**过滤——画风不一致或历史资产已离开其风格纪元时
+        不再出现在注册表里（`resolve_portraits` 里有逐条原因）。旧调用方签名不变。
         """
         registry = {}
-        for ident, char in self._data.get("characters", {}).items():
-            portraits = char.get("portraits", {})
-            if portraits:
-                registry[ident] = portraits
+        for ident in self._data.get("characters", {}):
+            resolved = self.resolve_portraits(ident, style=style)
+            if resolved.get("portraits"):
+                registry[ident] = resolved["portraits"]
         return registry
+
+    # -- 画风隔离（2026-11-28 O9）------------------------------------------
+
+    def ensure_style_stamp(self, style: str | None = None) -> str:
+        """返回本书资产库的**风格纪元**；首次调用时把它钉在当前画风上.
+
+        只改内存，随下一次 `save()` 落盘（`load()` 保持只读语义）。
+        """
+        meta = self._data.setdefault("meta", {})
+        stamp = meta.setdefault("style_stamp", {})
+        if not normalize_video_style(stamp.get("video_style")):
+            stamp["video_style"] = (normalize_video_style(style) if style is not None
+                                    else current_video_style())
+            stamp["asset_contract_version"] = ASSET_CONTRACT_VERSION
+            stamp["stamped_at"] = datetime.now().isoformat(timespec="seconds")
+        return normalize_video_style(stamp.get("video_style"))
+
+    def style_context(self, style: str | None = None) -> tuple[str, str]:
+        """`(当前画风, 风格纪元)`；当前画风缺省读 `VIDEO_STYLE`."""
+        epoch = self.ensure_style_stamp(style)
+        current = normalize_video_style(style) if style is not None else current_video_style()
+        return current, epoch
+
+    def resolve_portraits(self, identifier: str, *, style: str | None = None) -> dict:
+        """按画风解析某角色的可用肖像；返回 `{ok, reason, video_style, portraits, rejected}`."""
+        current, epoch = self.style_context(style)
+        char = self.get_character(identifier)
+        if not char:
+            return {"ok": False, "reason": "not_found", "identifier": identifier,
+                    "video_style": current, "epoch": epoch, "portraits": {}}
+        entry_state = resolve_style_state(char.get("video_style"), current=current,
+                                          epoch=epoch)
+        if entry_state in ("style_mismatch", "legacy_unstamped") and style_strict():
+            return {"ok": False, "reason": entry_state, "identifier": identifier,
+                    "video_style": current, "epoch": epoch,
+                    "message": style_reason_text(entry_state), "portraits": {}}
+        portraits: dict = {}
+        rejected: list[dict] = []
+        for view, record in (char.get("portraits") or {}).items():
+            rec = dict(record or {})
+            state = resolve_style_state(
+                rec.get("video_style") or char.get("video_style"),
+                current=current, epoch=epoch)
+            if state in ("style_mismatch", "legacy_unstamped") and style_strict():
+                rejected.append({"view": view, "reason": state,
+                                 "video_style": normalize_video_style(
+                                     rec.get("video_style") or char.get("video_style"))})
+                continue
+            portraits[view] = rec
+        if not portraits:
+            reason = rejected[0]["reason"] if rejected else "no_portraits"
+            return {"ok": False, "reason": reason, "identifier": identifier,
+                    "video_style": current, "epoch": epoch,
+                    "message": style_reason_text(reason), "portraits": {},
+                    "rejected": rejected}
+        reason = rejected[0]["reason"] if rejected else (
+            entry_state if entry_state != "ok" else "ok")
+        return {"ok": True, "reason": reason,
+                "identifier": identifier, "video_style": current, "epoch": epoch,
+                "portraits": portraits, "rejected": rejected}
+
+    def style_audit(self, *, style: str | None = None) -> dict:
+        """全部资产的画风可用性审计（只读；给报告/测试用）."""
+        current, epoch = self.style_context(style)
+        rows = []
+        for ident in self._data.get("characters", {}):
+            resolved = self.resolve_portraits(ident, style=style)
+            rows.append({"identifier": ident, "ok": bool(resolved.get("ok")),
+                         "reason": resolved.get("reason"),
+                         "video_style": resolved.get("video_style"),
+                         "views": sorted(resolved.get("portraits") or {}),
+                         "rejected": resolved.get("rejected") or []})
+        return {"video_style": current, "epoch": epoch,
+                "asset_contract_version": ASSET_CONTRACT_VERSION,
+                "strict": style_strict(), "characters": rows}
 
     # -- 修改 ----------------------------------------------------------------
 
@@ -269,6 +427,8 @@ class CharacterBank:
         static_features: str,
         dynamic_features: str,
         chapter_num: int,
+        *,
+        video_style: str | None = None,
     ) -> None:
         """注册新角色（尚无肖像）.
 
@@ -313,6 +473,10 @@ class CharacterBank:
             "first_chapter": chapter_num,
             "last_chapter": chapter_num,
             "portraits": {},
+            # 2026-11-28 O9：登记即盖画风，历史条目由风格纪元兜底
+            "video_style": (normalize_video_style(video_style) if video_style is not None
+                            else current_video_style()),
+            "asset_contract_version": ASSET_CONTRACT_VERSION,
         }
         if _existed and str(_old.get("first_run_id") or "").strip():
             self._data["characters"][identifier]["first_run_id"] = _old["first_run_id"]
@@ -334,14 +498,28 @@ class CharacterBank:
             char["dynamic_features"] = dynamic_features
             self._touched.add(str(char.get("identifier") or identifier))
 
-    def set_portraits(self, identifier: str, portraits: dict) -> None:
+    def set_portraits(self, identifier: str, portraits: dict,
+                      *, video_style: str | None = None) -> None:
         """设置角色肖像数据.
 
         portraits 格式: {front: {path, description}, side: {...}, back: {...}}
+
+        2026-11-28 O9：逐视图盖 `video_style` + `asset_contract_version`（解析时
+        按画风过滤）；未显式给画风时取当前 `VIDEO_STYLE`。
         """
         char = self.get_character(identifier)
         if char:
-            char["portraits"] = portraits
+            style = (normalize_video_style(video_style) if video_style is not None
+                     else current_video_style())
+            stamped = {}
+            for view, record in (portraits or {}).items():
+                rec = dict(record or {})
+                rec.setdefault("video_style", style)
+                rec.setdefault("asset_contract_version", ASSET_CONTRACT_VERSION)
+                stamped[view] = rec
+            char["portraits"] = stamped
+            if style:
+                char.setdefault("video_style", style)
             self._touched.add(str(char.get("identifier") or identifier))
 
     def get_meta(self) -> dict:
@@ -412,6 +590,8 @@ class StyleBank:
         （父路径被文件占住 / 只读）时抛 `OSError` 而不是"保存失败"；写盘统一走共享的
         `shared.json_io.atomic_dump_json`（写临时文件 + 替换 + 失败清理）。
         """
+        # 2026-11-28 O9：风格纪元随锚点一起落盘
+        self.ensure_style_stamp()
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
             from shared.json_io import atomic_dump_json
@@ -425,16 +605,67 @@ class StyleBank:
         """风格锚点是否已锁定."""
         return bool(self._data.get("is_locked", False))
 
+    # -- 画风隔离（2026-11-28 O9）------------------------------------------
+
+    def ensure_style_stamp(self, style: str | None = None) -> str:
+        """返回风格纪元；首次调用钉在当前画风上（只改内存，随 save 落盘）."""
+        stamp = self._data.setdefault("style_stamp", {})
+        if not normalize_video_style(stamp.get("video_style")):
+            stamp["video_style"] = (normalize_video_style(style) if style is not None
+                                    else current_video_style())
+            stamp["asset_contract_version"] = ASSET_CONTRACT_VERSION
+            stamp["stamped_at"] = datetime.now().isoformat(timespec="seconds")
+        return normalize_video_style(stamp.get("video_style"))
+
+    def style_context(self, style: str | None = None) -> tuple[str, str]:
+        epoch = self.ensure_style_stamp(style)
+        current = normalize_video_style(style) if style is not None else current_video_style()
+        return current, epoch
+
+    def get_anchor_for_style(self, style: str | None = None) -> dict:
+        """按画风解析风格锚点；不一致/历史无标记且已换画风 ⇒ 拒绝复用."""
+        current, epoch = self.style_context(style)
+        path = str(self._data.get("style_anchor_image") or "")
+        if not path or not Path(path).exists():
+            default = self._dir / "style_anchor.png"
+            path = str(default.resolve()) if default.exists() else ""
+        if not path:
+            return {"ok": False, "reason": "not_found", "path": None,
+                    "video_style": current, "epoch": epoch,
+                    "message": style_reason_text("not_found")}
+        state = resolve_style_state(self._data.get("video_style"), current=current,
+                                    epoch=epoch)
+        if state in ("style_mismatch", "legacy_unstamped") and style_strict():
+            return {"ok": False, "reason": state, "path": None, "candidate": path,
+                    "video_style": current, "epoch": epoch,
+                    "asset_video_style": normalize_video_style(self._data.get("video_style")),
+                    "message": style_reason_text(state)}
+        return {"ok": True, "reason": "ok" if state in ("ok", "style_unknown") else state,
+                "path": path, "video_style": current, "epoch": epoch,
+                "asset_video_style": normalize_video_style(self._data.get("video_style"))}
+
+    def style_audit(self, *, style: str | None = None) -> dict:
+        resolved = self.get_anchor_for_style(style)
+        return {"video_style": resolved.get("video_style"),
+                "epoch": resolved.get("epoch"),
+                "asset_contract_version": ASSET_CONTRACT_VERSION,
+                "strict": style_strict(),
+                "locked": self.is_locked(), "anchor": resolved}
+
     def get_anchor_path(self) -> str | None:
-        """返回 style_anchor.png 的绝对路径，不存在返回 None."""
-        path = self._data.get("style_anchor_image", "")
-        if path and Path(path).exists():
-            return path
-        # 尝试从默认位置查找
-        default = self._dir / "style_anchor.png"
-        if default.exists():
-            return str(default.resolve())
-        return None
+        """返回当前画风下可用的 style_anchor.png 绝对路径；不可用返回 None.
+
+        2026-11-28 O9：不再无脑返回——画风不一致 / 历史资产已离开其风格纪元时返回
+        `None`（原因见 `get_anchor_for_style()`），避免旧动漫锚点被塞进新画风镜头。
+        """
+        resolved = self.get_anchor_for_style()
+        path = resolved.get("path")
+        if not path:
+            if resolved.get("reason") not in ("not_found",):
+                print("[bank] 风格锚点按画风拒绝复用：%s（%s）"
+                      % (resolved.get("reason"), resolved.get("message", "")))
+            return None
+        return str(path)
 
     def get_anchor_chapter(self) -> int:
         """返回锁定锚点的章节号."""
@@ -450,6 +681,7 @@ class StyleBank:
         anchor_kind: str = "environment",
         allow_characters: bool = False,
         expected_persons: int | None = None,
+        video_style: str | None = None,
     ) -> bool:
         """锁定风格锚点：校验无人物纯画风锚并写为规范 PNG 到 style_bank/ + 写 JSON."""
         src = Path(anchor_image_path)
@@ -525,6 +757,13 @@ class StyleBank:
         self._data["anchor_sha256"] = anchor_sha
         self._data["is_locked"] = True
         self._data["created_at"] = datetime.now().isoformat()
+        # 2026-11-28 O9：锚点与风格纪元一起钉住画风（此后切画风会被硬隔离）
+        style = (normalize_video_style(video_style) if video_style is not None
+                 else current_video_style())
+        if style:
+            self._data["video_style"] = style
+        self._data["asset_contract_version"] = ASSET_CONTRACT_VERSION
+        self.ensure_style_stamp(style or None)
         self.save()
         return True
 

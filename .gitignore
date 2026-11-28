@@ -679,3 +679,7 @@ start_studio.bat
 !tests/step04_merge/test_subtitle_ergonomics_gate.py
 # 2026-11-28：O8 BGM+Ducking 的离线量化用例
 !tests/step04_merge/test_bgm_ducking.py
+# 2026-11-28：O9 资产库画风隔离用例
+!tests/shared/test_asset_style_isolation.py
+# 2026-11-28：O9 跨章连续性用例
+!tests/shared/test_chapter_continuity.py
