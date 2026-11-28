@@ -1130,8 +1130,11 @@ def _assert_voice_gate(chapter_dir, *, script_revision: str, voice_required: boo
   return report
 
 
-def main(options=None):
+def main(options=None, ctx=None):
   """step04 入口。``options=None`` 时取模块顶部已解析的 ``_options``（不二次解析）."""
+  # 2026-11-28 O3：统一运行上下文（未传时 from_env）；只读上下文下日志/JSON 写入受保护。
+  from shared.run_context import bind as _bind_run_context
+  ctx = _bind_run_context(ctx)
   opts = options if options is not None else _options
   # 2026-11-28 O1：跨键配置一致性预检（默认只记录；CONFIG_GUARD_STRICT=1 时 error 阻断）
   from shared.env_guard import assert_config_consistent

@@ -674,6 +674,9 @@ class VolcengineVideoService(VideoGenerationService):
         """materialize + **一次** POST（网络断开/5xx 返回 unknown，不自行重发）。"""
         from .models import SUBMIT_UNKNOWN, VideoSubmissionError
         from .service import classify_post_response
+        # 2026-11-28 O3：一次提交 = 一次逻辑调用；底层尝试在发送前单独记账。
+        from shared import outbound_guard as _outbound_guard
+        _outbound_guard.begin_phase("video_gen")
 
         if not prepared.is_ready():
             raise VideoCapabilityError(
@@ -720,6 +723,9 @@ class VolcengineVideoService(VideoGenerationService):
         if isinstance(prepared.source, dict):
             prepared.source["_provider_http_emitted"] = True
 
+        # 2026-11-28 O3：统一出站账本（未安装守卫时零行为变化），在**发出字节之前**记账。
+        from shared import outbound_guard as _outbound_guard
+        _outbound_guard.charge_attempt("video_gen")
         try:
             resp = requests.post(
                 f"{self._base_url}/contents/generations/tasks",

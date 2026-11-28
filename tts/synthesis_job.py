@@ -812,6 +812,10 @@ def synthesize_unit(unit: SpeechUnit | dict, candidate_context: TtsCandidateCont
     seg_dir.mkdir(parents=True, exist_ok=True)
 
     produced: list[dict] = []
+    # 2026-11-28 O3：一次 synthesize_unit = 一次逻辑调用；每段 provider 调用前
+    # 记一次底层尝试（未安装 outbound_guard 时都是 no-op）。
+    from shared import outbound_guard as _outbound_guard
+    _outbound_guard.begin_phase("tts")
     try:
         for seg in segments:
             ext = str(unit.format or "mp3").lstrip(".")
@@ -820,6 +824,7 @@ def synthesize_unit(unit: SpeechUnit | dict, candidate_context: TtsCandidateCont
             req.rate = float(applied["rate"]) if applied["rate"] is not None else unit.rate
             req.volume = int(applied["volume"]) if applied["volume"] is not None else 0
             req.instruction = str(applied["instruction"] or "")
+            _outbound_guard.charge_attempt("tts")
             result = provider.synthesize(req, output=str(seg_out))
             if not isinstance(result, TTSSuccessResult) or not getattr(result, "success", False):
                 raise ProviderCallError(

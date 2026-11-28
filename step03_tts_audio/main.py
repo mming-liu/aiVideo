@@ -426,7 +426,10 @@ def _write_step03_quality(script: dict, required: list, narr_entries: list) -> d
     return payload
 
 
-def main(options=None):
+def main(options=None, ctx=None):
+    # 2026-11-28 O3：统一运行上下文（未传时 from_env）；只读上下文下日志/JSON 写入受保护。
+    from shared.run_context import bind as _bind_run_context
+    ctx = _bind_run_context(ctx)
     opts = options if options is not None else (_options or StageOptions())
     _logger.separator()
     _logger.info("  Step 3: TTS Audio Generation")

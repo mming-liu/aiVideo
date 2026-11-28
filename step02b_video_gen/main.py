@@ -1215,8 +1215,11 @@ def _assert_step02a_scope(report: dict, only_indices, script: dict, *,
             % (missing, sorted(scoped)))
 
 
-def main(options=None):
+def main(options=None, ctx=None):
     from step02b_video_gen import cli
+    # 2026-11-28 O3：统一运行上下文（未传时 from_env）；只读上下文下日志/JSON 写入受保护。
+    from shared.run_context import bind as _bind_run_context
+    ctx = _bind_run_context(ctx)
 
     options = options if options is not None else cli.options_or_default()
     try:

@@ -665,3 +665,5 @@ start_studio.bat
 !tests/step02b_video_gen/test_bailian_ratio.py
 # 2026-11-28：O2 规则指纹卫生与差异复核的用例
 !tests/step01_script_gen/test_rule_fingerprint_hygiene.py
+# 2026-11-28：O3 下游运行上下文与出站预算的用例
+!tests/shared/test_downstream_run_context_and_guard.py

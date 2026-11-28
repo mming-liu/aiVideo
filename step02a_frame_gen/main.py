@@ -649,12 +649,16 @@ def _plan_only_log_isolated(func):
 
 
 @_plan_only_log_isolated
-def main():
+def main(ctx=None):
     import argparse
     import json
     from shared.paths import script_file, vimax_working_dir as wd
     from shared.run_scope import (add_scope_arguments, apply_scope, scope_log_line,
                                   step01_hint as _step01_hint)
+    # 2026-11-28 O3：统一运行上下文（未传时 from_env）。安装后 step02a 的日志/JSON
+    # 写入受 `read_only` 物理保护；画幅/时长/画风等调用时读取的键按上下文生效。
+    from shared.run_context import bind as _bind_run_context
+    ctx = _bind_run_context(ctx)
 
     parser = argparse.ArgumentParser(description="step02a 帧图片生成")
     parser.add_argument("--shots", "-s", default=None,

@@ -1344,6 +1344,9 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
     data_url = _ark_image_data_url(frame_path)
     retries = _qc_http_retries()
     last_err = ""
+    # 2026-11-28 O3：一次视觉 QC = 一次逻辑调用；底层尝试在每次发送前单独记账。
+    from shared import outbound_guard as _outbound_guard
+    _outbound_guard.begin_phase("vision_qc")
     for attempt in range(retries + 1):
         global _QC_HTTP_ATTEMPTS
         with _QC_HTTP_ATTEMPTS_LOCK:
@@ -1354,6 +1357,8 @@ def _opencode_vision_chat(frame_path: str | Path, prompt: str) -> str:
                 )
             _QC_HTTP_ATTEMPTS += 1
             seq_attempt = _QC_HTTP_ATTEMPTS
+        # 统一出站账本（未安装守卫时零行为变化）；触顶抛 SendBlocked。
+        _outbound_guard.charge_attempt("vision_qc")
         try:
             from shared import request_events as _req_ev
             _req_ev.emit(

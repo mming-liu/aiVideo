@@ -152,6 +152,9 @@ class VolcengineImageService(ImageGenerationService):
 
     def generate(self, req: ImageGenerationRequest) -> ImageGenerationResult:
         self._key_scheduler.acquire(timeout=180)
+        # 2026-11-28 O3：一次 generate = 一次逻辑调用（重试只记底层尝试）。
+        from shared import outbound_guard as _outbound_guard
+        _outbound_guard.begin_phase("image_gen")
 
         # 原始参考图路径（来自 request，循环内按当前模型能力重新计算压缩后的 ref_paths/ref_urls）
         from shared.ref_compose import fit_flat
@@ -270,6 +273,11 @@ class VolcengineImageService(ImageGenerationService):
                 )
             except Exception:
                 pass
+            # 2026-11-28 O3：统一出站账本（未安装 outbound_guard 时零行为变化）。
+            # 本 provider 直接调 `requests.post`，不经守卫的 transport，因此在这里
+            # 于**发出字节之前**记账；触顶由守卫抛 SendBlocked（BaseException）。
+            from shared import outbound_guard as _outbound_guard
+            _outbound_guard.charge_attempt("image_gen")
             try:
                 return requests.post(f"{self._base_url}/images/generations",
                                      json=payload, headers=self._headers, timeout=180)

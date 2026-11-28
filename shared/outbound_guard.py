@@ -182,10 +182,13 @@ class OutboundGuard:
         return phase
 
     # ---- 第 2 层：网络尝试 ----------------------------------------------
-    def __call__(self, url, **kw):
-        phase = str(kw.pop("phase", "") or "other")
-        if phase == "other" and is_hook_request(kw):
-            phase = "hook"
+    def charge(self, phase: str) -> int:
+        """记账一次网络尝试并返回序号（触顶抛 `SendBlocked`，**在发送之前**）.
+
+        2026-11-28 O3：给**不经过本模块 transport** 的发送方用（直接调 SDK、
+        `session.post`、`requests.post` 的 image/video/tts/QC 客户端）——
+        它们在自己的发送边界调用本方法，就能和文本通道记在同一本账上。
+        """
         with self._lock:
             used = int(self.http_attempts.get(phase) or 0)
             cap = self.phase_attempts.get(phase)
@@ -196,7 +199,13 @@ class OutboundGuard:
                 self._block("网络尝试总量上限阻断：%d/%d"
                             % (total_used, self.total_attempts), phase)
             self.http_attempts[phase] = used + 1
-            n = total_used + 1
+            return total_used + 1
+
+    def __call__(self, url, **kw):
+        phase = str(kw.pop("phase", "") or "other")
+        if phase == "other" and is_hook_request(kw):
+            phase = "hook"
+        n = self.charge(phase)
         t0 = time.monotonic()
         try:
             if self._transport is not None:
@@ -302,6 +311,30 @@ def begin_for_schema(schema_name) -> str:
     return guard.begin(phase_of_schema(schema_name))
 
 
+def begin_phase(phase: str) -> str:
+    """按**阶段名**登记一次逻辑调用（未安装守卫时直接返回）.
+
+    2026-11-28 O3：非文本通道（生图/生视频/TTS/视觉 QC）没有 schema 名，用本函数
+    在各自的「一次调用意图」处登记；重试不重复登记（重试走 `charge_attempt`）。
+    """
+    guard = _CURRENT
+    if guard is None:
+        return ""
+    return guard.begin(str(phase or "other"))
+
+
+def charge_attempt(phase: str) -> int:
+    """在**发出字节之前**为一次底层网络尝试记账；触顶抛 `SendBlocked`（BaseException）.
+
+    给直接调 SDK / `session.post` / `requests.post` 的发送方用：它们不经过本模块
+    的 transport，但仍必须和文本通道记在同一本账上。未安装守卫时返回 0，零行为变化。
+    """
+    guard = _CURRENT
+    if guard is None:
+        return 0
+    return guard.charge(str(phase or "other"))
+
+
 def remaining_logical(phase: str | None = None):
     guard = _CURRENT
     return None if guard is None else guard.remaining_logical(phase)
@@ -318,6 +351,6 @@ def snapshot() -> dict:
     return {} if guard is None else guard.snapshot()
 
 
-__all__ = ["PHASES", "OutboundGuard", "SendBlocked", "begin_for_schema", "current",
-           "install", "is_hook_request", "phase_of_schema", "remaining_logical",
-           "snapshot"]
+__all__ = ["PHASES", "OutboundGuard", "SendBlocked", "begin_for_schema", "begin_phase",
+           "charge_attempt", "current", "install", "is_hook_request", "phase_of_schema",
+           "remaining_logical", "snapshot"]
