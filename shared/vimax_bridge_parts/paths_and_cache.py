@@ -791,7 +791,9 @@ def _resolve_style_anchor_path() -> str | None:
         if json_path.is_file():
             data = json.loads(json_path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
-                data = {}
+                # 非法顶层（`[]` / `null` / 字符串）**不得**降级成空库：空库会被判成
+                # 「无标记但纪元可采纳」，反而让默认图获得放行资格。
+                return None
         path = ""
         img = str(data.get("style_anchor_image") or "").strip()
         if img and Path(img).is_file():
