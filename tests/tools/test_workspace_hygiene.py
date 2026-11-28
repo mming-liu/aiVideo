@@ -160,3 +160,15 @@ def test_cli_check_thresholds_exit_codes(tmp_path, capsys):
                        "--stale-days", "14", "--core-limit-mb", "0.00001"]) == 1
     out = capsys.readouterr().out
     assert "[建议]" in out
+
+
+# ---------------------------------------------------------------------------
+# 4) .gitignore 不再靠逐文件白名单（O10）
+# ---------------------------------------------------------------------------
+def test_gitignore_has_no_tests_allowlist():
+    lines = [line.strip() for line in
+             (_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()]
+    assert [line for line in lines if line.startswith("!tests/")] == [], \
+        "tests/ 逐文件白名单必须清零"
+    assert "tests/*" not in lines, "tests/ 内容必须默认入库"
+    assert "tests_local/" in lines, "本地测试隔离目录必须被忽略"

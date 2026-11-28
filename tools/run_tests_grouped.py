@@ -46,6 +46,21 @@ _NOT_TARGETS = {"fixtures", "__pycache__", "conftest.py", "__init__.py",
 
 GROUP_TIMEOUT_SEC = 3600
 
+#: 2026-11-28 O10：`--fast` 的核心契约子集（目标 30 秒内跑完，只放零 I/O 的判据/配置/
+#: 身份单测）。**不是全量回归的替代品**：只是提交前的一道快速守卫。
+FAST_TARGETS: tuple[str, ...] = (
+    "shared/test_env_guard_consistency.py",
+    "shared/test_config_single_source.py",
+    "shared/test_downstream_run_context_and_guard.py",
+    "shared/test_http_resilience_fault_injection.py",
+    "shared/test_asset_style_isolation.py",
+    "shared/test_chapter_continuity.py",
+    "step01_script_gen/test_rule_fingerprint_hygiene.py",
+    "step04_merge/test_subtitle_ergonomics_gate.py",
+    "tools/test_print_effective_config.py",
+    "tools/test_workspace_hygiene.py",
+)
+
 
 def rest_targets() -> tuple[str, ...]:
     grouped = {p for paths in GROUPS.values() for p in paths}
@@ -121,12 +136,33 @@ def merge_xml(out_dir: Path, names: list[str]) -> Path:
     return target
 
 
+def run_fast(*, runner=subprocess.run) -> int:
+    """`--fast`：单进程跑核心契约子集（不写 JUnit，目标 30 秒内）。"""
+    targets = [f"tests/{t}" for t in FAST_TARGETS if (ROOT / "tests" / t).is_file()]
+    missing = [t for t in FAST_TARGETS if not (ROOT / "tests" / t).is_file()]
+    t0 = time.monotonic()
+    proc = runner([sys.executable, "-m", "pytest", *targets, "-q",
+                   "-p", "no:cacheprovider", "-m", "not slow"],
+                  cwd=ROOT, capture_output=True, text=True,
+                  encoding="utf-8", errors="replace")
+    elapsed = time.monotonic() - t0
+    tail = ((proc.stdout or "")[-1500:] + (proc.stderr or "")[-500:]).strip()
+    print(tail)
+    print("[fast] %.1fs；%d 个目标%s" % (
+        elapsed, len(targets), "；缺文件：" + ", ".join(missing) if missing else ""))
+    return 0 if proc.returncode == 0 and not missing else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", type=Path, help="输出目录")
     ap.add_argument("--only", nargs="*", help="只跑这些组")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--fast", action="store_true",
+                    help="30 秒级核心契约守卫（不替代全量分组回归）")
     args = ap.parse_args(argv)
+    if args.fast:
+        return run_fast()
     groups = all_groups()
     if args.list:
         for k, v in groups.items():

@@ -6,7 +6,7 @@
   "candidate": "tests/step01_script_gen/fixtures/step01_audit_min/candidate.json",
   "candidate_sha256": "42ddccde2497efc6bae95c50d707de7090077e5b9cde486c1eda236e29eaafdf",
   "novel": "tests/step01_script_gen/fixtures/step01_audit_min/novel.txt",
-  "novel_sha256": "8eb67a040379ac2e73130a696f1b01de22d32ad4a6b895575aeea565625340f1",
+  "novel_sha256": "8c19329a2a60fba603cc8164fd6e3238a1a98e7d9d8367bbbc1b7a2c229ecd4a",
   "quality_report": "tests/step01_script_gen/fixtures/step01_audit_min/quality.json",
   "quality_sha256": "f36f82ab2482363bf317848ffe04cf655cc5ca3d0c5c340fb9583d97768ee126",
   "quality_status": "PASS",

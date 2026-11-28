@@ -1,0 +1,378 @@
+[2026-10-10 08:40:29] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:40:29] [HARD_FIX] 本轮路径: Constraint 框架
+[2026-10-10 08:40:29] [CONSTRAINT] 修复 104 处 (top: mandatory_biz_fields=28, camera_movement_fill=10, kf_time_window_alignment=9, lf_desc_length=9, frame_text_state_cleanup=9)
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 8 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 8 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 7 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 9 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/9 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 9 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 08:40:29] [CONSTRAINT-WARN] 合计 31 条告警 / 8 类约束
+[2026-10-10 08:40:29] [CONSTRAINT] HARD 未解决 33 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 08:40:29] [COMMIT] x 台词完整性硬门：1/2 句破损（公子爷吃醉了酒，险些跌落水中，所以惊得听香姑娘尖叫起来。（not_found）），需在候选层重取——提交前修复按锁定契约不可修 narration_segment（09-26 locked_changed 死锁）
+[2026-10-10 08:40:29] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision 5f4b44ecf946（修后 3619f1d6439f）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-10 08:41:28] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:41:28] [HARD_FIX] 本轮路径: Constraint 框架
+[2026-10-10 08:41:28] [CONSTRAINT] 修复 108 处 (top: mandatory_biz_fields=28, camera_movement_fill=10, kf_time_window_alignment=9, lf_desc_length=9, frame_text_state_cleanup=9)
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 8 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 8 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 7 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 9 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] climax_completeness@shot2: 高潮缺少可证结果，保留原文交由 audit/LLM 裁决
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/9 = 11%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 9 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 08:41:28] [CONSTRAINT-WARN] 合计 32 条告警 / 9 类约束
+[2026-10-10 08:41:28] [CONSTRAINT] HARD 未解决 33 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 08:41:28] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：plan_refs_pairing_broken@4 承载 D1 的 B4 被 1 个镜头声明，但这些镜头都没有声明说 D1（一个节拍可展开多镜，但至少有一镜要说这句）；plan_refs_pairing_broken@7 承载 D1 的 B7 被 1 个镜头声明，但这些镜头都没有声明说 D1（一个节拍可展开多镜，但至少有一镜要说这句）；plan_refs_pairing_broken@8 承载 D2 的 B8 被 1 个镜头声明，但这些镜头都没有声明说 D2（一个节拍可展开多镜，但至少有一镜要说这句）
+[2026-10-10 08:41:28] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision 75dbd19cb262（修后 416a62cb51bf）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-10 08:42:46] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:42:46] [HARD_FIX] 本轮路径: Constraint 框架
+[2026-10-10 08:42:46] [CONSTRAINT] 修复 110 处 (top: mandatory_biz_fields=28, camera_movement_fill=10, kf_time_window_alignment=9, lf_desc_length=9, frame_text_state_cleanup=9)
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 8 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 8 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 7 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 9 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] climax_completeness@shot8: 高潮缺少可证结果，保留原文交由 audit/LLM 裁决
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/9 = 11%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 9 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 08:42:46] [CONSTRAINT-WARN] 合计 32 条告警 / 9 类约束
+[2026-10-10 08:42:46] [CONSTRAINT] HARD 未解决 33 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 08:42:46] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：lines_order_violation@- D1 在镜头 4 与镜头 7 之间**断开后再次出现**（承载片段必须连续：隔镜复现 = 回到已经结束的节拍）
+[2026-10-10 08:42:47] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision ed45659b7f42（修后 e326e16d1993）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-10 08:43:50] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:43:51] [HARD_FIX] 本轮路径: Constraint 框架
+[2026-10-10 08:43:51] [CONSTRAINT] 修复 75 处 (top: mandatory_biz_fields=19, camera_movement_fill=7, kf_time_window_alignment=6, lf_desc_length=6, frame_text_state_cleanup=6)
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 5 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 5 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 4 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 6 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] climax_completeness@shot5: 高潮缺少可证结果，保留原文交由 audit/LLM 裁决
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/6 = 16%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 6 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 08:43:51] [CONSTRAINT-WARN] 合计 23 条告警 / 9 类约束
+[2026-10-10 08:43:51] [CONSTRAINT] HARD 未解决 21 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 08:43:51] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-10 08:43:51] [COMMIT] OK 三份产物已提交（revision=4b768f1989dd，审计修复轮 0，复用审计 否）
+[2026-10-10 08:45:41] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:45:41] [HARD_FIX] 本轮路径: Constraint 框架
+[2026-10-10 08:45:41] [CONSTRAINT] 修复 75 处 (top: mandatory_biz_fields=19, camera_movement_fill=7, kf_time_window_alignment=6, lf_desc_length=6, frame_text_state_cleanup=6)
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 5 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 5 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 4 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 6 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] climax_completeness@shot5: 高潮缺少可证结果，保留原文交由 audit/LLM 裁决
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/6 = 16%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 6 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 08:45:41] [CONSTRAINT-WARN] 合计 23 条告警 / 9 类约束
+[2026-10-10 08:45:41] [CONSTRAINT] HARD 未解决 21 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 08:46:37] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:46:38] [HARD_FIX] 本轮路径: Constraint 框架
+[2026-10-10 08:46:38] [CONSTRAINT] 修复 75 处 (top: mandatory_biz_fields=19, camera_movement_fill=7, kf_time_window_alignment=6, lf_desc_length=6, frame_text_state_cleanup=6)
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 5 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 5 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 4 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 6 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] climax_completeness@shot5: 高潮缺少可证结果，保留原文交由 audit/LLM 裁决
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 1/6 = 16%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 6 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 08:46:38] [CONSTRAINT-WARN] 合计 23 条告警 / 9 类约束
+[2026-10-10 08:46:38] [CONSTRAINT] HARD 未解决 21 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 08:50:57] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:51:29] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:51:48] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 08:52:21] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 18:09:20] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 18:11:26] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 18:13:04] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 18:36:23] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 19:08:14] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 19:08:15] [CONSTRAINT] 修复 36 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 19:08:15] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-10 19:08:15] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 19:08:15] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-10 19:08:15] [COMMIT] OK 三份产物已提交（revision=d74ffaed9a16，审计修复轮 0，复用审计 否）
+[2026-10-10 19:09:50] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 19:09:51] [CONSTRAINT] 修复 36 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 19:09:51] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-10 19:09:51] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 19:09:51] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-10 19:09:52] [COMMIT] OK 三份产物已提交（revision=d74ffaed9a16，审计修复轮 0，复用审计 否）
+[2026-10-10 19:12:44] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-10 19:12:45] [CONSTRAINT] 修复 36 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-10 19:12:45] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-10 19:12:45] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-10 19:12:45] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-10 19:12:45] [COMMIT] OK 三份产物已提交（revision=d74ffaed9a16，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:08] [INFO] agent_plan 通道：prompt 剖面按模型解析 = deepseek-v4.1-flash→build_prompt
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 36 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [COMMIT] OK 三份产物已提交（revision=d74ffaed9a16，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [COMMIT] OK 三份产物已提交（revision=570b06285acf，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 50 处 (top: mandatory_biz_fields=13, camera_movement_fill=5, kf_time_window_alignment=4, lf_desc_length=4, frame_text_state_cleanup=4)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 3 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 3 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 2 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 4 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/4 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 4 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 16 条告警 / 8 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 14 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [COMMIT] OK 三份产物已提交（revision=61f796bf1ae0，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 50 处 (top: mandatory_biz_fields=13, camera_movement_fill=5, kf_time_window_alignment=4, lf_desc_length=4, frame_text_state_cleanup=4)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 3 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 3 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 2 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 4 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/4 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 4 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 16 条告警 / 8 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 14 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：plan_refs_stale_plan@- plan_refs 是对**另一版计划**（115769261586）作的声明，当前计划是 b323c7f87f6d——
+[2026-10-11 02:20:13] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision 274fc397be3f（修后 52c16c8fb339）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 50 处 (top: mandatory_biz_fields=13, camera_movement_fill=5, kf_time_window_alignment=4, lf_desc_length=4, frame_text_state_cleanup=4)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 3 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 3 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 2 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 4 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/4 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 4 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 16 条告警 / 8 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 14 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [AUDIT] 每轮审计台账写入失败（不影响结论）: [Errno 2] No such file or directory: 'C:\\Users\\ee54\\AppData\\Local\\Temp\\pytest-of-ee54\\pytest-4784\\test_e02_a_stale_plan_id_after0\\b\\step01_audit_rounds.json.tmp'
+[2026-10-11 02:20:13] [COMMIT] OK 三份产物已提交（revision=893bf378afd5，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：plan_refs_missing@2 镜头缺少 plan_refs 声明（事件履约契约）
+[2026-10-11 02:20:13] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision 1d768dba1bd7（修后 8550ef1316cf）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [COMMIT] 第 1 轮发现 1 条 blocking（审计 1 + 确定性质量门 0）：[('1', 'model_audit_x')]
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 15 处 (top: kf_time_window_alignment=3, kf_pose_anchor=3, prompt_sanitize=2, cross_shot_continuity=2, opening_empty_shot_insert=1)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] dialogue_grounding@shot1: 台词未能定位到原文；保留原文，禁止自动替换或清空
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 13 条告警 / 8 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [COMMIT] x 修复稿破坏事件履约契约（plan_refs_line_not_in_shot@1 镜头 1 声明承载 D1，但该镜旁白里找不到这句台词（逐字/跨镜连续分解均不成立）：甲板上有风，帆布猎猎作响。…）→ **不采纳**，保留基线；基线自身的 blocking 仍在（见 blocking 清单）
+[2026-10-11 02:20:13] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision c93d029cb58a（修后 570b06285acf）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 40 处 (top: mandatory_biz_fields=10, prompt_sanitize=4, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [AUDIT] 每轮审计台账写入失败（不影响结论）: [Errno 2] No such file or directory: 'C:\\Users\\ee54\\AppData\\Local\\Temp\\pytest-of-ee54\\pytest-4784\\test_e02_a_missing_narration_v0\\a\\step01_audit_rounds.json.tmp'
+[2026-10-11 02:20:13] [COMMIT] OK 三份产物已提交（revision=61378b928860，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：plan_refs_narration_missing@3 承载旁白 N1 的节拍由镜头 3 起声明，但从该镜起**连续**的镜头旁白里拼不出这条旁白（判据与台词同源：单镜整句包含
+[2026-10-11 02:20:13] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision 2308224ead36（修后 430adba129b8）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：plan_refs_line_not_in_shot@1 镜头 1 声明承载 D1，但该镜没有旁白（台词不在本镜）
+[2026-10-11 02:20:13] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision 369eba7907bf（修后 c80c343de48d）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [COMMIT] OK 三份产物已提交（revision=570b06285acf，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：plan_refs_stale_plan@- plan_refs 是对**另一版计划**（deadbeef1234）作的声明，当前计划是 115769261586——
+[2026-10-11 02:20:13] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision a71601180fd7（修后 3b0ffc25f690）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 38 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [COMMIT] x 事件履约契约破损（B→D→镜头关系，拆分/修复后同源复核）：plan_refs_missing@- 整稿没有任何镜头声明 plan_refs（新生成稿必须逐镜声明事件履约契约）
+[2026-10-11 02:20:13] [COMMIT] 欠账台账同时登记进入提交点的原稿 revision c93d029cb58a（修后 9a0cc7afcded）——否则该历史稿会因漏记而在后续选稿中再次入选
+[2026-10-11 02:20:13] [CONSTRAINT] 修复 36 处 (top: mandatory_biz_fields=10, camera_movement_fill=4, kf_time_window_alignment=3, lf_desc_length=3, frame_text_state_cleanup=3)
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 2 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 2 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 1 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 3 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 3 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:13] [CONSTRAINT-WARN] 合计 12 条告警 / 7 类约束
+[2026-10-11 02:20:13] [CONSTRAINT] HARD 未解决 10 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:13] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:13] [COMMIT] OK 三份产物已提交（revision=2a59e9a1a8bf，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:14] [CONSTRAINT] 修复 104 处 (top: mandatory_biz_fields=28, camera_movement_fill=10, kf_time_window_alignment=9, lf_desc_length=9, frame_text_state_cleanup=9)
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 8 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 8 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 7 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 9 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/9 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 9 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] 合计 31 条告警 / 8 类约束
+[2026-10-11 02:20:14] [CONSTRAINT] HARD 未解决 33 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:14] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:14] [COMMIT] OK 三份产物已提交（revision=3dc4323c2fc9，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:14] [CONSTRAINT] 修复 82 处 (top: mandatory_biz_fields=22, camera_movement_fill=8, kf_time_window_alignment=7, lf_desc_length=7, frame_text_state_cleanup=7)
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 6 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 6 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 5 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 7 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/7 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 7 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] 合计 25 条告警 / 8 类约束
+[2026-10-11 02:20:14] [CONSTRAINT] HARD 未解决 25 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:14] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:14] [COMMIT] OK 三份产物已提交（revision=eacfb3aa21b7，审计修复轮 0，复用审计 否）
+[2026-10-11 02:20:14] [INFO] 道具候选短提示已关闭（默认；STEP01_PROP_ANCHOR_BLOCK=1 可开启），本轮不注入
+[2026-10-11 02:20:14] [INFO] 章节大纲已预提取（并发），注入分镜 prompt
+[2026-10-11 02:20:14] [INFO] 正在调用 LLM 生成分镜脚本...
+[2026-10-11 02:20:14] [CONSTRAINT] 修复 83 处 (top: mandatory_biz_fields=22, camera_movement_fill=8, kf_time_window_alignment=7, lf_desc_length=7, frame_text_state_cleanup=7)
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 6 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 6 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 5 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 7 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/7 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 7 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] 合计 25 条告警 / 8 类约束
+[2026-10-11 02:20:14] [CONSTRAINT] HARD 未解决 25 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:14] [CONSTRAINT] 修复 27 处 (top: kf_time_window_alignment=7, kf_pose_anchor=7, cross_shot_continuity=6, framing_diversity_v2=2, opening_empty_shot_insert=1)
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_time_window_alignment@shot1（另 6 处）: motion 时段缺关键帧，保留原样交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] kf_pose_anchor@shot1（另 6 处）: 缺少当前帧姿态/位置证据，保留原文交由 audit
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] cross_shot_continuity@shot2（另 5 处）: 相邻镜 LF 重复度 97%（内容冗余）
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] opening_empty_shot_insert@shot1: 开篇前三镜缺少建立镜头；保留原镜头/时长，禁止自动插入固定“暖金阳光”空镜模板。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] runtime_extend@script: 正片总时长不足红果下限，保留原值交由 audit/regen
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] camera_movement_fill@shot1: 连续 7 镜 camera_movement='固定机位'，镜头语言单调
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] dialogue_density@script: 对白镜 0/7 = 0%，低于 30%；保留原文，禁止按邻近段落自动注入台词。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] shot_count_bounds@script: 总镜头数 7 < 软下限 10（剧情密度可能不足）。
+[2026-10-11 02:20:14] [CONSTRAINT-WARN] 合计 25 条告警 / 8 类约束
+[2026-10-11 02:20:14] [CONSTRAINT] HARD 未解决 22 处 (建议 regen): kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot1, kf_event_order@shot2, kf_event_order@shot2
+[2026-10-11 02:20:14] [AUDIT] 本次审计可用 300s（无总预算约束（未 start 或预算 0），用上限 300s）｜总预算剩余 未知 秒｜截止时刻 不限
+[2026-10-11 02:20:14] [COMMIT] OK 三份产物已提交（revision=ec8c4d5653d0，审计修复轮 0，复用审计 否）

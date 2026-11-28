@@ -93,7 +93,6 @@ tools/ab_experiment_design.md
 tools/ab_results/
 tools/dump/*__ab*.json
 tools/dump/backup_20260906_pre_quality_fix/
-tests/tools/test_ab_tools.py
 
 # 09-13 跑批产物（A/B bench + dump 备份）
 tools/bench_ab_results*.json
@@ -119,204 +118,71 @@ tools/motion_runtime/node_modules/
 tools/motion_runtime/.browsers/
 
 # 09-13 用户决策：tests/ 测试套件不入库（保留本地，pytest 照常）
-tests/
 # 09-25 用户决策（补正交付边界）：**基线回归与其夹具随仓库交付**，否则 "2290 passed"
 # 只证明本机基线，别的检出环境跑不了。只放行这一个回归文件与 fixtures/ 目录，
 # tests/ 其余仍不入库。
-!tests/
-tests/*
 # 2026-10 复核：`tests/conftest.py` 是**测试可运行性的基础设施**（日志隔离、
 # 外部传输护栏、会话级磁盘治理都在里面），必须入库才能在新机器复现；
 # 此前被 `tests/*` 一并挡掉。仅放行这一个文件，其余仍不入库。
-!tests/conftest.py
-!tests/verification_helpers.py
 # 2026-11-14 内容无关性棘轮：作品词清单、基线快照与门禁用例。
 # 这是 AGENTS.md「内容无关性与夹具」在测试语料侧的落点，干净检出必须能跑。
-!tests/_content_binding.py
-!tests/test_content_binding_ratchet.py
-!tests/fixtures/
-tests/fixtures/*
-!tests/fixtures/content_binding_baseline.json
-!tests/step01_script_gen/
-tests/step01_script_gen/*
-!tests/step01_script_gen/fixtures/
-!tests/step01_script_gen/fixtures/**
 # 2026-10 复核：以下放行**必须写在 `tests/step01_script_gen/*` 之后**——git 的忽略
 # 规则「后写者优先」，写在它之前会被它重新忽略（本轮真踩过：规则加对了、位置在上面
 # 那一行之前，`git check-ignore` 仍判 IGNORED）。
 # 这些是「干净 clone 可运行」的必要件：conftest 挂 autouse 的旧协议回放夹具，
 # 提交/回滚/容量用例是契约判据；缺了会让本地与干净检出行为不一致
 # （典型：test_plan_feasibility 本地 70 passed / 干净检出 3 failed）。
-!tests/step01_script_gen/conftest.py
-!tests/step01_script_gen/test_repair_targets.py
-!tests/step01_script_gen/test_linked_group_capacity.py
 # 2026-11-12 M02/M03：修订入口与已确认问题台账的契约用例（干净检出可运行）
-!tests/step01_script_gen/test_m02_revision_entry.py
-!tests/step01_script_gen/test_issue_ledger.py
 # 2026-11-12 复核第三轮：后处理不得撤销已授权修复（景别最长匹配 + 锚点幂等）
-!tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
 # 2026-11-13 S02：后处理不得编造无来源内容
-!tests/step01_script_gen/constraints/test_s02_content_independence.py
 # 2026-11-26 S49：迁移自 A/B 工具的 provider-neutral 硬约束测试
-!tests/step01_script_gen/constraints/test_provider_neutral_hardfix.py
-!tests/step01_script_gen/test_repair_target_rollback.py
-!tests/step01_script_gen/test_step01_commit.py
-!tests/step01_script_gen/test_plan_phase_e_commit_chain.py
-!tests/step01_script_gen/test_commit_locked_audit_downgrade.py
-!tests/step01_script_gen/test_m2_layout_autofill.py
-!tests/shared/test_m3_frame_refs_and_defaults.py
-!tests/step01_script_gen/test_audit_authorization_guard.py
 # 2026-11-06：四类跨字段检测（含新增 weapon_hand_conflict）的回归用例——
 # 是「同一武器左右手矛盾」唯一的确定性判据，必须随代码入库。
-!tests/step01_script_gen/test_cross_field_checks.py
 # 2026-11-15 P02/P03：计划顺序契约（判据+投影+生产接线）与固定输入修复入口的契约用例
-!tests/step01_script_gen/test_plan_voice_order.py
-!tests/step01_script_gen/test_replay_fixed_input.py
 # 2026-11-17 M-A2：resume.run() pending_candidate dry-run 端到端（零调用）
-!tests/step01_script_gen/test_resume_run_pending.py
-!tests/step02b_video_gen/
-tests/step02b_video_gen/*
-!tests/step02b_video_gen/test_frame_contract.py
-!tests/step02b_video_gen/test_plan_prepared_status.py
 # 2026-11-13 F2：r2v 拼表隔离（plan-only / 候选写路径）
-!tests/step02b_video_gen/test_plan_only_isolation.py
-!tests/step02b_video_gen/test_candidate_isolation_r2v.py
 # 2026-11-13 F3：执行要求问题不得被缓存命中绕过
-!tests/step02b_video_gen/test_cache_requirements_gate.py
 # 2026-11-17 S02-C1：缓存消费者与提交同源 + plan/submit key 一致
-!tests/step02b_video_gen/test_cache_consumer_prepared.py
-!tests/step02b_video_gen/test_plan_submit_key_same.py
 # 2026-11-13 F5：生产入口 trace 回归（离线，无模型/媒体质量声明）
-!tests/step02b_video_gen/test_production_trace.py
-!tests/step01_script_gen/test_p0_fault_injection.py
-!tests/step01_script_gen/test_plan_revision_v2_wiring.py
 # 2026-11-15 §10.6：背景档两档判据的结构/契约/额度判据（随代码入库）
-!tests/step01_script_gen/test_background_fact_tier.py
 # 2026-11-15 §12：修复调用结果分类台账 + 配对表长度类反馈重试判据（真实实测驱动）
-!tests/step01_script_gen/test_repair_call_outcome.py
 # 2026-11-15 S01–S04：补帧后的帧身份对齐（匿名自足夹具，干净检出可运行）
-!tests/step01_script_gen/test_kf_frame_identity.py
 # 2026-11-15 补正 S03：真实 _repair_shot_warnings 事务入口验收（零模型）
-!tests/step01_script_gen/test_kf_frame_identity_transaction.py
 # 2026-11-15 M01：授权路径四阶段归因（匿名自足夹具，干净检出可运行）
-!tests/step01_script_gen/test_repair_attribution.py
 # 2026-11-15 M03：有界结构化反馈（匿名自足夹具，零模型 / 零网络）
-!tests/step01_script_gen/test_repair_feedback.py
 # 2026-11-15 M04：预算准入与冻结稿续验（模拟时钟，零模型 / 零网络）
-!tests/step01_script_gen/test_repair_budget.py
 # 2026-10-30（R01）：Step01 审计收口的最小回归集——仅这 4 个文件 + SSE 桩 + 夹具。
 # 其余 tests/ 仍不入库；放行必须写在 tests/* 与 tests/step01_script_gen/* 之后。
-!tests/step01_script_gen/test_audit_entry_subprocess.py
-!tests/step01_script_gen/test_audit_launch_script.py
-!tests/step01_script_gen/test_audit_agent_plan_sse.py
-!tests/step01_script_gen/test_audit_unlimited_scope.py
 # 2026-10-30（R06/R03/F4/F5/F6）：本包新增的定向回归——逐条放行，不放开整个目录。
-!tests/step01_script_gen/test_narration_voice_freeze.py
-!tests/step01_script_gen/test_audit_write_failures.py
-!tests/step01_script_gen/test_audit_consumption_gate.py
-!tests/step01_script_gen/test_blood_state_markers.py
-!tests/_text_gen/
-tests/_text_gen/*
-!tests/_text_gen/_sse_stub_sitecustomize.py
-!tests/_text_gen/test_audit_timeout_lifecycle.py
 # 2026-10-23：单事实范围与四维分账的离线回归（与 09-25「基线与契约判别测试随仓库交付」同一标准）
-!tests/step01_script_gen/test_scoped_content_repair.py
 # 2026-10-25：预算带配置与身份核验的回归用例（rules_index v6.74 引用该文件）
-!tests/step01_script_gen/test_duration_band.py
-!tests/step01_script_gen/constraints/
-tests/step01_script_gen/constraints/*
-!tests/step01_script_gen/constraints/test_facing_to_gaze.py
-!tests/step01_script_gen/constraints/test_ff_lf_temporal.py
 # 2026-11-12 复核第三轮：后处理不得撤销已授权修复（景别最长匹配 + 锚点幂等）
-!tests/step01_script_gen/constraints/test_m02_postprocess_no_revert.py
 # 2026-11-13 S02：后处理不得编造无来源内容
-!tests/step01_script_gen/constraints/test_s02_content_independence.py
 # 2026-11-26 S49：迁移自 A/B 工具的 provider-neutral 硬约束测试
-!tests/step01_script_gen/constraints/test_provider_neutral_hardfix.py
-!tests/enhancements/
-tests/enhancements/*
-!tests/enhancements/test_subtitle_contract.py
-!tests/enhancements/video_stub_provider.py
-!tests/test_disk_governance.py
-!tests/test_py311_source_grammar.py
-!tests/step01_script_gen/test_plan_to_commit_baseline.py
 # 09-25 收口：第二步（计划边界）的判别测试随仓库交付，理由同上
-!tests/step01_script_gen/test_plan_feasibility.py
 # 2026-10-24：P0/P1a 治理契约回归随仓库交付（同一「干净检出可运行」标准）
-!tests/step01_script_gen/test_voice_reclass.py
 # 2026-10-25：改编层离线贯通包（匿名样本、零模型）随仓库交付
-!tests/step01_script_gen/test_voice_adaptation.py
-!tests/step01_script_gen/test_plan_content_slots.py
-!tests/step01_script_gen/test_narrow.py
-!tests/step01_script_gen/test_create_voice.py
-!tests/step01_script_gen/test_verify_frozen_candidate.py
 # 2026-10-25：核验提示把 obligation_id 与 text 分列（P4 提示澄清回归）
-!tests/step01_script_gen/test_verify_prompt_fields.py
-!tests/step01_script_gen/test_p3_split_wiring.py
 # 2026-10-24：P3-PreE 完整计划真实验收入口 + P3-E 运行器计费端点守卫（随仓库交付）
-!tests/step01_script_gen/test_p3_pre_e.py
-!tests/step01_script_gen/test_p0_optimizations_and_scoped_patch.py
-!tests/step01_script_gen/test_repair_answer_example.py
-!tests/step01_script_gen/test_real_run_budget.py
 # 2026-10-24：P3 拆分进入真实修订入口的离线矩阵 + 匿名样本夹具（随仓库交付）
-!tests/step01_script_gen/test_p3_split_entry.py
-!tests/step01_script_gen/p3_entry_fixtures.py
 # 2026-11-14 U6 R5：脚本级确定性预检（漏在镜角色 / 道具链 / 乐器跨字段 / 地点漂移 /
 # 关键帧 stage 与进度 / 跨字段重复注入）。按项目夹具制交付：样本包在
 # `fixtures/script_preflight/**`（已由上面的 fixtures 白名单放行），这里放行构造器与
 # 消费测试——否则干净检出只能跑到内联那版，夹具本身不被执行。
-!tests/step01_script_gen/script_preflight_builder.py
-!tests/step01_script_gen/test_script_preflight.py
 # 2026-11-14 U6 R5：修复闭环（缺陷→授权修复→复查）的夹具与契约用例
-!tests/step01_script_gen/test_repair_loop_contract.py
 # 2026-11-14 U6 R6：质量报告必须逐字节可复现（集合迭代顺序曾让 quality_sha256 漂移）
-!tests/step01_script_gen/test_quality_report_determinism.py
 # 2026-11-14 复核 P1：G1/G7 门禁与两处被修正的夹具**必须随仓库交付**。
 # 只写报告不放行文件，等于干净检出无法复现「3 passed / 两份夹具已修正」——
 # 工作树干净并不能证明测试已交付。
-!tests/step01_script_gen/test_g1_g7_gates.py
-!tests/step01_script_gen/test_final_audit_reuse_inloop.py
-!tests/step01_script_gen/test_repair_shot_replacements.py
 # 187 条回归还含 source_revision 与 presentation_contract 两个受影响的既有套件；
 # 不放行它们，干净检出只能复现部分读数。source_revision 的夹具来自 legacy_semantic。
-!tests/step01_script_gen/test_source_revision.py
-!tests/step01_script_gen/test_legacy_semantic.py
 # P0 拆分账本测试在 tests/shared/：先放行父目录，再精确放行该文件；
 # 其余 tests/shared/ 仍保持本地（不入库）。
-!tests/shared/
-tests/shared/*
-!tests/shared/test_run_context.py
-!tests/shared/test_audible_speech.py
-!tests/shared/test_revision_questions.py
-!tests/shared/test_fact_split.py
-!tests/shared/test_presentation_contract.py
 # 2026-10-30（R05/F5）：授权链身份关联的判别测试。
-!tests/shared/test_audit_authorization_chain.py
 # 2026-11-15：delta.v1 R0 全 kind 通用化的契约回归入库（对应 shared/delta_reconcile.py 修改）。
-!tests/shared/test_delta_reconcile_r0.py
 # 2026-11-26 S46/S52：采纳收据生效配置继承回归（含 60-90 历史带与 env 还原）
-!tests/shared/test_adoption_config_inheritance.py
 # 2026-11-27 配置解耦：画幅/分辨率/时长/帧率/参考上限单源回归
-!tests/shared/test_config_single_source.py
 # 2026-11-08：本轮修复涉及的契约回归**入库**（干净 clone 可复现同一套 0 failed）
-!tests/_text_gen/test_agent_plan_provider.py
-!tests/_text_gen/test_agent_plan_guard.py
-!tests/shared/test_frame_prompt_v652.py
-!tests/shared/test_frame_spec_and_prompt_facts.py
-!tests/shared/test_frame_prompt_contract_s03.py
-!tests/step01_script_gen/test_p4_stability_stop_guard.py
-!tests/step02a_frame_gen/test_frame_replay_wp3.py
-!tests/step02b_video_gen/test_stub_clips_wp4.py
-!tests/step02b_video_gen/test_media_plan_wp4.py
-!tests/step02b_video_gen/test_step02b_report_wp5.py
-!tests/step02b_video_gen/test_prompt_contract_wp4.py
-!tests/integration/
-tests/integration/*
-!tests/integration/test_chain5_artifact_protection.py
-!tests/integration/chain_support.py
-!tests/enhancements/
-tests/enhancements/*
-!tests/enhancements/test_video_reroll.py
 /docs/
 # 09-25 用户决定：**只精确放行**「计划边界」这条线的四份留档，不放开整个 docs/。
 # git 不会进入被排除的目录，所以要逐级放行父目录（与上面 tests/ 同构）。
@@ -354,194 +220,61 @@ tests/enhancements/*
 /*.wav
 # 2026-10-31：本轮新增的契约用例精确放行（只让工作区文件可见，不提交）。
 # tests/* 把整个目录排除了，重新包含目录后必须再排除其内容，否则会顺带放出无关文件。
-!tests/tts/
-tests/tts/*
-!tests/tts/__init__.py
-!tests/tts/test_voice_registry_contract.py
-!tests/tts/test_voice_uniqueness.py
-!tests/shared/test_video_media_plan.py
 # 2026-11-02：素材策略（参考图 vs 首尾帧）契约用例入库。
-!tests/shared/test_media_policy.py
-!tests/shared/test_shot_motion_checks.py
-!tests/shared/test_video_prompt_system.py
 # 2026-11-14：prompt 矛盾自检的夹具制回归（原内联版写死作品人名，已按 pack 重建）
-!tests/shared/test_prompt_contradiction_contract.py
 # 2026-11-14 U6 R6：矛盾自检的**词表层**（默认值内容无关 + 项目级覆盖 + 缓存/校验）
-!tests/shared/test_prompt_contradiction_lexicon.py
-!tests/shared/test_frame_prompt_camera.py
 # 2026-11-01：本轮离线修复的契约用例**入库**（与上面"只可见不提交"不同）。
 # 仍需逐级放行父目录，再排除目录内容，最后精确放行文件。
-!tests/tools/
-tests/tools/*
-!tests/tools/test_bench_video_prompt_patterns.py
 # 2026-11-12 M01：调用索引与样本漂移核对的锁定用例
-!tests/tools/test_step01_call_index.py
-!tests/tools/test_vision_check.py
 # 2026-11-02：Studio 工作台（tools/studio_server.py）离线用例入库。
-!tests/tools/test_cache_bill.py
-!tests/tools/test_studio_server.py
 # 2026-11-14 U6 R6：`tools/` 下四个门禁/诊断脚本此前**零回归**（诊断缺片归因、
 # 工作区体积体检、审计响应重解析、P4 准入核对）。这四个都只读或只写临时目录，
 # 用例可完全离线跑；夹具数据随仓库交付，否则干净检出跑不到它们。
-!tests/tools/test_diagnose_video_gaps.py
-!tests/tools/test_workspace_size_audit.py
-!tests/tools/test_reparse_final_audit.py
-!tests/tools/test_p4_admission_check.py
-!tests/tools/p4_admission_builder.py
-!tests/tools/fixtures/
-tests/tools/fixtures/*
-!tests/tools/fixtures/p4_admission/
-tests/tools/fixtures/p4_admission/*
-!tests/tools/fixtures/p4_admission/packs.json
 # 2026-11-14 采纳凭据：`_create_adoption_receipt` 改为"先验后写"（失败路径不再
 # 写 .tmp 再 unlink），凭据结构校验拆出 `production_context.validate_receipt()`。
 # 这两条契约是本轮改出来的生产入口，用例必须随仓库走，否则干净检出验不到。
-!tests/tools/test_production_context.py
 # 2026-11-14 U6-FIN WP1c：构建/冻结脚本的手写 JSON 落盘棘轮——防"多写一个尾部
 # 换行导致同一份内容两个 SHA-256"再次复发，用例必须随仓库走。
-!tests/tools/test_json_artifact_serialization.py
 # 2026-11-26 S49：迁移自 A/B 工具的运镜指标与脚本基础指标测试
-!tests/tools/test_bench_reasoning.py
-!tests/step02a_frame_gen/
-tests/step02a_frame_gen/*
-!tests/step02a_frame_gen/test_step02a_offline_fixups.py
 # 2026-11-12 复核 P2：画面计划必须成为生成参数来源（入口桩断言）
-!tests/step02a_frame_gen/test_m05_plan_consumption.py
-!tests/step02a_frame_gen/test_subset_gate.py
-!tests/step02a_frame_gen/test_image_prompt_quality.py
-!tests/step02a_frame_gen/test_keyframe_acceptance.py
-!tests/step02a_frame_gen/test_image_retry_cap.py
 # 2026-11-14 Step D：受保护帧防删 + fit_refs(dry_run) 零写入（干净检出可跑）
-!tests/step02a_frame_gen/test_frame_protection.py
-!tests/step02a_frame_gen/test_subset_working_dir.py
 # 2026-11-08：WP3 收口。9372cb9 只写了本条 allowlist 却没把用例入库，
 # 后写的 `tests/step02a_frame_gen/*` 又把它盖掉——这次连文件一起提交。
-!tests/step02a_frame_gen/test_frame_replay_wp3.py
-!tests/step02a_frame_gen/test_wp3_58c1b6bd_doodle_and_qc.py
 # 2026-11-08 裁决：全量跑实际执行的两份用例一并入库，消除「本机多跑、干净检出少跑」。
-!tests/step02a_frame_gen/test_dump_safety.py
-!tests/step02a_frame_gen/test_gen_all_frames_parallel.py
-!tests/step02a_frame_gen/test_frame_refs_and_provider_s04.py
-!tests/step02a_frame_gen/test_qc_admission_s05.py
-!tests/step02a_frame_gen/test_frame_contract_matrix_s06.py
-!tests/step02a_frame_gen/test_stage1_closure.py
-!tests/step02a_frame_gen/test_phase2a_governance.py
-!tests/step02a_frame_gen/test_phase2a_fix_f1_f7.py
-!tests/step02a_frame_gen/test_phase2b_qc_budget_and_refs.py
-!tests/step04_merge/
-tests/step04_merge/*
-!tests/step04_merge/test_step04_shots_subset.py
-!tests/step04_merge/test_step04_shots_subset_e2e.py
-!tests/step04_merge/test_final_render_wp5.py
-!tests/step04_merge/test_merge_chain_wp5.py
-!tests/step03_tts_audio/
-tests/step03_tts_audio/*
-!tests/step03_tts_audio/test_narration_tts.py
-!tests/step03_tts_audio/test_tts_units_and_cli.py
-!tests/step03_tts_audio/_tts_stub.py
-!tests/step03_tts_audio/test_subset_narration.py
-!tests/step02_video_gen/
-tests/step02_video_gen/*
-!tests/step02_video_gen/test_video_prepared_providers.py
-!tests/step02_video_gen/test_prepared_frozen.py
-!tests/step02_video_gen/test_video_quota_breaker.py
 # 2026-11-12 M06：参考用途与实际下发方式一致（首帧不冒充契约）
-!tests/step02_video_gen/test_m06_reference_purpose.py
 # 2026-11-13 F2：r2v 拼表只落 attempt/临时目录，缓存哈希纯读
-!tests/step02_video_gen/test_r2v_sheet_isolation.py
 # 2026-11-17 S02：缓存消费同源、旧快照过渡、有声 payload 对照
-!tests/step02_video_gen/test_cache_legacy_snapshot_transition.py
-!tests/step02_video_gen/test_voiced_payload_compare.py
 # 2026-11-18 O1：按 media_policy 过滤参考帧/缓存哈希
-!tests/step02_video_gen/test_policy_frame_identity.py
 # 2026-11-18 O2：step02a --verify-only 与逐镜策略门禁
-!tests/step02a_frame_gen/test_verify_only.py
-!tests/shared/test_cache_and_card_handoff.py
-!tests/shared/test_plan_revision_delta_end_to_end.py
-!tests/shared/test_content_verification.py
-!tests/shared/test_presentation_transaction.py
-!tests/shared/test_relation_admission_matrix.py
-!tests/shared/test_plan_revision_delta_equivalence.py
 
 
-!tests/shared/test_vimax_bridge_v6321.py
-!tests/shared/test_scene_identity_match.py
-!tests/shared/test_post_budget.py
 # 2026-11-14 Step B：opencode 视觉通道 429/5xx/SSL 受控退避（离线单测，干净检出可跑）
-!tests/shared/test_image_qc_retry.py
-!tests/shared/test_image_qc_kf_prompt.py
-!tests/shared/test_hook_shot0_v661.py
 
 # 隔离重跑/审计证据（10+ MB 二进制与日志，只留本地盘）
 output_step01_*/
 # 2026-11-07：S02/S03/S04/S06 回归（wire 编码、技能选段、compact 示例、发布事务）
-!tests/_text_gen/test_wire_encoding.py
-!tests/step01_script_gen/test_repair_skill_selection.py
-!tests/step01_script_gen/test_repair_compact_example.py
-!tests/shared/test_publish_txn.py
-!tests/shared/test_publish_txn_concurrency.py
 
 # 2026-11-09：M0.3 / M2.2 / M4 / M8 离线收口回归（随仓库交付，干净检出可复现）
-!tests/shared/test_post_budget_outcomes.py
-!tests/step01_script_gen/test_m22_cross_field_continuity.py
-!tests/step02b_video_gen/test_frame_precheck_ledger.py
-!tests/step03_tts_audio/test_track_cleanup.py
-!tests/step04_merge/test_dry_run.py
-!tests/shared/test_i2v_motion_prompt.py
-!tests/shared/test_media_precheck.py
-!tests/shared/test_voice_fit.py
-!tests/shared/test_transition_picker.py
 
 # 2026-11-09（U2–U4）：本轮契约回归入库（干净检出可复现）
-!tests/step01_script_gen/test_u2_camera_and_state_semantics.py
-!tests/shared/test_u3_reference_identity.py
-!tests/shared/test_u4_qc_lifecycle_and_events.py
-!tests/step01_script_gen/test_plan_evidence_contiguity.py
 # 2026-11-10（R1）：节拍载体分隔符格式回归（干净检出可复现）
-!tests/step01_script_gen/test_beat_carrier_format.py
 # 2026-11-10（R2）：事实来源分级合同 / legacy 投影往返
-!tests/shared/test_fact_sources.py
-!tests/step01_script_gen/test_restricted_split.py
-!tests/shared/test_delta_deleted_uid_reference.py
-!tests/step01_script_gen/test_voice_carrier_closure.py
-!tests/step01_script_gen/test_revision_route.py
-!tests/step01_script_gen/test_fact_atomicity.py
-!tests/step01_script_gen/test_plan_preflight.py
-!tests/step01_script_gen/test_core_update_guard.py
 # 2026-11-10（R5）：并发/FFmpeg 超时回归（干净检出可复现）
-!tests/step01_script_gen/test_concurrent_extract_timeout.py
-!tests/step04_merge/test_ffmpeg_timeout.py
-!tests/step01_script_gen/test_scene_compliance_narration_coverage.py
 # 2026-11-11（Step01 S01–S05）：审计上下文补齐、影子裁决、内容身份与关联检查的
 # 离线回归——沿用逐条放行，不放开整个目录。
-!tests/step01_script_gen/test_audit_narrative_context.py
-!tests/step01_script_gen/test_audit_adjudication.py
-!tests/step01_script_gen/test_audit_content_identity.py
-!tests/step01_script_gen/test_repair_related_fields.py
 # 2026-11-11：S01 内容与裁决基线（交付物）。
 !docs/step01-s01-audit-baseline-2026-11-11.md
 # 2026-11-12：S06 有限对照报告（交付物）。
 !docs/step01-s06-contract-ab-2026-11-12.md
 # 2026-11-12（Step01 S07）：重复文本 / 景别矛盾 / 道具与状态链的确定性检查回归。
-!tests/step01_script_gen/test_script_findings.py
 
 # [contract/step01-layered-execution] S01/S02：执行合同离线单测与三个受控样本族。
 # 独立块便于与 master 合并；只放行本包新增文件，不放开 tests/shared 或 docs 其余内容。
-!tests/shared/fixtures/
-!tests/shared/fixtures/**
-!tests/shared/test_execution_contract.py
 !docs/step01-layered-execution/
 !docs/step01-layered-execution/**
 
 # [contract/step01-layered-execution] S02-S08：自动检查器/执行计划/视频要求/声音准备/时间轴验收/影子比较测试。
 # 独立块，便于后续与 master 合并；只放行本包新增测试文件与 tests 包标记。
-!tests/__init__.py
-!tests/shared/test_execution_semantics.py
-!tests/step02a_frame_gen/test_execution_plan.py
-!tests/step02_video_gen/test_execution_requirements.py
-!tests/step03_tts_audio/test_voice_preparation.py
-!tests/step04_merge/test_timeline_acceptance_s06.py
-!tests/integration/test_s07_shadow_and_candidate_revalidation.py
 
 # [baseline/2026-11-12-pre-layered] 合并前上一版结果的版本化受控快照（只读留档，不参与运行）。
 # 目录内嵌有 U6 各 run 的 output/ 副本，需要显式放行整棵子树，否则干净 checkout 会缺证据。
@@ -552,8 +285,6 @@ output_step01_*/
 # 2026-11-12：三族审计夹具的「内容无关机制」——构造器与跨内容验收必须随仓库交付，
 # 否则干净检出只有三份冻结 JSON，无法验证「相同契约换一部小说后是否仍成立」。
 # 样本包在 fixtures/** 下已由上面的白名单放行；此处按项目约定逐条放行两个 .py。
-!tests/step01_script_gen/narrative_family_builder.py
-!tests/step01_script_gen/test_narrative_family_genericity.py
 
 # 2026-11-13：dsh 下发交接区。此前任务书/结果/会话日志都落在项目外
 # （~/.workbuddy/dsh_bridge/runs/ 与 ~/.dsh/）或被忽略的 .pytest_tmp/，
@@ -576,112 +307,47 @@ docs/memory-archive/workbuddy-workspace/
 docs/memory-archive/claude-project-memory/
 
 # 2026-11-13 S05：后处理内容到达最终提示/生成器桩（跨内容消费链）
-!tests/integration/test_s05_content_chain.py
 
 # 2026-11-14 S03：因果链单位身份的生产校验与修订重映射
-!tests/shared/test_causal_identity.py
 
 # 本地/运行时文件，不入库（参考 AGENTS.md 纪律与 .pytest_tmp 同性质）
 start_studio.bat
 .dsh/
-!tests/step01_script_gen/test_plan_phase_d_wiring.py
-!tests/step01_script_gen/test_plan_phase_g_rejection_feedback.py
-!tests/step01_script_gen/test_plan_phase_h_call_evidence.py
-!tests/step01_script_gen/test_plan_phase_j_capability.py
-!tests/step01_script_gen/test_plan_phase_k_baseline_and_capability.py
-!tests/step01_script_gen/test_replay_transactions.py
-!tests/step01_script_gen/test_plan_voice_order_cache.py
-!tests/step01_script_gen/test_hook_budget.py
-!tests/step01_script_gen/test_send_counter.py
-!tests/step01_script_gen/test_resume_budget_init.py
-!tests/step01_script_gen/test_reuse_miss_reason.py
 # 2026-11-18 M4：送审前预审门/注入幂等
-!tests/step01_script_gen/test_commit_gate_pre_audit.py
-!tests/step01_script_gen/test_content_duration_spoken_text.py
-!tests/step01_script_gen/test_voice_spans.py
-!tests/step01_script_gen/test_repair_round_persist.py
-!tests/shared/test_outbound_guard.py
-!tests/shared/test_step01_checkpoint.py
-!tests/step01_script_gen/test_paired_budget_precheck.py
 # 2026-11-18 T1/T3：PAUSED 暂停态、resume 从 checkpoint 续跑、修复轮指针自动消费
-!tests/shared/test_step01_checkpoint_paused.py
-!tests/step01_script_gen/test_resume_from_checkpoint.py
-!tests/step01_script_gen/test_resume_auto_pointer.py
 !docs/studio-ui-x5-20261117.md
-!tests/step01_script_gen/test_resume_pending.py
-!tests/shared/test_audit_prompt_archive.py
 !docs/aivideo_medium_long_term_plan.md
-!tests/step02_video_gen/test_generation_requirements_audio.py
-!tests/step02_video_gen/test_request_key_audio_reason.py
 
 # 2026-11-19 第 1 包（离线卫生整改）：新增用例与交付记录逐条放行。
-!tests/shared/test_degrade.py
-!tests/shared/test_vimax_adapters_timeout.py
-!tests/shared/test_maybe_qc_frame_wiring.py
-!tests/tools/test_ruff_gate.py
-!tests/tools/test_print_effective_config.py
-!tests/step01_script_gen/test_repair_locked_only_prefilter.py
-!tests/step01_script_gen/test_pkg1_validation_f821.py
-!tests/step01_script_gen/test_pkg1_f821_misc.py
-!tests/step02_video_gen/test_pkg1_r2v_fallback.py
 !docs/pkg1-offline-hygiene-20261119.md
 
 # 2026-11-19 S00–S10（step01 main.py 拆分）：门面契约与静态守卫用例
-!tests/step01_script_gen/test_main_facade_contract.py
-!tests/step01_script_gen/test_orchestrator_guards.py
 !docs/step01-main-split-20261119.md
 
 # 2026-11-19 复核 P2-4：分组跑测工具的旧报告隔离用例
-!tests/tools/test_run_tests_grouped.py
 !docs/step01-planning-failure-corpus-2026-11-21.md
 
 # 2026-11-21 S02：Step01 计划修订离线回放工具（tools/replay_plan_revision.py）的单测入库
-!tests/tools/test_replay_plan_revision.py
-!tests/step01_script_gen/test_revision_request_hygiene.py
-!tests/step01_script_gen/test_verifier_hint_downgrade.py
-!tests/step01_script_gen/test_media_cleanup_after_commit.py
-!tests/step01_script_gen/test_first_version_registration_projection.py
-!tests/step01_script_gen/test_verify_stability_advisory.py
 
 # 2026-11-27 下游安全出片基础包（S01–S07）：交付账本与自足测试逐条放行
 !docs/downstream-safe-delivery-2026-11-27.md
-!tests/integration/downstream_fixtures.py
-!tests/integration/test_s01_isolation_baseline.py
-!tests/step02b_video_gen/test_s02_recovery_and_metrics.py
-!tests/step02b_video_gen/test_s03_mixed_shot_policies.py
-!tests/tts/test_s04_voice_tiers.py
-!tests/step04_merge/test_s05_audio_fit.py
-!tests/integration/test_s05_duration_audit.py
-!tests/step02_video_gen/test_s06_media_probe.py
-!tests/step04_merge/test_s06_merge_quality.py
-!tests/integration/test_downstream_safe_delivery_s07.py
-!tests/step04_merge/test_s05_policy_through_main.py
-!tests/step04_merge/test_s07_publication.py
 !/docs/downstream-safe-delivery-evidence/
 !/docs/downstream-safe-delivery-evidence/**
 .archive/
 # 2026-11-28：O1 配置一致性预检与百炼画幅推导的用例
-!tests/shared/test_env_guard_consistency.py
-!tests/step02b_video_gen/test_bailian_ratio.py
 # 2026-11-28：O2 规则指纹卫生与差异复核的用例
-!tests/step01_script_gen/test_rule_fingerprint_hygiene.py
 # 2026-11-28：O3 下游运行上下文与出站预算的用例
-!tests/shared/test_downstream_run_context_and_guard.py
 # 2026-11-28：O4 统一 HTTP 韧性层的故障注入用例
-!tests/shared/test_http_resilience_fault_injection.py
 # 2026-11-28：O5 跨阶段台账的用例
-!tests/tools/test_chapter_pipeline_report.py
 # 2026-11-28：O6 声线分级扩容的离线验收用例
-!tests/step03_tts_audio/test_voice_tier_expansion_offline.py
 # 2026-11-28：O7 发音词典用例
-!tests/step03_tts_audio/test_pronunciation_lexicon.py
 # 2026-11-28：O7 字幕屏显质量门用例
-!tests/step04_merge/test_subtitle_ergonomics_gate.py
 # 2026-11-28：O8 BGM+Ducking 的离线量化用例
-!tests/step04_merge/test_bgm_ducking.py
 # 2026-11-28：O9 资产库画风隔离用例
-!tests/shared/test_asset_style_isolation.py
 # 2026-11-28：O9 跨章连续性用例
-!tests/shared/test_chapter_continuity.py
 # 2026-11-28：O13 行尾/水位卫生用例
-!tests/tools/test_workspace_hygiene.py
+
+# 2026-11-28 O10：tests/ 已全量入库（旧的 tests/* 忽略与 319 行 !tests/ 白名单已删除）。
+# 本地作品词/未审阅测试统一隔离在 tests_local/：不入库，也不被 pytest 默认收集
+# （pytest.ini 的 testpaths = tests）。
+tests_local/
