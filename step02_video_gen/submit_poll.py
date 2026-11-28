@@ -4,11 +4,8 @@ from pathlib import Path
 import os
 import asyncio
 import shutil
-import json
 import random
 from collections import defaultdict
-from dataclasses import dataclass, field
-import hashlib
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -37,7 +34,6 @@ from shared.video_prompt_system import SystemCameraError
 # V 包（计划 §V1/§V2）：prepared 提交的事实与分类单源
 from _video_gen.models import (
     SUBMIT_RATE_LIMITED,
-    SUBMIT_REJECTED,
     SUBMIT_UNKNOWN,
     ExecutionContext,
     VideoCapabilityError,
@@ -74,6 +70,33 @@ _failed_videos = defaultdict(list)
 VIDEO_QC_RESUBMIT = int(os.getenv("VIDEO_QC_RESUBMIT", "2"))
 
 
+# ---------------------------------------------------------------------------
+# S07（2026-11-28）：拆分后兼容 re-export（父模块名字/调用点保持不变）
+# ---------------------------------------------------------------------------
+from step02_video_gen.parts.frozen import (  # noqa: F401
+    FROZEN_SNAPSHOT_FILENAME, PreparedFacts, _chapter_index_safe, _get_shot_hash,
+    _is_recoverable, _prepare_error, _read_qc_retry_state, _record_qc_failure,
+    _scope_identity_safe, _script_revision, _service_supports_prepared,
+    build_frozen_for_shot, build_prepared_facts, cache_decision,
+    frozen_snapshot_path, generation_requirements, read_frozen_snapshot,
+    record_submitted_duration, write_frozen_snapshot,
+)
+from step02_video_gen.parts.qc import (  # noqa: F401
+    _VideoProductQc, _check_keyframe_hallucination, _first_frame_of, _qc_coverage,
+    _qc_video_product, _qc_video_product_result, _record_candidate_qc,
+    _report_to_dict, accept_candidate_video,
+)
+from step02_video_gen.parts.recovery import (  # noqa: F401
+    _ResumeContext, _chapter_scope_str, _emit_video_ledger, _record_content_policy_revision,
+    _request_from_frozen, _scope_matches, _work_id_str, attempt_task_id,
+    find_recoverable_attempt, resume_candidate_attempt,
+)
+from step02_video_gen.parts.failures import (  # noqa: F401
+    _PROVIDER_FAILURE_MARKERS, _classify_poll_failure, _poll_video_production,
+    repair_missing_clip, submit_failure_code,
+)
+
+
 def _probe_video_duration(video_path: Path) -> float:
     """用 ffprobe 探测视频实际时长（秒），失败返回 0."""
     try:
@@ -83,1332 +106,86 @@ def _probe_video_duration(video_path: Path) -> float:
         return 0.0
 
 
-def _qc_video_product(video_path: Path, shot_idx: int, expected_duration: float,
-                      shot: dict | None = None,
-                      characters: list | None = None) -> bool:
-    """视频产物内容质检（A6 修复 08-11）——**旧接口，方向固定**。
-
-    旧语义（§15「QC证据」）：``True`` = 现有门允许继续（**可能是探测失败软通过**）；
-    ``False`` = 明确拒收。判据只有一份：委托 :func:`_qc_video_product_result`。
-    需要区分"真测过"与"软通过"时用结构化版本。
-    """
-    return _qc_video_product_result(video_path, shot_idx, expected_duration,
-                                    shot=shot, characters=characters).status != "failed"
 
 
-@dataclass
-class _VideoProductQc:
-    """产物 QC 的结构化结果（计划 §15「QC证据」）。
-
-    ``measured_pass`` = 真的测过且通过；``soft_allowed`` = 前置探测失败但按旧合同
-    允许继续（**不得**满足 required_check 里"要求真实测量 PASS"的项）；
-    ``failed`` = 明确检出问题。
-    """
-
-    status: str                      # measured_pass | soft_allowed | failed
-    reason: str | None = None
-    checks: list = field(default_factory=list)
-    #: S06/V3：0 元探针的结构化结果与问题（供 reroll_decision 分类裁决）
-    media_probe: dict | None = None
-    media_issues: list = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {"status": self.status, "reason": self.reason,
-                "checks": list(self.checks),
-                "media_probe": self.media_probe,
-                "media_issues": list(self.media_issues)}
 
 
-def _first_frame_of(shot_idx: int) -> Path | None:
-    """该镜的输入首帧路径（有才给 probe 比首帧；没有就不测相似度）."""
-    try:
-        from shared.paths import FIRST_FRAME_FILENAME, vimax_shots_dir
-        path = vimax_shots_dir() / str(int(shot_idx)) / FIRST_FRAME_FILENAME
-        return path if path.is_file() else None
-    except Exception:
-        return None
 
 
-def _qc_video_product_result(video_path: Path, shot_idx: int, expected_duration: float,
-                             shot: dict | None = None,
-                             characters: list | None = None,
-                             log_path: Path | None = None) -> _VideoProductQc:
-    """视频产物内容质检（结构化版本；判据与旧 bool 版**同一份**）。
-
-    ``log_path`` 非空 ⇒ 日志写该路径（候选模式用它把日志留在 attempt 内，
-    不污染正式 ``step02.log``）。
-
-    S06/V3：**先跑 0 元 FFmpeg 硬探针**（黑场/静帧/残缺/首帧偏离），再按配置决定
-    是否调昂贵的视觉 QC。探针判 critical 时直接判失败（不花任何模型调用）。
-    """
-    from shared.tee_logger import get_logger
-    from shared.log_utils import resolve_log_file
-    logger = get_logger(log_path or resolve_log_file("step02.log"), console_level="INFO")
-    checks: list[dict] = []
-    try:
-        if not video_path.exists() or video_path.stat().st_size <= 20 * 1024:
-            logger.verbose(f"  [Shot {shot_idx}] 视频 QC：文件缺失或过小")
-            return _VideoProductQc("failed", reason="文件缺失或过小",
-                                   checks=[{"name": "file_size", "status": "fail"}])
-        actual = _probe_video_duration(video_path)
-        if actual <= 0:
-            logger.verbose(f"  [Shot {shot_idx}] 视频 QC：时长探测失败，跳过时长校验")
-            checks.append({"name": "duration", "status": "unmeasured"})
-        else:
-            exp = expected_duration or 0
-            if exp > 0:
-                dev_abs = abs(actual - exp)
-                dev_ratio = dev_abs / exp if exp else 1.0
-                if dev_abs > VIDEO_DURATION_DEV_SEC and dev_ratio > VIDEO_DURATION_DEV_RATIO:
-                    logger.warn(
-                        f"  [Shot {shot_idx}] 视频 QC FAIL：实际时长 {actual:.1f}s vs "
-                        f"期望 {exp:.1f}s（偏差 {dev_abs:.1f}s / {dev_ratio:.0%}）——"
-                        f"视频短截/动作没播完，判定坏视频"
-                    )
-                    return _VideoProductQc(
-                        "failed", reason=f"时长偏差 {dev_abs:.1f}s/{dev_ratio:.0%}",
-                        checks=checks + [{"name": "duration", "status": "fail",
-                                          "actual": actual, "expected": exp}])
-            logger.verbose(f"  [Shot {shot_idx}] 视频 QC：时长 {actual:.1f}s 校验通过")
-            checks.append({"name": "duration", "status": "pass",
-                           "actual": actual, "expected": expected_duration})
-
-        # ---- S06/V3：0 元 FFmpeg 硬探针（任何配置下都跑，零模型调用） ----
-        probe_result, media_issues = None, []
-        try:
-            from step02_video_gen.video_qc import probe_video_media
-            probe_result = probe_video_media(
-                video_path, expected_duration=expected_duration,
-                first_frame_path=_first_frame_of(shot_idx))
-            media_issues = list(probe_result.issues or [])
-            checks.append({"name": "media_probe", "status": probe_result.status,
-                           "measured": probe_result.measured,
-                           "issues": [i.get("code") for i in media_issues],
-                           "reason": probe_result.reason})
-            if probe_result.critical:
-                logger.warn(
-                    "  [Shot %s] 0 元媒体探针检出确定性问题: %s"
-                    % (shot_idx, [i.get("code") for i in probe_result.critical]))
-                return _VideoProductQc(
-                    "failed", reason="媒体探针: %s" % ",".join(
-                        str(i.get("code")) for i in probe_result.critical),
-                    checks=checks, media_probe=probe_result.to_dict(),
-                    media_issues=media_issues)
-        except Exception as probe_exc:  # noqa: BLE001 - 探针异常=未验证，不误杀
-            logger.verbose(f"  [Shot {shot_idx}] 0 元媒体探针异常（不阻断）: {probe_exc}")
-            checks.append({"name": "media_probe", "status": "unavailable"})
-
-        if VIDEO_QC_ENABLED:
-            try:
-                from step02_video_gen.video_qc import qc_video_file_result
-                vis = qc_video_file_result(video_path, shot_idx, shot=shot, characters=characters)
-                checks.append({"name": "visual", "status": vis.status,
-                               "measured": vis.measured, "reason": vis.reason})
-                if vis.status == "critical":
-                    logger.warn(f"  [Shot {shot_idx}] 视频 QC 视觉检测发现问题")
-                    return _VideoProductQc("failed", reason="视觉 critical", checks=checks,
-                                           media_probe=(probe_result.to_dict()
-                                                        if probe_result is not None else None),
-                                           media_issues=media_issues)
-            except Exception as e:
-                logger.verbose(f"  [Shot {shot_idx}] 视频视觉 QC 异常（不阻断）: {e}")
-                checks.append({"name": "visual", "status": "unavailable"})
-        measured = all(c.get("status") in ("pass",) for c in checks if c.get("name") == "duration")
-        return _VideoProductQc("measured_pass" if measured else "soft_allowed",
-                               reason=None if measured else "时长未测得（软通过）",
-                               checks=checks,
-                               media_probe=(probe_result.to_dict()
-                                            if probe_result is not None else None),
-                               media_issues=media_issues)
-    except Exception as e:
-        logger.verbose(f"  [Shot {shot_idx}] 视频 QC 异常（不阻断）: {e}")
-        return _VideoProductQc("soft_allowed", reason=f"QC 异常: {e}", checks=checks)
 
 
-def _check_keyframe_hallucination(frame_path: str) -> dict:
-    """读取某帧的 QC 结论，**只认绑定到当前图片结果**的 sidecar.
-
-    U4：sidecar 必须带 image.sha256 且与当前文件一致，status 才有效。旧 sidecar
-    （无摘要）、换图后遗留的旧结论、调用失败与未运行，一律按「未验证」返回：
-    不冒充通过，也不凭旧结论删新图。旧字段 has_hallucination/issues 仍兼容读取。
-
-    Returns:
-        {"has_critical", "issues", "status", "verified", "reason"}
-    """
-    if not frame_path:
-        return {"has_critical": False, "issues": [], "status": "qc_not_run",
-                "verified": False, "reason": "no_frame"}
-    frame_path_obj = Path(frame_path)
-    from shared.image_qc import qc_state
-    state = qc_state(frame_path_obj)
-    status = state["status"]
-    data = state.get("data") or {}
-    if status == "qc_rejected":
-        critical = [i for i in data.get("issues", [])
-                    if isinstance(i, dict) and i.get("severity") == "critical"]
-        return {"has_critical": bool(critical), "issues": critical,
-                "status": status, "verified": True, "reason": ""}
-    if status == "qc_passed":
-        return {"has_critical": False, "issues": [], "status": status,
-                "verified": True, "reason": ""}
-    return {"has_critical": False, "issues": [], "status": status,
-            "verified": False, "reason": state.get("reason") or status}
 
 
-def _get_shot_hash(shot: dict, script: dict, shot_dir: Path | None = None, *,
-                   media_policy: str | None = None) -> str:
-    """
-    计算分镜的哈希值，用于判断是否需要重新生成视频。
-
-    唯一算法：读写两侧必须都用本函数（写入在 _poll_video 成功保存视频后）。
-    直接哈希实际提交给视频 API 的内容，而非分镜源字段：
-    - _build_prompt 输出（已含 motion_desc/subtitle/角色特征锚点/context_bridge）
-    - 风格前缀 + 负面提示词（全局配置变了所有视频都该重生成）
-    - narration_segment（决定 prompt 中的台词，台词变了视频该重做）
-    - ff_desc + lf_desc + keyframes：图片 prompt 变了帧就变了，
-      I2V 参考图变了视频也该重生成（不只是空镜）。
-    - VIDEO_PROVIDER / VIDEO_REFERENCE_MODE / VIDEO_MODEL_VOICE：供应商/参考图
-      模式/声音开关变化会导致 prompt 形态、参考图列表、声音指令都不同，必须失效缓存
-    - r2v 模式下的参考图列表路径：换角色肖像/换场景资产图都应触发重做
-    不含 duration/duration_sec：实际帧数由 duration_sec 决定（step01 timecode），
-    时长变化不应触发重新生成视频。"""
-    def _normalize(text: str) -> str:
-        import re
-        t = (text or "").strip()
-        t = re.sub(r'\s+', ' ', t)
-        return t
-
-    from step02_video_gen.prompt_builder import _build_prompt
-    from shared.style_prefix import frame_canvas_ratio, style_profile
-
-    _style = style_profile(ratio=frame_canvas_ratio())
-
-    # Seedance 系（volcengine / agent_plan）走精简路径，缓存哈希必须跟随
-    # （否则旧完整 prompt 生成的视频会被错误复用，refit 错乱）
-    # 用 active_video_is_seedance() 统一判断，新增 Seedance 系 provider 自动跟随。
-    from shared.model_caps import active_video_is_seedance
-    if active_video_is_seedance():
-        from step02_video_gen.prompt_builder import _build_seedance_concise_prompt
-        _chars = script.get("characters", []) if isinstance(script, dict) else []
-        _prompt_for_hash = _build_seedance_concise_prompt(shot, characters=_chars)
-    else:
-        _prompt_for_hash = _build_prompt(shot, script)
-
-    def _file_digest(fp: Path) -> str:
-        try:
-            h = hashlib.sha1()
-            with open(fp, "rb") as fh:
-                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                    h.update(chunk)
-            return f"{fp.name}:{h.hexdigest()}"
-        except Exception:
-            return f"{fp.name}:unreadable"
-
-    from shared.model_caps import active_video_model
-    from shared.video_media_plan import active_media_policy
-    _policy = media_policy or active_media_policy()
-    _resolution = (
-        shot.get("resolution")
-        or os.getenv("VOLCENGINE_VIDEO_RESOLUTION", "")
-        or os.getenv("MINIMAX_VIDEO_RESOLUTION", "")
-        or ""
-    )
-    key_parts = [
-        # 供应商/模式/声音开关：这些维度变化都应触发缓存失效
-        f"provider={os.getenv('VIDEO_PROVIDER', '')}",
-        f"model={active_video_model() or ''}",
-        f"ref_mode={os.getenv('VIDEO_REFERENCE_MODE', '')}",
-        f"model_voice={os.getenv('VIDEO_MODEL_VOICE', '1')}",
-        # S02-C1（2026-11-17 用户回放）：MERGE_AUDIO_MODE 只影响后处理/声音合同，
-        # **不改变视频模型输入**。有声模型的失效由 request_key 里的 audio_policy /
-        # effective_merge_mode 承担；无声模型不得因它抖动，否则 key 稳定也会在
-        # prompt_hash 这一层被判 mismatch。
-        f"duration={shot.get('duration_sec') or shot.get('duration') or ''}",
-        f"resolution={_resolution}",
-        # 与 _make_request 实际发送内容同源：画风前缀（含 9:16 画幅）+ 当前画风负向词
-        _style.prefix,
-        _style.video_negative,
-        _prompt_for_hash,
-        shot.get("narration_segment", ""),
-        # v4: 图片 prompt 变了帧就变了，I2V 参考图变了视频也应重做
-        _normalize(shot.get("ff_desc", "")),
-        _normalize(shot.get("lf_desc", "")),
-    ]
-    # S01：策略只在非 auto 时进入 hash——auto 保持旧 hash（避免全量重生成），
-    # 切换策略必然换 hash，旧视频不会因"素材文件没变"被复用。
-    if _policy != "auto":
-        key_parts.append(f"media_policy={_policy}")
-    # keyframes 数据也纳入哈希（添加/移除/修改关键帧都会触发重做）
-    kfs = shot.get("keyframes") or shot.get("intermediate_keyframes") or []
-    if kfs:
-        for kf in kfs:
-            if isinstance(kf, dict):
-                key_parts.append(_normalize(kf.get("desc", "")))
-                _kf_time = kf.get("t_sec") if kf.get("t_sec") is not None else kf.get("time_ratio", "")
-                key_parts.append(str(_kf_time))
-
-    # v6.73: actual image bytes are part of the request in image/r2v modes.
-    # Text-only hashes reused stale videos when a frame was regenerated with
-    # the same prompt but different pixels.
-    if shot_dir is not None:
-        try:
-            candidates = []
-            for name in ("first_frame.png", "last_frame.png"):
-                fp = Path(shot_dir) / name
-                if fp.exists():
-                    candidates.append(fp)
-            # v6.110：排除二修标注中间产物（`keyframe_<N>_doodle.png`）——
-            # 它会被当成「帧」参与哈希，而且 step02b 的 frame_paths 走的是
-            # `shared.paths.keyframe_files`（同一口径）。
-            from shared.paths import is_core_keyframe_file
-            candidates.extend(sorted(p for p in Path(shot_dir).glob("keyframe_*.png")
-                                     if is_core_keyframe_file(p)))
-            # 2026-11-18 O1：只哈希策略后实际会下发的帧；被 first_only/first_last
-            # 丢弃的 lf/kf 变化不得让可复用视频失效。
-            from shared.video_media_plan import filter_frame_paths_by_policy
-            try:
-                candidates = [Path(p) for p in filter_frame_paths_by_policy(
-                    [str(p) for p in candidates], _policy)]
-            except Exception as _degrade_exc:  # noqa: BLE001 - 过滤不可用时保持旧行为
-                from shared.degrade import note_degraded as _note_degraded
-                _note_degraded("step02_video_gen/submit_poll.py:_get_shot_hash", _degrade_exc)
-            for _fp in candidates:
-                key_parts.append(_file_digest(_fp))
-        except Exception:
-            pass
-
-    # r2v: resolve the actual references now.  `_r2v_refs_cache` is a runtime
-    # underscore field and is stripped on save, so relying on it here caused
-    # portrait/asset changes to be silently ignored after a restart.
-    # 2026-11-13（F2）：哈希是**纯读**路径——`materialize=False` 只收集源参考，
-    # 不拼参考表、不落盘；此前这里会经 `fit_refs` 往生产 `shots/` 写 ref_sheet。
-    if os.getenv("VIDEO_REFERENCE_MODE", "").strip().lower() == "r2v":
-        from step02_video_gen.prompt_builder import (
-            _collect_r2v_references, _load_character_registry,
-        )
-        try:
-            _refs = _collect_r2v_references(
-                shot, characters=script.get("characters") or [],
-                registry=_load_character_registry(), materialize=False,
-            )
-            for _ref in _refs:
-                _fp = Path(_ref)
-                if _fp.exists():
-                    key_parts.append(_file_digest(_fp))
-        except Exception as _degrade_exc:
-            from shared.degrade import note_degraded as _note_degraded
-            _note_degraded("step02_video_gen/submit_poll.py:_get_shot_hash", _degrade_exc)
-    key = "|".join(key_parts)
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
-def _read_qc_retry_state(shot_dir: Path) -> dict:
-    """旧整数文件仍可读；损坏、空白及不可读状态必须显式失败。"""
-    path = Path(shot_dir) / "qc_fail_count.txt"
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {"count": 0, "task_id": ""}
-    if type(value) is int:
-        value = {"count": value, "task_id": ""}
-    if (not isinstance(value, dict) or set(value) != {"count", "task_id"}
-            or type(value["count"]) is not int or value["count"] < 0
-            or not isinstance(value["task_id"], str)):
-        raise ValueError(f"QC 重抽状态不合法: {path}")
-    return value
 
 
-def _record_qc_failure(shot_dir: Path, task_id: str) -> None:
-    """同一失败任务恢复幂等；先原子保存下一次 attempt，再允许清理坏片。"""
-    from shared.json_io import atomic_dump_json
-    state = _read_qc_retry_state(shot_dir)
-    if task_id and state["task_id"] == str(task_id):
-        return
-    atomic_dump_json(Path(shot_dir) / "qc_fail_count.txt",
-                     {"count": state["count"] + 1, "task_id": str(task_id)})
 
 
-def _is_recoverable(err: str) -> bool:
-    err_lower = err.lower()
-    terminal_markers = [
-        "content_policy", "5185bb98fdd",
-        "datainspectionfailed",  # 图片内容违规
-        "green net check failed",  # 绿网检查失败
-        "401", "unauthorized", "invalid api key",
-        "403", "forbidden",
-        "invalid_param", "invalid parameter",
-        "model not found", "model_not_found",
-    ]
-    for marker in terminal_markers:
-        if marker in err_lower:
-            return False
-    return True
 
 
 # ---------------------------------------------------------------------------
 # 冻结请求快照与缓存判据（计划 §V2 改动 4：命中缓存先核冻结请求关系与产物检查）
 # ---------------------------------------------------------------------------
 
-FROZEN_SNAPSHOT_FILENAME = "frozen_request.json"
 
 
-def frozen_snapshot_path(shot_dir) -> Path:
-    return Path(shot_dir) / FROZEN_SNAPSHOT_FILENAME
 
 
-def read_frozen_snapshot(shot_dir) -> dict | None:
-    p = frozen_snapshot_path(shot_dir)
-    if not p.is_file():
-        return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 - 快照坏了按"关系不可核"处理（不静默命中）
-        return {"_unparsable": str(exc)[:200]}
-    return data if isinstance(data, dict) else {"_unparsable": "snapshot 不是对象"}
 
 
-def write_frozen_snapshot(shot_dir, frozen) -> Path | None:
-    """把本次实际生效的请求事实落盘（下次命中缓存时按 request_key 核对关系）。"""
-    if frozen is None:
-        return None
-    p = frozen_snapshot_path(shot_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(frozen.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    return p
 
 
-def generation_requirements() -> dict:
-    """进**视频生成 key** 的 requirements（只放真正改变模型输入的事实）。
-
-    ``MERGE_AUDIO_MODE`` 只在"对白由视频模型原生发声"的通道上改变 payload/声音
-    （§V1：只影响 Step03/04 处理时属于后处理，不进视频生成 key）。判据不可得时
-    **保守进 key**（宁可多失效一次，也不静默漏失效）。
-
-    2026-11-17（S02，用户复核）：判据从**provider 级**改为
-    `provider 级原生发声 且 **模型级确实有声**`。
-
-    为什么必须加后半个条件：`active_video_uses_native_voice()` 只按 provider 分类
-    （volcengine → True），而 `volcengine` 下 `doubao-seedance-1-0-pro-*` 是**无声**
-    模型（`supports_generate_audio=False`）。旧判据于是把
-    `{"audio_policy": "native"}` 写进冻结请求——而 `requirements` 整体进
-    `request_key`（`request_plan.key_facts()`），结果是：**payload 一字未变，仅切换
-    `MERGE_AUDIO_MODE` 就会让视频缓存 key 失效**，白白重生成。
-    无声模型没有原生音轨可混，`MERGE_AUDIO_MODE` 对它不可能改变任何输入，
-    因此不得进 key。
-    """
-    try:
-        from shared.model_caps import (active_video_supports_audio,
-                                       active_video_uses_native_voice)
-        native = bool(active_video_uses_native_voice()) and bool(
-            active_video_supports_audio())
-    except Exception:  # noqa: BLE001
-        native = True
-    return ({"audio_policy": os.getenv("MERGE_AUDIO_MODE", "native")} if native else {})
 
 
-def _chapter_index_safe():
-    try:
-        from shared.paths import chapter_index
-        return chapter_index()
-    except Exception:
-        return None
 
 
-def _script_revision(script) -> str:
-    try:
-        from shared.quality_gate import compute_script_revision
-        return str(compute_script_revision(script))
-    except Exception:
-        return ""
 
 
-def _scope_identity_safe() -> dict:
-    """当前运行范围身份（chapter/book_index/book_name）；失败时退回章号。"""
-    try:
-        from shared.run_scope import current_scope_identity
-        return dict(current_scope_identity())
-    except Exception:  # noqa: BLE001 - 路径未初始化时仍给最小身份
-        return {"chapter": _chapter_index_safe()}
 
 
-def build_frozen_for_shot(*, shot, script, video_adapter, frame_paths, mode,
-                          continuity_ref_image=None, shot_dir=None, script_revision=None,
-                          scope=None, provider=None, model_id=None, prompt=None,
-                          requirements=None, prepared=None,
-                          execution_requirements=None, ref_sheet_dir=None,
-                          capability_revision=None, media_policy=None):
-    """按**当前输入**组装冻结请求（提交冻结与缓存关系核对共用同一份组装）。
-
-    ``ref_sheet_dir`` 是 r2v 超限参考表的落盘目录（attempt / 临时目录）；不给时
-    由 `_make_request` 使用系统临时目录，**绝不**写生产 ``shots/``（F2）。
-
-    2026-11-17 S02-C1：``prepared`` 给定时，``provider/model_id/capability_revision``
-    也取 prepared 的事实——提交路径就是这样冻结的；此前只覆盖 prompt/参数/素材，
-    会让 plan-only 与提交的 ``request_key`` 差一个 ``capability_revision``（非空 hash）。
-    """
-    from step02_video_gen import request_plan as rp
-    from step02_video_gen.prompt_builder import _build_prompt, _make_request
-    from shared.model_caps import active_video_model
-
-    if prompt is None:
-        prompt = _build_prompt(shot, script, mode=mode)
-    req = _make_request(video_adapter, prompt, frame_paths, shot,
-                        characters=script.get("characters", []),
-                        continuity_ref_image=continuity_ref_image, mode=mode,
-                        retry_attempt=_read_qc_retry_state(shot_dir)["count"] if shot_dir is not None else 0,
-                        media_policy=media_policy,
-                        **({"ref_sheet_dir": ref_sheet_dir} if ref_sheet_dir is not None else {}))
-    if prepared is not None:
-        provider = str(getattr(prepared, "provider", "") or provider or "")
-        model_id = str(getattr(prepared, "model_id", "") or model_id or "")
-        capability_revision = (getattr(prepared, "capability_revision", None)
-                               or capability_revision)
-    frozen = rp.build_frozen_request(
-        req, shot=shot,
-        scope=scope if scope is not None else _scope_identity_safe(),
-        script_revision=(script_revision if script_revision is not None
-                         else _script_revision(script)),
-        provider=provider or str(os.getenv("VIDEO_PROVIDER", "")),
-        model_id=model_id or str(active_video_model() or ""),
-        requirements=requirements if requirements is not None else generation_requirements(),
-        prepared=prepared, capability_revision=capability_revision)
-    if execution_requirements is not None:
-        from step02_video_gen.execution_requirements import merge_into_frozen
-        merge_into_frozen(frozen, execution_requirements)
-    return frozen, req
 
 
-@dataclass
-class PreparedFacts:
-    """一次准备的结构化结果（缓存关系核对与提交共用；禁止二次 prepare）。
-
-    - ``prepared``：provider 实际生效的请求事实已冻结；
-    - ``unsupported``：provider 未实现 prepared 入口（旧兼容分支）；
-    - ``blocked``：请求组装或 prepare 确定失败（必须单次终局，不再准备）。
-    """
-
-    status: str
-    req: object | None = None
-    prepared: object | None = None
-    frozen: object | None = None
-    error: dict | None = None
 
 
-def _prepare_error(exc, *, stage: str) -> dict:
-    fields = getattr(exc, "fields", None)
-    field_path = fields.get("field_path") if isinstance(fields, dict) else None
-    return {
-        "code": str(getattr(exc, "code", "") or type(exc).__name__),
-        "message": str(getattr(exc, "message", "") or exc)[:500],
-        "field_path": field_path,
-        "stage": stage,
-    }
 
 
-def _service_supports_prepared(svc) -> bool:
-    if svc is None or not callable(getattr(svc, "prepare_request", None)):
-        return False
-    fn = getattr(svc, "supports_prepared", None)
-    if not callable(fn):
-        return True
-    try:
-        return bool(fn())
-    except Exception:  # noqa: BLE001 - 能力查询失败按不支持处理（fail-closed）
-        return False
 
 
-def build_prepared_facts(*, shot, script, video_adapter, frame_paths, mode,
-                         scope=None, script_revision=None, provider=None,
-                         model_id=None, execution_requirements=None,
-                         candidate_context=None, ref_sheet_dir=None,
-                         media_policy=None) -> PreparedFacts:
-    """组装 + prepare 一次，返回结构化事实；失败不再重试（S02-C1）。
-
-    与提交路径同源：``provider/model_id/capability_revision`` 取 prepared；执行要求
-    并入 frozen 后重算 key。缓存消费者与提交入口共用本函数的结果，避免
-    「缓存里 prepare 失败、提交里再 prepare 成功」的分叉。
-    """
-    from shared.model_caps import active_video_model
-
-    _scope = dict(scope) if scope is not None else _scope_identity_safe()
-    _revision = (script_revision if script_revision is not None
-                 else _script_revision(script))
-    _provider = str(provider or os.getenv("VIDEO_PROVIDER", "") or "")
-    _model = str(model_id or active_video_model() or "")
-
-    # 1) 组装请求（一次）
-    try:
-        _frozen0, req = build_frozen_for_shot(
-            shot=shot, script=script, video_adapter=video_adapter,
-            frame_paths=frame_paths, mode=mode, scope=_scope,
-            script_revision=_revision, provider=_provider, model_id=_model,
-            requirements=generation_requirements(),
-            ref_sheet_dir=ref_sheet_dir,
-            media_policy=media_policy)
-    except Exception as exc:  # noqa: BLE001 - 组装失败是确定阻断，结构化返回
-        return PreparedFacts(status="blocked", error=_prepare_error(exc, stage="request_assembly"))
-
-    # 2) provider prepared 能力
-    svc = _video_service_for(video_adapter)
-    if not _service_supports_prepared(svc):
-        return PreparedFacts(
-            status="unsupported", req=req,
-            error={"code": "prepared_unsupported",
-                   "message": f"{type(svc).__name__ if svc else 'no-service'} 未实现 prepared 入口",
-                   "field_path": None, "stage": "prepared_capability"})
-
-    # 3) prepare（无提交）；失败即终局，不在这里重试
-    try:
-        prepared = svc.prepare_request(req, candidate_context)
-    except Exception as exc:  # noqa: BLE001 - 确定失败：结构化返回，交统一落盘
-        return PreparedFacts(status="blocked", req=req,
-                             error=_prepare_error(exc, stage="prepare"))
-    if not prepared.is_ready():
-        return PreparedFacts(
-            status="blocked", req=req, prepared=prepared,
-            error={"code": "prepared_not_ready",
-                   "message": str(getattr(prepared, "unsupported_reason", "")
-                                  or "prepared_not_ready")[:500],
-                   "field_path": None, "stage": "prepare"})
-
-    # 4) 以 prepared 为事实源冻结，再并入执行要求
-    try:
-        frozen, _ = build_frozen_for_shot(
-            shot=shot, script=script, video_adapter=video_adapter,
-            frame_paths=frame_paths, mode=mode, scope=_scope,
-            script_revision=_revision, provider=_provider, model_id=_model,
-            requirements=generation_requirements(), prepared=prepared,
-            execution_requirements=execution_requirements,
-            ref_sheet_dir=ref_sheet_dir,
-            media_policy=media_policy)
-    except Exception as exc:  # noqa: BLE001
-        return PreparedFacts(status="blocked", req=req, prepared=prepared,
-                             error=_prepare_error(exc, stage="frozen_assembly"))
-    return PreparedFacts(status="prepared", req=req, prepared=prepared, frozen=frozen)
 
 
-def record_submitted_duration(shot: dict, prepared) -> None:
-    """S08：把**实际提交**时长回填到 shot；计划装不下时阻断，不静默缩短故事时长."""
-    from _video_gen.models import VideoCapabilityError
-
-    params = getattr(prepared, "parameters", None) or {}
-    actual = params.get("duration")
-    if actual is None:
-        return
-    try:
-        actual_i = int(actual)
-    except (TypeError, ValueError):
-        return
-    planned = shot.get("planned_duration_sec")
-    if planned is None:
-        planned = shot.get("duration_sec") or shot.get("duration")
-    try:
-        import math as _math
-        planned_i = int(_math.ceil(float(planned)))
-    except (TypeError, ValueError):
-        planned_i = 0
-    if planned_i and actual_i < planned_i:
-        raise VideoCapabilityError(
-            "duration_insufficient",
-            f"实际提交时长 {actual_i}s 小于计划 {planned_i}s（模型区间/环境覆盖夹取），"
-            "禁止静默缩短故事时长",
-            field_path="parameters.duration")
-    shot["submitted_duration_sec"] = actual_i
-    if planned_i and actual_i > planned_i:
-        shot.setdefault("_duration_modifications", []).append(
-            {"kind": "duration_extended", "planned": planned_i, "submitted": actual_i})
 
 
-def cache_decision(shot, script, shot_dir, video_path, *, clip_path=None, force=False,
-                   frozen_request=None, shot_hash=None, require_exact=False) -> dict:
-    """缓存命中判据：prompt_hash + 产物检查 + **冻结请求关系**（§V2 改动 4）。
-
-    返回 ``{"hit": bool, "reason": str, "relation": "exact"|"legacy"|"mismatch"|"absent"}``：
-
-    - ``exact``：本次组装的冻结请求与快照 ``request_key`` 一致 ⇒ 同一事实，可复用；
-    - ``legacy``：产物+hash 命中但没有（或本次未组装）完整冻结快照 —— 这是**旧证据**，
-      允许沿用旧行为，但不得据此宣称新身份已验证；
-    - ``mismatch``：模型实际输入已变（hash 或 request_key 不符）⇒ 必须重新生成；
-    - ``absent``：产物缺失（clip 缺、视频缺、无 hash）⇒ 走生成/补片。
-    """
-    shot_dir = Path(shot_dir)
-    video_path = Path(video_path)
-    if force:
-        return {"hit": False, "reason": "force", "relation": "skipped"}
-    if not (video_path.exists() and video_path.stat().st_size > 20 * 1024):
-        return {"hit": False, "reason": "视频产物缺失或过小", "relation": "absent"}
-    hash_path = shot_dir / "prompt_hash.txt"
-    if not hash_path.exists():
-        return {"hit": False, "reason": "无 prompt_hash（旧稿或首跑）", "relation": "absent"}
-    shot_hash = shot_hash if shot_hash is not None else _get_shot_hash(shot, script, shot_dir=shot_dir)
-    if hash_path.read_text(encoding="utf-8").strip() != shot_hash:
-        return {"hit": False, "reason": "prompt_hash 不符（模型输入已变）",
-                "relation": "mismatch"}
-    if clip_path is not None:
-        clip_path = Path(clip_path)
-        if not (clip_path.exists() and clip_path.stat().st_size > 20 * 1024):
-            return {"hit": False, "reason": "clip 产物缺失", "relation": "absent"}
-    snapshot = read_frozen_snapshot(shot_dir)
-    # S01：非 auto 策略必须证明"旧产物对应当前实际素材模式"，legacy 不算命中。
-    if require_exact and (snapshot is None or frozen_request is None):
-        return {"hit": False, "reason": "策略要求精确冻结关系（无快照/未组装请求）",
-                "relation": "legacy"}
-    if snapshot is None:
-        return {"hit": True, "reason": "hash+产物命中（无冻结快照：legacy 证据）",
-                "relation": "legacy"}
-    if snapshot.get("_unparsable"):
-        return {"hit": False, "reason": f"冻结快照不可读：{snapshot['_unparsable']}",
-                "relation": "mismatch"}
-    if frozen_request is None:
-        return {"hit": True, "reason": "hash+产物命中（快照存在但本次未组装请求）",
-                "relation": "legacy"}
-    if snapshot.get("request_key") != frozen_request.request_key:
-        return {"hit": False, "reason": "冻结请求关系不符（request_key 变化）",
-                "relation": "mismatch"}
-    return {"hit": True, "reason": "冻结请求关系一致", "relation": "exact"}
 
 
-def _report_to_dict(report) -> dict:
-    return {"media_status": report.media_status, "semantic_status": report.semantic_status,
-            "coverage": dict(report.coverage or {}),
-            "issues": [{"issue_id": i.issue_id, "kind": i.kind, "time_range": i.time_range,
-                        "entity_refs": list(i.entity_refs), "expected": i.expected,
-                        "observed": i.observed, "confidence": i.confidence,
-                        "required_change": i.required_change,
-                        "field_paths": list(i.field_paths),
-                        "evidence_hashes": list(i.evidence_hashes)} for i in report.issues],
-            "tool_versions": dict(report.tool_versions or {}),
-            "source": dict(report.source or {}), "request": dict(report.request or {}),
-            "attempt": dict(report.attempt or {})}
 
 
 def _candidate_attempt(shot_dir: Path, candidate_context):
     return Path(getattr(candidate_context, "attempt_dir", shot_dir))
 
 
-def _qc_coverage(qc, media_status: str) -> tuple:
-    """把产物 QC 的结构化结果翻成（媒体覆盖, 语义覆盖, 语义状态）。
-
-    ``not_applicable`` = 这一轮**没有**要求语义检查（不是"测过且通过"）——
-    接受的判据仍要求媒体轴**真测过**（§V4「好片/坏片/工具不可用」三态可分）。
-    """
-    from step02_video_gen import reroll_decision as rd
-
-    checks = {str(c.get("name")): str(c.get("status")) for c in (qc.checks or [])}
-    media_coverage = ["bytes"]
-    if checks.get("file_size") in ("pass", "fail"):
-        media_coverage.append("file_size")
-    if checks.get("duration") in ("pass", "fail"):
-        media_coverage.append("duration")
-    # S06/V3：0 元硬探针真跑过 ⇒ media 轴覆盖扩展到 black/freeze/decode/首帧
-    if checks.get("media_probe") in ("clean", "warned", "critical"):
-        media_coverage.extend(["media_probe", "black", "freeze", "decode"])
-        if any((i or {}).get("kind") == "frame_binding"
-               for i in (getattr(qc, "media_issues", None) or [])):
-            media_coverage.append("first_frame")
-    if "visual" not in checks:
-        return media_coverage, [], "not_applicable"
-    visual = checks["visual"]
-    if visual in ("clean", "pass"):
-        return media_coverage, ["three_frames"], rd.STATUS_PASS
-    if visual in ("critical", "fail"):
-        return media_coverage, ["three_frames"], rd.STATUS_FAIL
-    return media_coverage, ["three_frames"], rd.STATUS_UNKNOWN
 
 
-def _record_candidate_qc(shot_dir: Path, candidate_context, *, qc, shot_idx, shot_hash,
-                         frozen_request, video_path: Path) -> str:
-    """把产物 QC 结果换成**结构化报告 + 裁决**（§V3：bool 不再控制重生成）。
-
-    返回 ``{"kind", "coverage", "checks", "checks_report", "decision", …}``；
-    分支状态与事件在同一处落盘，报告层不猜身份。
-    """
-    from shared import enhancement_io as eio
-    from shared import video_attempts as va
-    from step02_video_gen import reroll_decision as rd
-
-    attempt = _candidate_attempt(shot_dir, candidate_context)
-    request_key = getattr(frozen_request, "request_key", "") if frozen_request else ""
-
-    if qc.status == "failed":
-        media_status = rd.STATUS_FAIL
-        issues = [rd.VideoIssue(
-            issue_id=f"shot{shot_idx}-qc", kind="timing_window",
-            observed=qc.reason or "产物 QC 未通过",
-            required_change="按修订接口回到输入层/原生产者（重生成属新费用，需人工确认）",
-            field_paths=["parameters.duration"], evidence_paths=[str(video_path)])]
-    elif qc.status == "measured_pass":
-        media_status = rd.STATUS_PASS
-        issues = []
-    else:
-        # 前置探测失败 ⇒ **未验证**（不得伪报 PASS，也不因此判生成错误）
-        media_status = rd.STATUS_UNKNOWN
-        issues = []
-
-    # S06/V3：0 元探针检出的问题按**证据类型**分类进入裁决（不在这里判重抽）
-    probe = getattr(qc, "media_probe", None) or {}
-    for i, issue in enumerate(getattr(qc, "media_issues", None) or []):
-        kind = str(issue.get("kind") or "decode")
-        time_range = issue.get("time_range")
-        issues.append(rd.VideoIssue(
-            issue_id=f"shot{shot_idx}-media-{i}",
-            kind=kind,
-            time_range=(tuple(time_range) if isinstance(time_range, (list, tuple))
-                        and len(time_range) == 2 else None),
-            expected=None, observed=str(issue.get("message") or ""),
-            evidence_paths=[str(video_path)],
-            required_change=("回输入层修正（帧绑定/时长/内容）" if issue.get("severity")
-                             == "critical" else "后处理可缓解，需人工确认"),
-            field_paths=list((issue.get("evidence") or {}).keys())))
-        if issue.get("severity") == "critical":
-            media_status = rd.STATUS_FAIL
-
-    # 语义轴：**没跑**（未启用/未要求）与 **跑了但测不到** 是两件事（§V3 覆盖率）：
-    # - 没跑 ⇒ not_applicable（不阻断接受，但 manifest 的 check 记 not_run，不写 pass）；
-    # - 跑了但工具不可用/证据不足 ⇒ unknown ⇒ 裁决只能是 unverified。
-    media_coverage, semantic_coverage, semantic_status = _qc_coverage(qc, media_status)
-
-    report = rd.VideoCheckReport(
-        media_status=media_status, semantic_status=semantic_status,
-        coverage={"media": media_coverage, "semantic": semantic_coverage},
-        issues=issues, tool_versions={"qc": "step02._qc_video_product_result.v2",
-                                      "media_probe": (probe.get("tool_versions") or {})},
-        request={"request_key": request_key},
-        attempt={"attempt_id": attempt.name})
-    decision = rd.decide(report, {"request_key": request_key})
-    eio.append_event(attempt, "video_check", report=_report_to_dict(report),
-                     checks=list(qc.checks or []), qc_status=qc.status)
-    eio.append_event(attempt, "decision", decision=decision.to_dict())
-    if decision.kind == rd.DECISION_ACCEPT and qc.status != "measured_pass":
-        # 语义仍 unknown ⇒ 只能是 unverified（裁决已按 unknown 处理，这里再次核对）
-        decision = rd.Decision(rd.DECISION_UNVERIFIED,
-                               reasons=["语义轴未验证，不得声明内容 PASS"])
-    # 裁决 → 生命周期终局（§V2 表：QC 内容问题=rejected 且**保留产物**；
-    # 工具不可用/证据不足=unverified；只有 accept 才进 checked→accepted）
-    if decision.kind == rd.DECISION_ACCEPT:
-        target = va.STATE_CHECKED
-    elif decision.kind in (rd.DECISION_REVISE_INPUTS, rd.DECISION_POSTPROCESS,
-                           rd.DECISION_STOP):
-        target = va.STATE_REJECTED
-    else:
-        target = va.STATE_UNVERIFIED
-    va.transition(attempt, target, decision=decision.kind, issue_ids=decision.issue_ids)
-    return {"kind": decision.kind, "coverage": report.coverage,
-            "media_status": report.media_status, "semantic_status": report.semantic_status,
-            "checks": list(qc.checks or []),
-            "media_probe": probe or None,
-            "checks_report": [{"name": "media", "status": report.media_status},
-                              {"name": "semantic", "status": report.semantic_status}],
-            "decision": decision.to_dict()}
 
 
-def accept_candidate_video(candidate_context, *, video_path: Path, frozen_request,
-                           checks: list, clip_copy: Path | None = None,
-                           coverage: dict | None = None,
-                           tool_versions: dict | None = None,
-                           accepted_root: Path | None = None) -> dict:
-    """候选合格：不可变 manifest → 锁内换 accepted → **读回完整关系**（§V2/§F3）。
-
-    只在候选上下文内工作；生产 `clips/` 一个字节都不动。返回 accepted 关系；
-    提交后读回失败 ⇒ 抛 ``CommitUnconfirmedError``（退出码 6），不声称旧值仍在。
-
-    ``accepted_root`` 默认 = attempt 目录：视频包**一个 task 一个 attempt**，
-    指针落在 attempt 内才不会多镜互相覆盖（attempts/ 仍在包 root 下，见 §F2）。
-    """
-    from shared import enhancement_io as eio
-
-    attempt = Path(getattr(candidate_context, "attempt_dir"))
-    ctx_scope = dict(getattr(candidate_context, "scope", None) or {})
-    ctx_revision = str(getattr(candidate_context, "script_revision", "") or "")
-    ctx_source = str(getattr(candidate_context, "source", "") or "")
-    missing = [name for name, value in (("scope", ctx_scope),
-                                        ("script_revision", ctx_revision),
-                                        ("source", ctx_source)) if not value]
-    if missing:
-        raise eio.EnhancementError(
-            "candidate_identity_missing", "accept",
-            f"候选上下文缺少来源身份 {missing}：采纳 manifest 必须能回答"
-            "「哪一章、哪一稿、谁产生的」——缺一律拒收，不写空身份、不用 fixture 兜底",
-            exit_code=eio.EXIT_REJECTED, attempt_id=attempt.name, field_path="source")
-
-    # 消费方按**稳定编号**取素材（`resolve_candidate_inputs` 不按数组位置猜身份）：
-    # 没有 shot_index/shot_id 的 manifest 会让下游直接 `unit_locator_missing`。
-    frozen_dict = frozen_request.to_dict() if frozen_request is not None else {}
-    fz_source = dict(frozen_dict.get("source") or {})
-    shot_index = fz_source.get("shot_index")
-    shot_id = fz_source.get("shot_id")
-    if shot_index is None and not shot_id:
-        raise eio.EnhancementError(
-            "candidate_unit_locator_missing", "accept",
-            "冻结请求没有 shot_index/shot_id：无法给出稳定的单元编号，拒绝产出"
-            "下游读不出身份的候选 manifest",
-            exit_code=eio.EXIT_REJECTED, attempt_id=attempt.name, field_path="unit_id")
-    dur = (frozen_dict.get("parameters") or {}).get("duration")
-    locator = str(shot_id) if shot_id else "shots[%s]" % shot_index
-    video_sha = eio.sha256_file(Path(video_path))
-    units = [{
-        "unit_id": f"video-{locator}",
-        "kind": "video",
-        "locator": locator,
-        "shot_index": shot_index,
-        "shot_id": shot_id,
-        "path": str(Path(video_path).resolve()),
-        "sha256": video_sha,
-        "window": ({"start_sec": 0.0, "end_sec": float(dur)} if dur else {}),
-        "media": ({"duration_sec": float(dur)} if dur else {}),
-    }]
-
-    pointer_root = Path(accepted_root) if accepted_root is not None else attempt
-    artifacts = [eio.artifact_record(Path(video_path), role="candidate_video")]
-    if clip_copy and Path(clip_copy).is_file():
-        artifacts.append(eio.artifact_record(Path(clip_copy), role="candidate_clip_copy"))
-    inputs = attempt / eio.INPUT_FILENAME
-    if inputs.is_file():
-        artifacts.append(eio.artifact_record(inputs, role="frozen_request"))
-    input_key = str(getattr(frozen_request, "request_key", "") or "")
-    manifest = eio.seal_manifest(attempt, {
-        "package": "video",
-        "source": ctx_source,
-        "scope": ctx_scope,
-        "script_revision": ctx_revision,
-        "request_key": input_key,
-        "units": units,
-        "request": frozen_dict,
-        "status": "validated",
-        "tool_versions": dict(tool_versions or {"qc": "step02._qc_video_product_result.v1"}),
-        "artifacts": artifacts,
-        "checks": list(checks),
-        "coverage": dict(coverage or {}),
-        "errors": [],
-    })
-    accepted = eio.commit_accepted(
-        pointer_root, attempt_id=attempt.name,
-        manifest_path=attempt / eio.MANIFEST_FILENAME,
-        manifest_sha256=manifest["manifest_sha256"], input_key=input_key)
-    return {"pointer": accepted, "manifest": manifest,
-            "accepted_path": str(eio.accepted_path(pointer_root))}
 
 
-def attempt_task_id(attempt: Path) -> dict:
-    """从事件历史读回任务身份（含**晚到 task_id**，见 ``_create_prepared_task_once``）。
-
-    返回 ``{"task_id", "generation_id", "submit_posts", "classification", "state"}``。
-    只读事件（权威历史），不信任内存计数。
-    """
-    from shared import enhancement_io as eio
-    from shared import video_attempts as va
-
-    attempt = Path(attempt)
-    classification = None
-    posts = 0
-    for e in eio.read_events_strict(attempt)[0]:
-        if e.get("kind") == "submit_post":
-            posts += 1
-            classification = e.get("classification") or classification
-    # 身份从**全部**记录过它的事件回溯，并沿可验证父子链找——恢复出来的子尝试把
-    # task_id 写在 opened/late_task_id/resume_query，只认 submit_post 会误判成
-    # submission_unknown 并退出码 7（2026-10-03 复核实测）。
-    found = va.task_id_of_attempt(attempt)
-    return {"task_id": found["task_id"],
-            "generation_id": found["generation_id"],
-            "source_event": found["source_event"], "identity_attempt": found["attempt"],
-            "submit_posts": posts, "classification": classification,
-            "state": va.current_state(attempt)}
 
 
-@dataclass
-class _ResumeContext:
-    """恢复尝试的轻量候选上下文（不重造 CandidateContext，避免路径推导分叉）。"""
-
-    attempt_dir: Path
-    package_root: Path
-    scope: dict = field(default_factory=dict)
-    #: 来源身份随恢复链一起带（§F4）：只带 scope 会让恢复采纳出空 script_revision 的
-    #: manifest——下游据此判不了"这是哪一稿"，等于把候选做成不可消费的半成品。
-    script_revision: str = ""
-    source: str = "resume"
-
-    @property
-    def outputs_dir(self) -> Path:
-        return self.attempt_dir / "outputs"
-
-    def assert_path(self, path, *, field_path: str = "candidate_path", **kwargs) -> Path:
-        from shared.enhancement_io import assert_candidate_path
-        return assert_candidate_path(path, experiment_root=self.attempt_dir,
-                                     field_path=field_path, **kwargs)
 
 
-def _request_from_frozen(frozen: dict, clip_index: int):
-    """按冻结事实重建请求对象（恢复时**不得**重新组装 prompt/参考）。"""
-    from _video_gen.models import VideoGenerationRequest
-
-    params = dict((frozen or {}).get("parameters") or {})
-    first = last = None
-    keyframes: list = []
-    references: list = []
-    for ref in ((frozen or {}).get("references") or []):
-        path = ref.get("path")
-        if not path:
-            continue
-        role = ref.get("role")
-        if role == "first_frame" and first is None:
-            first = path
-        elif role == "last_frame" and last is None:
-            last = path
-        elif role == "keyframe":
-            keyframes.append(path)
-        elif role == "reference":
-            references.append(path)
-    return VideoGenerationRequest(
-        prompt=str((frozen or {}).get("prompt") or ""), clip_index=int(clip_index),
-        duration=int(params.get("duration") or 6),
-        negative_prompt=str(params.get("negative_prompt") or ""),
-        size=str(params.get("size") or "720x1280"),
-        image_path=first, last_frame_image_path=last,
-        extra_keyframe_paths=keyframes, reference_paths=references,
-        seed=params.get("seed"),
-        camera_movement=str(params.get("camera_movement") or ""))
 
 
-def _scope_matches(a: dict | None, b: dict | None) -> bool:
-    """Compare two scope dicts strictly across any overlapping non-empty keys."""
-    if not a or not b:
-        return True
-    for key in ("work_id", "book_index", "chapter_scope", "chapter"):
-        va_val, vb_val = a.get(key), b.get(key)
-        if va_val not in (None, "") and vb_val not in (None, ""):
-            if str(va_val) != str(vb_val):
-                return False
-    return True
 
 
-def _chapter_scope_str(scope: dict | None) -> str:
-    sc = dict(scope or {})
-    if sc.get("chapter_scope"):
-        return str(sc["chapter_scope"])
-    if sc.get("chapter") is not None:
-        return f"part_{int(sc.get('book_index') or 1):02d}/chapter_{int(sc['chapter']):03d}"
-    return ""
 
 
-def _work_id_str(scope: dict | None) -> str:
-    sc = dict(scope or {})
-    return str(sc.get("work_id") or os.getenv("NOVEL_NAME", "") or "")
 
 
-def _emit_video_ledger(
-    *,
-    scope: dict | None,
-    script_revision: str,
-    shot_index: int | None,
-    provider: str = "",
-    model_id: str = "",
-    media_policy: str = "",
-    request_key: str = "",
-    content_key: str = "",
-    generation_id: str = "",
-    task_id: str = "",
-    attempt_id: str = "",
-    action_type: str = "generate",
-    outcome: str = "",
-    error_code: str = "",
-    recovered: bool = False,
-    submit_posts: int | None = None,
-    context=None,
-    request_id: str = "",
-    detail: str = "",
-) -> None:
-    try:
-        from shared.request_events import emit_video_decision_ledger
-        emit_video_decision_ledger(
-            work_id=_work_id_str(scope),
-            chapter_scope=_chapter_scope_str(scope),
-            script_revision=str(script_revision or ""),
-            shot_index=shot_index,
-            provider=str(provider or ""),
-            model_id=str(model_id or ""),
-            media_policy=str(media_policy or ""),
-            request_key=str(request_key or ""),
-            content_key=str(content_key or ""),
-            operation_id=str(generation_id or request_id or ""),
-            generation_id=str(generation_id or ""),
-            task_id=str(task_id or ""),
-            attempt_id=str(attempt_id or ""),
-            action_type=action_type,
-            outcome=outcome,
-            error_code=error_code,
-            recovered=recovered,
-            submit_posts=submit_posts,
-            context=context,
-            request_id=request_id,
-            detail=detail,
-        )
-    except Exception:
-        return
 
 
-def find_recoverable_attempt(
-    package_root: Path,
-    *,
-    shot_index: int,
-    request_key: str = "",
-    scope: dict | None = None,
-    script_revision: str = "",
-    provider: str = "",
-) -> dict | None:
-    """Inspect existing attempt logs/lifecycles for a shot and return recovery or block action.
-
-    Reuses ``shared.enhancement_io`` + ``shared.video_attempts`` as the single state source:
-    - Terminal closed generations (``accepted``, ``provider_failed``, ``rejected``, ``draft``,
-      ``ready``) return ``None`` so legitimate re-runs proceed with a new attempt.
-    - Non-terminal or IO/unknown attempts holding a ``task_id`` (including ``late_task_id``)
-      return ``recover_same_task`` to attach a recovery attempt without sending a new POST.
-    - ``submitting`` or ``submission_unknown`` without a ``task_id`` return
-      ``submission_unknown_no_id`` to fail closed without guessing or resubmitting.
-    - ``commit_unconfirmed`` returns ``commit_unconfirmed`` without resubmitting.
-    """
-    from shared import enhancement_io as eio
-    from shared import video_attempts as va
-
-    attempts_dir = Path(package_root) / eio.ATTEMPTS_DIRNAME
-    if not attempts_dir.is_dir():
-        return None
-
-    matched: list[tuple[Path, dict]] = []
-    for att in sorted(p for p in attempts_dir.iterdir() if p.is_dir()):
-        inputs = eio.read_inputs(att)
-        if not isinstance(inputs, dict):
-            continue
-        raw_idx = inputs.get("shot_index")
-        if raw_idx is None:
-            continue
-        try:
-            if int(raw_idx) != int(shot_index):
-                continue
-        except (TypeError, ValueError):
-            continue
-        if request_key and str(inputs.get("request_key") or "") != str(request_key):
-            continue
-        if provider and inputs.get("provider") and str(inputs.get("provider")) != str(provider):
-            continue
-        if script_revision and inputs.get("script_revision") and str(inputs.get("script_revision")) != str(script_revision):
-            continue
-        att_scope = inputs.get("scope") if isinstance(inputs.get("scope"), dict) else None
-        if not _scope_matches(att_scope, scope):
-            continue
-        matched.append((att, inputs))
-
-    if not matched:
-        return None
-
-    groups: dict[str, list[tuple[Path, dict]]] = {}
-    for att, inputs in matched:
-        gid = str(inputs.get("generation_id") or f"att:{att.name}")
-        groups.setdefault(gid, []).append((att, inputs))
-
-    leaves: list[tuple[Path, dict]] = []
-    for nodes in groups.values():
-        parents = {str(inp.get("parent_attempt_id") or "") for _, inp in nodes if inp.get("parent_attempt_id")}
-        leaf_cands = [(a, inp) for a, inp in nodes if a.name not in parents] or nodes
-        leaf_cands.sort(key=lambda item: (str(item[1].get("opened_at") or ""), item[0].name))
-        leaves.append(leaf_cands[-1])
-
-    leaves.sort(key=lambda item: (str(item[1].get("opened_at") or ""), item[0].name), reverse=True)
-    finished_states = {
-        va.STATE_ACCEPTED,
-        va.STATE_PROVIDER_FAILED,
-        va.STATE_REJECTED,
-        va.STATE_DRAFT,
-        va.STATE_READY,
-    }
-    for leaf, leaf_inputs in leaves:
-        state = va.current_state(leaf)
-        if state in finished_states:
-            continue
-        info = attempt_task_id(leaf)
-        task_id = info.get("task_id")
-        gen_id = str(info.get("generation_id") or leaf_inputs.get("generation_id") or "")
-        if state == va.STATE_COMMIT_UNCONFIRMED:
-            return {
-                "action": "commit_unconfirmed",
-                "attempt": leaf,
-                "state": state,
-                "task_id": str(task_id) if task_id else None,
-                "generation_id": gen_id,
-                "inputs": leaf_inputs,
-            }
-        if task_id:
-            return {
-                "action": "recover_same_task",
-                "attempt": leaf,
-                "state": state,
-                "task_id": str(task_id),
-                "task_id_source": info.get("source_event"),
-                "generation_id": gen_id,
-                "inputs": leaf_inputs,
-            }
-        if state in (
-            va.STATE_SUBMITTING,
-            va.STATE_SUBMISSION_UNKNOWN,
-            va.STATE_SUBMITTED,
-            va.STATE_RUNNING,
-            va.STATE_DOWNLOADED,
-            va.STATE_CHECKED,
-            va.STATE_IO_FAILED,
-            va.STATE_UNVERIFIED,
-        ):
-            return {
-                "action": "submission_unknown_no_id",
-                "attempt": leaf,
-                "state": state,
-                "task_id": None,
-                "generation_id": gen_id,
-                "inputs": leaf_inputs,
-            }
-    return None
 
 
-def resume_candidate_attempt(attempt: Path, *, service=None, adapter=None,
-                             poll_interval: float = 0.5, timeout_sec: float = 60.0) -> dict:
-    """恢复**指定已有任务**：查询原 task_id → 下载 → 验收采纳；**不新生成**。
-
-    没有可恢复 task_id（submission_unknown 且无晚到结果）⇒ 抛
-    ``EnhancementError(code="submission_unknown", exit_code=7)``——「无 ID 不许新生成」。
-    凭据引用不可解析 ⇒ ``credential_binding_unavailable``（退出码 7）。
-    """
-    import time as _time
-
-    from shared import enhancement_io as eio
-    from shared import video_attempts as va
-
-    attempt = Path(attempt)
-    inputs = eio.read_inputs(attempt) or {}
-    info = attempt_task_id(attempt)
-    if not info["task_id"]:
-        raise eio.EnhancementError(
-            "submission_unknown", "resume",
-            "该 attempt 没有可恢复的 task_id（不知是否已建任务）；禁止在没有 ID 的情况下新生成",
-            exit_code=eio.EXIT_SUBMISSION_UNKNOWN, attempt_id=attempt.name)
-
-    if service is None:
-        service = _video_service_for(adapter) if adapter is not None else None
-    if service is None:
-        from _video_gen.service import create_service
-        service = create_service(str(inputs.get("provider") or "") or None)
-
-    binding = {"status": "ok", "provider": inputs.get("provider"),
-               "key_slot": inputs.get("key_slot"),
-               "credential_profile_ref": inputs.get("credential_profile_ref"),
-               "binding_version": 1}
-    if not service.restore_task_binding(info["task_id"], binding):
-        raise eio.EnhancementError(
-            "credential_binding_unavailable", "resume",
-            "该任务提交时的凭据引用不可解析（配置变更/凭据已移除）：不得用当前 key 猜历史任务",
-            exit_code=eio.EXIT_SUBMISSION_UNKNOWN, attempt_id=attempt.name,
-            request_id=info["task_id"])
-
-    package_root = attempt.parent.parent
-    resumed = va.open_recovery_attempt(package_root, attempt)
-    if info["task_id"] and va.current_state(resumed) != va.STATE_SUBMITTED:
-        # 晚到 task_id（不是 submit_post 事件带来的）⇒ 恢复尝试直接以 submitted 起步，
-        # 并**补一条合法事件**再改投影（投影落后可按合法事件补，§F2）
-        lock = eio.AttemptLock(resumed / eio.LOCK_DIRNAME, purpose="resume adopt task")
-        with lock:
-            before_state = va.current_state(resumed)
-            event = eio.append_event(resumed, "late_task_id", task_id=info["task_id"],
-                                     generation_id=info["generation_id"],
-                                     before={"state": before_state},
-                                     after={"state": va.STATE_SUBMITTED})
-            proj = eio.read_lifecycle(resumed) or {}
-            proj.update({"state": va.STATE_SUBMITTED, "task_id": info["task_id"],
-                         "projected_from_event_seq": event["seq"]})
-            eio.write_lifecycle(resumed, proj)
-    ctx = _ResumeContext(attempt_dir=resumed, package_root=package_root,
-                         scope=dict(inputs.get("scope") or {}),
-                         script_revision=str(inputs.get("script_revision") or ""),
-                         source="video_candidate_resume")
-    clipped = ctx.outputs_dir / "candidate.mp4"
-    clipped.parent.mkdir(parents=True, exist_ok=True)
-
-    frozen = dict(inputs.get("frozen_request") or {})
-    if not frozen:
-        # 没有冻结请求就没有"本次要什么"的事实：不许用默认值拼一个出来（冻结的
-        # 意义就是时长/声音/参考角色等按原样重放）。
-        raise eio.EnhancementError(
-            "frozen_request_missing", "resume",
-            "该 attempt 没有冻结请求（input.json 缺 frozen_request）：无法按原事实重放，"
-            "拒绝用默认参数重建请求",
-            exit_code=eio.EXIT_REJECTED, attempt_id=attempt.name)
-    shot_index = int(inputs.get("shot_index") or (frozen.get("source") or {}).get("shot_index") or 0)
-    req = _request_from_frozen(frozen, shot_index)
-    from _video_gen.models import ExecutionContext
-    req.candidate_path = str(clipped)
-    req.execution_context = ExecutionContext(
-        experiment_root=str(resumed), attempt_id=resumed.name,
-        candidate_path=str(clipped), scope=ctx.scope, package="video")
-
-    if va.current_state(resumed) == va.STATE_SUBMITTED:
-        va.transition(resumed, va.STATE_RUNNING, kind="resume_query",
-                      task_id=info["task_id"])
-
-    deadline = _time.monotonic() + max(0.0, float(timeout_sec))
-    obs = None
-    while True:
-        obs = service.query_observation(info["task_id"])
-        if obs.is_terminal():
-            break
-        if _time.monotonic() >= deadline:
-            break
-        _time.sleep(max(0.05, float(poll_interval)))
-
-    if obs is None or not obs.is_success():
-        state = (va.STATE_PROVIDER_FAILED if obs is not None and obs.status in ("failed", "expired")
-                 else va.STATE_UNVERIFIED)
-        va.transition(resumed, state, kind="resume_terminal",
-                      status=getattr(obs, "status", "unknown"),
-                      error=getattr(obs, "error", None))
-        return {"status": "failed", "attempt_dir": str(resumed),
-                "task_id": info["task_id"], "observation": obs.to_dict() if obs else None,
-                "submit_posts": va.submit_post_count(package_root)}
-
-    remaining = max(1.0, deadline - _time.monotonic())
-    result = service.wait_for_completion(req, info["task_id"], timeout=int(remaining))
-    if not result.success or not result.save_path:
-        va.transition(resumed, va.STATE_IO_FAILED, kind="resume_download_failed",
-                      error=str(getattr(result, "error", "download failed"))[:400])
-        return {"status": "io_failed", "attempt_dir": str(resumed),
-                "task_id": info["task_id"], "error": getattr(result, "error", None),
-                "submit_posts": va.submit_post_count(package_root)}
-
-    va.transition(resumed, va.STATE_DOWNLOADED, kind="downloaded", task_id=info["task_id"])
-    frozen_obj = None
-    try:
-        from step02_video_gen import request_plan as rp
-        frozen_obj = rp.FrozenVideoRequest(**{
-            **frozen, "references": [rp.ReferenceBinding(**r) for r in (frozen.get("references") or [])]})
-    except Exception:  # noqa: BLE001 - 冻结快照只用于身份绑定，坏了不阻断恢复
-        frozen_obj = None
-    _qc = _qc_video_product_result(Path(result.save_path), shot_index,
-                                   float(getattr(req, "duration", 0) or 0))
-    verdict = _record_candidate_qc(Path(resumed), ctx, qc=_qc, shot_idx=shot_index,
-                                   shot_hash="", frozen_request=frozen_obj,
-                                   video_path=Path(result.save_path))
-    if verdict["kind"] != "accept":
-        return {"status": verdict["kind"], "attempt_dir": str(resumed),
-                "task_id": info["task_id"], "checks": _qc.checks,
-                "media_status": verdict["media_status"],
-                "semantic_status": verdict["semantic_status"],
-                "submit_posts": va.submit_post_count(package_root)}
-
-    accepted = accept_candidate_video(
-        ctx, video_path=Path(result.save_path), frozen_request=frozen_obj,
-        checks=(list(_qc.checks or []) + verdict["checks_report"]),
-        coverage=verdict["coverage"])
-    va.transition(resumed, va.STATE_ACCEPTED, kind="accepted",
-                  manifest_sha256=accepted["manifest"]["manifest_sha256"])
-    return {"status": "accepted", "attempt_dir": str(resumed), "task_id": info["task_id"],
-            "manifest_sha256": accepted["manifest"]["manifest_sha256"],
-            "submit_posts": va.submit_post_count(package_root)}
 
 
 def _trace_video_event(attempt, kind, **fields):
@@ -1422,62 +199,12 @@ def _trace_video_event(attempt, kind, **fields):
 #: 远端明确失败（没有产出视频）的报错前缀：provider 在 failed/expired 与轮询超时时
 #: 分别写「生成失败: …」/「轮询超时 …」（_video_gen/volcengine_provider.py），
 #: 下载阶段失败则写「下载失败: …」（_video_gen/service.py）。
-_PROVIDER_FAILURE_MARKERS = ("生成失败", "轮询超时", "未找到 video_url")
 
 
-def _classify_poll_failure(err: str) -> tuple[str, str]:
-    """把轮询终局失败分类成 (attempt 状态, remote_status)。
-
-    远端明确失败 ⇒ provider_failed（模型端没产出，重抽是**新费用**）；
-    下载失败 ⇒ io_failed + remote_status=succeeded（远端其实成功了，只是没取回）；
-    其余未知 ⇒ io_failed + remote_status=unverified（保持原行为，不猜）。
-    """
-    from shared import video_attempts as _va
-
-    text = str(err or "")
-    if any(marker in text for marker in _PROVIDER_FAILURE_MARKERS):
-        return _va.STATE_PROVIDER_FAILED, "failed"
-    if "下载失败" in text:
-        return _va.STATE_IO_FAILED, "succeeded"
-    return _va.STATE_IO_FAILED, "unverified"
 
 
-def repair_missing_clip(shot_dir: Path, video_path: Path, clip_path: Path) -> bool:
-    """仅 clips/clip_<idx>.mp4 缺失时，从已通过校验的 shots/<idx>/video.mp4 本地补拷。
-
-    前置由 cache_decision 保证：视频存在且 >20KB、prompt_hash 与本次输入一致。
-    因此这里只做本地 IO，**不发任何远端请求**——避免「缺个副本就重烧一次生成」。
-    """
-    try:
-        video_path = Path(video_path)
-        clip_path = Path(clip_path)
-        if not (video_path.exists() and video_path.stat().st_size > 20 * 1024):
-            return False
-        clip_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(video_path), str(clip_path))
-        return clip_path.exists() and clip_path.stat().st_size > 20 * 1024
-    except OSError:
-        return False
 
 
-async def _poll_video_production(*args, trace_attempt, **kwargs):
-    from shared import video_attempts as va
-    task_id, idx = args[3], args[4]
-    before = len(_failed_videos.get(idx, []))
-    va.transition(trace_attempt, va.STATE_RUNNING, task_id=task_id)
-    try:
-        ok = await _poll_video(*args, trace_attempt=trace_attempt, **kwargs)
-        _trace_video_event(trace_attempt, "production_completed", task_id=task_id,
-                           success=ok, failures=_failed_videos.get(idx, [])[before:])
-        if not ok and va.current_state(trace_attempt) == va.STATE_RUNNING:
-            va.transition(trace_attempt, va.STATE_IO_FAILED, kind="fetch_incomplete",
-                          task_id=task_id, remote_status="unverified")
-        return ok
-    except BaseException as exc:
-        _failed_videos[idx].append({"task_id": task_id, "code": "poll_interrupted",
-                                    "error": str(exc), "attempt": str(trace_attempt)})
-        _trace_video_event(trace_attempt, "poll_interrupted", task_id=task_id, error=str(exc))
-        raise
 
 
 async def _poll_video(
@@ -2321,30 +1048,8 @@ async def _submit_video_candidate(*, shot: dict, shot_dir: Path, video_path: Pat
     return task
 
 
-def submit_failure_code(classification: str) -> str:
-    """一次生成 POST 的失败分类 → 失败记录的 `code`（批处理据此定退出码）.
-
-    缺了这一步，批处理只能记默认的 `candidate_submit_failed`，`submission_unknown`
-    这类需要人工处置的结局会被报成普通工具失败（2026-10-04 复核 P2-8）。
-    """
-    return {
-        SUBMIT_UNKNOWN: "submission_unknown",
-        SUBMIT_RATE_LIMITED: "rate_limited",
-        SUBMIT_REJECTED: "provider_failed",
-    }.get(str(classification or ""), "candidate_submit_failed")
 
 
-def _record_content_policy_revision(attempt: Path, prompt: str, error: str, eio) -> None:
-    """content-policy 修订只产出**新的候选计划**建议（不就地改 prompt 重发）。"""
-    try:
-        from shared.content_policy_fix import auto_fix_prompt
-        fixed = auto_fix_prompt(prompt, error, verbose=False)
-    except Exception:
-        fixed = None
-    if fixed and fixed != prompt:
-        eio.append_event(attempt, "proposed_revision", operation="replace_prompt_text",
-                         reason="content_policy", original_error=str(error)[:300],
-                         replacement_prompt=fixed)
 
 
 def _video_service_for(video_adapter):
