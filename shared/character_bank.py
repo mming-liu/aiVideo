@@ -103,6 +103,22 @@ def style_reason_text(reason: str) -> str:
     return _STYLE_REASON_TEXT.get(str(reason), str(reason))
 
 
+def stamp_style(data: dict, style: str | None = None) -> str:
+    """把风格纪元写进 `data`（已是 dict 的那份）并返回纪元画风.
+
+    **只改传入的那份**：调用方在候选副本上盖章，写盘失败时内存与盘上一个字节不动
+    （与两个 bank 的「失败保留基线」约定一致）。
+    """
+    meta = data.setdefault("meta", {})
+    stamp = meta.setdefault("style_stamp", {})
+    if not normalize_video_style(stamp.get("video_style")):
+        stamp["video_style"] = (normalize_video_style(style) if style is not None
+                                else current_video_style())
+        stamp["asset_contract_version"] = ASSET_CONTRACT_VERSION
+        stamp["stamped_at"] = datetime.now().isoformat(timespec="seconds")
+    return normalize_video_style(stamp.get("video_style"))
+
+
 def _book_global_dir() -> Path:
     """本书跨章节共享目录（统一路径来源: shared/paths.py）."""
     from shared.paths import global_dir
@@ -235,10 +251,10 @@ class CharacterBank:
         Returns: `True` = 真的写进了盘（调用方据此才可以说"已保存"）。
         """
         _rid = str(run_id or "").strip() or _current_run_id()
-        # 2026-11-28 O9：写盘前确保风格纪元已钉住（首次使用时可能还没解析过资产）
-        self.ensure_style_stamp()
         # **候选副本**：失败 ⇒ 基线（内存与盘上）一个字节不改
         _cand = copy.deepcopy(self._data)
+        # 2026-11-28 O9：风格纪元盖在**副本**上——写盘失败时内存不得被改动
+        stamp_style(_cand)
         # 统计也在**副本**上（复核 2026-10-02 之八 P1：save 期的改动一律不落在内存上，
         # 写盘失败时内存与盘上都不动）
         _cand["meta"]["total_characters"] = len(_cand.get("characters", {}))
@@ -351,14 +367,7 @@ class CharacterBank:
 
         只改内存，随下一次 `save()` 落盘（`load()` 保持只读语义）。
         """
-        meta = self._data.setdefault("meta", {})
-        stamp = meta.setdefault("style_stamp", {})
-        if not normalize_video_style(stamp.get("video_style")):
-            stamp["video_style"] = (normalize_video_style(style) if style is not None
-                                    else current_video_style())
-            stamp["asset_contract_version"] = ASSET_CONTRACT_VERSION
-            stamp["stamped_at"] = datetime.now().isoformat(timespec="seconds")
-        return normalize_video_style(stamp.get("video_style"))
+        return stamp_style(self._data, style)
 
     def style_context(self, style: str | None = None) -> tuple[str, str]:
         """`(当前画风, 风格纪元)`；当前画风缺省读 `VIDEO_STYLE`."""
@@ -590,14 +599,17 @@ class StyleBank:
         （父路径被文件占住 / 只读）时抛 `OSError` 而不是"保存失败"；写盘统一走共享的
         `shared.json_io.atomic_dump_json`（写临时文件 + 替换 + 失败清理）。
         """
-        # 2026-11-28 O9：风格纪元随锚点一起落盘
-        self.ensure_style_stamp()
+        # 2026-11-28 O9：风格纪元随锚点一起落盘；写盘失败时内存原样保留
+        payload = copy.deepcopy(self._data)
+        stamp_style(payload)
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
             from shared.json_io import atomic_dump_json
-            atomic_dump_json(self._json_path, self._data, ensure_ascii=False, indent=2)
+            atomic_dump_json(self._json_path, payload, ensure_ascii=False, indent=2)
         except (OSError, ValueError, TypeError) as e:
             print(f"[bank] 保存风格库失败（**盘上文件原样保留**）: {e}")
+            return
+        self._data = payload
 
     # -- 查询 ----------------------------------------------------------------
 
@@ -609,13 +621,7 @@ class StyleBank:
 
     def ensure_style_stamp(self, style: str | None = None) -> str:
         """返回风格纪元；首次调用钉在当前画风上（只改内存，随 save 落盘）."""
-        stamp = self._data.setdefault("style_stamp", {})
-        if not normalize_video_style(stamp.get("video_style")):
-            stamp["video_style"] = (normalize_video_style(style) if style is not None
-                                    else current_video_style())
-            stamp["asset_contract_version"] = ASSET_CONTRACT_VERSION
-            stamp["stamped_at"] = datetime.now().isoformat(timespec="seconds")
-        return normalize_video_style(stamp.get("video_style"))
+        return stamp_style(self._data, style)
 
     def style_context(self, style: str | None = None) -> tuple[str, str]:
         epoch = self.ensure_style_stamp(style)
