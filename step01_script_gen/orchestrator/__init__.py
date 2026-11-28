@@ -15,3 +15,8 @@ MODULE_ORDER = (
     "finalize", "repair_targets", "repair_round", "persist", "blocked_ledger",
     "generation", "commit", "best_guard",
 )
+
+#: `outline.py` 的辅助模块（2026-11-28 S09）：不导入本包任何模块，也不进入
+#: `MODULE_ORDER`（不由 `tools/split_step01_main.py` 生成）；只允许 outline.py
+#: 导入，顺序即依赖方向：结构校验 → ops 应用 → 修订反馈。
+OUTLINE_HELPERS = ("outline_structure", "outline_ops", "outline_feedback")

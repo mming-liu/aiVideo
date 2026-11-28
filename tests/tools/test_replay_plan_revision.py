@@ -323,9 +323,25 @@ def _run_replay_cli(manifest: Path, round_id: int, output_base: Path,
          "--manifest", str(manifest), "--round", str(int(round_id)),
          "--code-source", str(code_ref), "--output-base", str(output_base)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=str(ROOT))
+        cwd=str(ROOT), env=_replay_env())
     assert done.returncode == 0, (done.returncode, done.stdout[-2000:], done.stderr[-2000:])
     return json.loads(done.stdout)
+
+
+def _replay_env() -> dict:
+    """回放子进程只继承工具链环境，不继承前序用例留下的站点配置.
+
+    冻结语料自带 `code_baseline` 的 `.env.content`；若把 `STEP01_*` / `BOOK_*` /
+    `NOVEL_*` / `DURATION_*` 泄漏进子进程，`override=False` 会让现场值盖过快照值，
+    归档请求与快照代码的提示边界随之漂移（实测：先跑 resume 用例再跑本文件必红）。
+    """
+    import os
+
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith(("STEP01_", "BOOK_", "NOVEL_", "DURATION_")):
+            env.pop(key, None)
+    return env
 
 
 def _external_code_baseline():

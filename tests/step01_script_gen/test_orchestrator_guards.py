@@ -26,7 +26,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from step01_script_gen.orchestrator import MODULE_ORDER  # noqa: E402
+from step01_script_gen.orchestrator import MODULE_ORDER, OUTLINE_HELPERS  # noqa: E402
 
 _PKG = "step01_script_gen.orchestrator"
 _ORCH = _ROOT / "step01_script_gen" / "orchestrator"
@@ -34,7 +34,8 @@ _MAIN = _ROOT / "step01_script_gen" / "main.py"
 _MAIN_MAX_LINES = 1500
 _PRE_SPLIT_UNUSED = 15        # 拆分前 main.py 的 F401 + F811（tools/ruff_baseline.json @ 75dbdc5）
 _ALLOWED_IMPORTERS_PREFIX = ("step01_script_gen/orchestrator/", "tests/")
-_ALLOWED_IMPORTERS = {"step01_script_gen/main.py", "tools/split_step01_main.py"}
+_ALLOWED_IMPORTERS = {"step01_script_gen/main.py", "step01_script_gen/outline.py",
+                      "tools/split_step01_main.py"}
 _SCAN_DIRS = ("step01_script_gen", "shared", "step02a_frame_gen", "step02b_video_gen",
               "step02_video_gen", "step03_tts_audio", "step04_merge", "_text_gen",
               "_image_gen", "_video_gen", "tts", "tools")
@@ -112,6 +113,43 @@ def test_only_main_and_tests_import_the_orchestrator():
     assert not problems, "\n".join(problems)
 
 
+def test_outline_helpers_do_not_import_the_orchestrator():
+    """S09：outline 辅助模块只依赖 stdlib/shared，不得导入 orchestrator（含 runtime）."""
+    problems = []
+    for name in OUTLINE_HELPERS:
+        path = _ORCH / f"{name}.py"
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8-sig")
+        for node in ast.walk(ast.parse(source)):
+            names = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            elif isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            if any(n == _PKG or n.startswith(_PKG + ".") for n in names):
+                problems.append(f"{name}.py:{node.lineno} 导入了 {_PKG}")
+    assert not problems, "\n".join(problems)
+
+
+def test_outline_helpers_only_import_earlier_helpers():
+    """S09：helper 之间若互相导入，只能按 OUTLINE_HELPERS 的顺序（当前为 0 处）."""
+    problems = []
+    for pos, name in enumerate(OUTLINE_HELPERS):
+        path = _ORCH / f"{name}.py"
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8-sig")
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.ImportFrom) or node.module != _PKG:
+                continue
+            for alias in node.names:
+                if alias.name in OUTLINE_HELPERS:
+                    if OUTLINE_HELPERS.index(alias.name) >= pos:
+                        problems.append(f"{name} → {alias.name}: 依赖未排在前面的 helper")
+    assert not problems, "\n".join(problems)
+
+
 def test_main_py_is_slim_once_every_module_is_present():
     if len(_present_modules()) != len(MODULE_ORDER):
         pytest.skip("拆分未完成：%s 尚未就位" % sorted(set(MODULE_ORDER) - set(_present_modules())))
@@ -162,3 +200,8 @@ def test_guard_rejects_outside_importer():
     assert importer_violations({"shared/x.py": f"import {_PKG}.runtime\n"})
     assert importer_violations({"tools/y.py": f"from {_PKG} import runtime\n"})
     assert not importer_violations({"step01_script_gen/main.py": f"from {_PKG} import runtime\n"})
+    # S09：outline 被显式允许使用自己的辅助模块；其他 step01 模块仍被拒。
+    assert not importer_violations(
+        {"step01_script_gen/outline.py": f"from {_PKG} import outline_structure\n"})
+    assert importer_violations(
+        {"step01_script_gen/validation.py": f"from {_PKG} import outline_structure\n"})
