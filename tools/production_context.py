@@ -202,12 +202,19 @@ def _same_path(a, b) -> bool:
     return os.path.normcase(str(pa)) == os.path.normcase(str(pb))
 
 
-def verify(receipt: dict, *, apply: bool = True) -> dict:
+def verify(receipt: dict, *, apply: bool = True,
+           allow_rule_source_drift: bool = False) -> dict:
     """核验当前进程上下文确实指向被采纳的那一章（fail-closed）.
 
     检查项：env 与凭据一致 -> `shared.paths` 解析出的章目录 == `formal_chapter`
     -> `script_result.json` 的 SHA-256 与 revision -> 语义门 + 提交清单
     （`require_step01_upstream`）。任一项失败抛 :class:`ContextError`。
+
+    `allow_rule_source_drift=True`：**只给差异复核用**。跳过语义门里「规则源指纹
+    必须等于当前源码」那一步（`require_semantic_gate` 会直接拒收），改为只核提交
+    清单（`verify_step01_commit_manifest`：摘要 / revision / 章号 / 时长带仍然逐项
+    核对）。`tools/diff_step01_gate.py` 要评估的正是「当前规则与产物记录不一致」，
+    用默认严格入口会先被指纹检查挡下。默认 False，生产路径行为不变。
     """
     if apply:
         apply_context(receipt)
@@ -228,7 +235,8 @@ def verify(receipt: dict, *, apply: bool = True) -> dict:
 
     from shared.paths import chapter_dir
     from shared.plan_cache import PlanCacheError, load_script_plan
-    from shared.quality_gate import require_step01_upstream
+    from shared.quality_gate import (require_step01_upstream,
+                                     verify_step01_commit_manifest)
 
     ch = Path(chapter_dir())
     if not _same_path(ch, receipt["formal_chapter"]):
@@ -268,8 +276,13 @@ def verify(receipt: dict, *, apply: bool = True) -> dict:
                                "script_result.json 的 chapter_index=%r 与凭据第 %d 章不符"
                                % (script.get("chapter_index"), expected_chapter))
     try:
-        manifest = require_step01_upstream(ch, script, stage="step01",
-                                           expected_chapter=expected_chapter)
+        if allow_rule_source_drift:
+            # 差异复核：只核提交清单（不含「规则源指纹必须等于当前源码」那一步）
+            manifest = verify_step01_commit_manifest(
+                ch, script, stage="step01", expected_chapter=expected_chapter)
+        else:
+            manifest = require_step01_upstream(ch, script, stage="step01",
+                                               expected_chapter=expected_chapter)
     except Exception as exc:                                  # noqa: BLE001 - 统一成 code
         raise ContextError("upstream_gate_failed", "step01 准入未通过：%s" % exc) from exc
 
@@ -417,15 +430,15 @@ def _read_novel_text(chapter: int, novel_file: "str | None") -> str:
         chapter_reader._analyzing_scenes = previous
 
 
-def build_refreshed_gate(receipt: dict, *, novel_file: "str | None" = None) -> dict:
-    """在暂存目录重建四份门禁产物（不触碰正式目录、零模型调用）.
+def _stage_chapter(receipt: dict) -> tuple[Path, Path, dict]:
+    """把本章 script / plan cache 复制到可写暂存根，返回 `(root, staging, script)`.
 
-    返回 `{name: 文本}`；调用方按 quality → audit → commit → adoption 顺序落盘
-    （manifest 最后写，崩溃时摘要对不上即拒用）。
+    正式目录只读：后续所有重算都在 staging 内进行（step01 的确定性检查器会按
+    `OUTPUT_BASE` 写日志）。`_staging_root()` 每次调用可能新建临时根，因此调用方
+    必须复用同一次返回值，不要各调一次。
     """
     import json as _json
 
-    apply_context(receipt)
     ch = Path(receipt["formal_chapter"])
     script_path = ch / "script_result.json"
     script = _json.loads(script_path.read_text(encoding="utf-8"))
@@ -437,6 +450,19 @@ def build_refreshed_gate(receipt: dict, *, novel_file: "str | None" = None) -> d
     plan_cache_src = ch / "chapter_outline.cache.json"
     if plan_cache_src.is_file():
         (staging / "chapter_outline.cache.json").write_bytes(plan_cache_src.read_bytes())
+    return root, staging, script
+
+
+def recompute_step01_quality(receipt: dict, *, novel_file: "str | None" = None,
+                             staged: tuple | None = None) -> dict:
+    """按**当前**规则重算本章确定性质量门（暂存根内、零模型调用、正式目录只读）.
+
+    2026-11-28 O2：`build_refreshed_gate` 与只读差异复核工具
+    （`tools/diff_step01_gate.py`）共用这一段重算逻辑——否则「离线重签」与
+    「差异复核」会各自复制一份重算入口，迟早漂移。
+    """
+    apply_context(receipt)
+    root, _staging, script = staged or _stage_chapter(receipt)
 
     # 导入 step01.main 会按 OUTPUT_BASE 建日志；确定性检查器运行时也会写日志。
     # 暂存根可写、正式根在沙箱里不可写，因此整段构建期都把 OUTPUT_BASE 指向暂存根
@@ -447,13 +473,26 @@ def build_refreshed_gate(receipt: dict, *, novel_file: "str | None" = None) -> d
         import step01_script_gen.main as step01_main
         novel_text = _read_novel_text(
             int((receipt.get("scope") or {}).get("chapter") or 1), novel_file)
-        quality = step01_main._build_step01_quality_gate(script, novel_text)
+        return step01_main._build_step01_quality_gate(script, novel_text)
     finally:
         if previous_base is None:
             os.environ.pop("OUTPUT_BASE", None)
         else:
             os.environ["OUTPUT_BASE"] = previous_base
 
+
+def build_refreshed_gate(receipt: dict, *, novel_file: "str | None" = None) -> dict:
+    """在暂存目录重建四份门禁产物（不触碰正式目录、零模型调用）.
+
+    返回 `{name: 文本}`；调用方按 quality → audit → commit → adoption 顺序落盘
+    （manifest 最后写，崩溃时摘要对不上即拒用）。
+    """
+    import json as _json
+
+    staged = _stage_chapter(receipt)
+    _root, staging, script = staged
+    ch = Path(receipt["formal_chapter"])
+    quality = recompute_step01_quality(receipt, novel_file=novel_file, staged=staged)
     from shared.quality_gate import (QualityGateError, build_step01_commit_manifest,
                                      ensure_script_revision, sha1_file)
     revision = ensure_script_revision(script)

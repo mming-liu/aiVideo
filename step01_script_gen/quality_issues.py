@@ -27,6 +27,10 @@ def _compute_rule_source_fingerprint() -> str:
     只有会改变旧报告有效性的代码才进这里。**生成/修复提示词不进**——改提示词
     改变的是 script 内容，而内容变化已被 `script_revision` 覆盖，把它塞进来只会
     让门禁无谓失效（见 `_compute_prompt_source_fingerprint`）。
+
+    归一化口径（2026-11-28 O2）：整文件条目走 `_module_ast_digest`（AST 归一化），
+    因此**改注释 / 空行 / CRLF↔LF 不再让指纹漂移**；改任何条件、阈值、正则、词表、
+    字面量或函数逻辑，AST 必然改变。每个文件先混入其相对路径——规则换文件名也算变更。
     """
     import hashlib
     from pathlib import Path
@@ -82,10 +86,16 @@ def _compute_rule_source_fingerprint() -> str:
             files.extend(p for p in sorted(_dir.rglob("*.py")) if p.is_file())
     digest = hashlib.sha256()
     for path in files:
+        # 2026-11-28 O2：此前是 `path.read_bytes()` 整文件字节哈希——改一句注释、
+        # 空行数或 CRLF↔LF 都会让指纹漂移，逼所有已采纳正式章重刷门禁
+        # （`c957006` 就是这类事故）。现在改为 AST 归一化，并混入相对路径：
+        # 同一份规则换个文件名同样算规则源变更。
         try:
-            digest.update(path.read_bytes())
-        except OSError:
-            continue
+            rel = path.relative_to(project).as_posix()
+        except ValueError:
+            rel = path.name
+        digest.update(rel.encode("utf-8"))
+        digest.update(_module_ast_digest(path))
     # 2026-10-31 S10R：**跨阶段解耦**。`shared/style_prefix.py` 与
     # `shared/vimax_bridge.py` 同时承载 Step 02a/02b 逻辑（后者 4000+ 行几乎全是
     # 生图/二修），整文件哈希会让任何下游修复都把已采纳的 Step 01 报告判失效。
@@ -100,8 +110,20 @@ def _compute_rule_source_fingerprint() -> str:
 
 # Step 01 实际消费的符号（grep step01_script_gen 的 import/属性访问得出）。
 # 新增 Step 01 侧调用时必须同步这里，否则改动不会让旧报告失效。
+#
+# 2026-11-28 O2：`inject_global_config_into_script` 已移出清单（非阻断展示元数据）。
+# 取证：
+#   - 它只写 script 顶层的展示/渲染元数据（resolution/ratio/fps/render_style/
+#     global_lighting/negative_prompt），没有任何约束或质量判据读这些字段；
+#   - 唯一的结构性消费方 `validation.py` 只在字段**缺失**时打 WARN（非阻断），
+#     `main.py` 仅把值打印到控制台，`validate_fps_consistency` 也只是 print WARN；
+#   - 其 AST 闭包会卷入 `get_global_render_config` / `_GLOBAL_RENDER_DEFAULTS` /
+#     `frame_canvas_ratio`——于是「只改下游渲染配置」就让所有已采纳章的 Step01
+#     报告失效（`6a4a3e7` 从 `46f3bc7a10e6b3b4` 漂到 `ee3a664ccfefb5ca` 的精确根因）。
+# 因此它不属于「什么算 blocking」。若将来有确定性判据读取这些字段，必须把它加回
+# 清单并补一条用例（`tests/step01_script_gen/test_rule_fingerprint_hygiene.py`
+# 已锁死当前口径）。
 _STEP01_STYLE_PREFIX_SYMBOLS = (
-    "inject_global_config_into_script",
     "sanitize_script_shots",
     "validate_sensitive_words",
     "sanitize_prompt",
@@ -115,6 +137,27 @@ _STEP01_VIMAX_BRIDGE_SYMBOLS = (
     "_extract_char_layout",
     "_LF_GAZE_TYPO",
 )
+
+
+def _module_ast_digest(module_path) -> bytes:
+    """整文件 **AST 归一化**摘要：免疫注释、空行、CRLF/LF 与行尾空白差异.
+
+    保留 `ast.dump(include_attributes=False)` 里的一切逻辑结构、常量、正则与词表；
+    **docstring 属于字符串字面量，会被保留**（保守口径：改文档字符串也算判定源码变了）。
+    文件缺失/不可解析返回固定标记（删除即变更），不静默沿用旧值；
+    标记不含路径，保证同一内容在不同机器/目录下算出同一摘要。
+    """
+    import ast
+    import hashlib
+    from pathlib import Path
+
+    try:
+        # utf-8-sig：容忍 BOM，避免 `ast.parse` 被首字符 \ufeff 打成 SyntaxError
+        source = Path(module_path).read_text(encoding="utf-8-sig")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return b"<unreadable>"
+    return hashlib.sha256(ast.dump(tree, include_attributes=False).encode("utf-8")).digest()
 
 
 def _module_symbol_digest(module_path, names) -> bytes:

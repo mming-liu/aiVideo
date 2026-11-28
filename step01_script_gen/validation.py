@@ -5753,7 +5753,10 @@ def _check_wide_shot_facial(shots: list[dict], hook: dict = None) -> dict:
                           s.get("location", ""), s.get("scene", "")])
         if not any(w in probe for w in _WIDE_SHOT_WORDS):
             continue
-        hit = next((w for w in _FINE_FACE_WORDS if w in probe), None)
+        # 2026-11-28 O2：`_FINE_FACE_WORDS` 是 set，`next(...)` 取到哪个词取决于
+        # 进程 hash seed——同一份稿子两次重算会给出不同文案（实测「星目」与「剑眉」
+        # 互换），差异复核与离线重签的字节一致性因此不成立。改为确定性取最小词。
+        hit = min((w for w in _FINE_FACE_WORDS if w in probe), default=None)
         if hit:
             label = "hook" if (hook and s is hook) else s.get("index", "?")
             warnings.append(

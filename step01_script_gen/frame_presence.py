@@ -154,8 +154,13 @@ def presence_assessment(shot):
     keyframes = [k for k in shot.get("keyframes") or [] if isinstance(k, dict)]
     frames = _frames(shot, keyframes)
     times, time_problems = _frame_times(shot, keyframes)
+    # 2026-11-28 O2：原来是 set 推导 + `sorted(..., key=len, reverse=True)`——**同长度**
+    # 名字之间的先后取决于进程 hash seed，同一份稿子两次重算会报出不同角色
+    # （实测「听香」与「群演」互换），差异复核/离线重签因此不是确定性的。
+    # 显式 (长度降序, 名字升序)：长名优先后仍保持，同长度改为按名字定序。
     names = sorted({str(e.get("name") or "").strip() for _, entries in frames
-                    for e in entries if isinstance(e, dict)} - {""}, key=len, reverse=True)
+                    for e in entries if isinstance(e, dict)} - {""},
+                   key=lambda name: (-len(name), name))
     transitions = _transitions(shot, frames, names, _duration(shot))
     warnings, insufficient = [], []
     for problem in time_problems:
