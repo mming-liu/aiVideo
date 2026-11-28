@@ -94,6 +94,11 @@
   .list .item .p{flex:1;overflow-wrap:anywhere;color:var(--muted);font-size:12px}
   .plan-reasons{margin:0;padding-left:16px;color:var(--muted);font-size:12px}
   .plan-reasons li{margin:2px 0}
+  .healthbar{margin:8px 20px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;
+    background:var(--panel);font-size:13px;color:var(--muted)}
+  .healthbar b{color:var(--text)}
+  .healthbar .bad{color:var(--danger,#e05a5a)}
+  .review-filters{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px}
 </style>
 </head>
 <body>
@@ -106,6 +111,7 @@
     <button id="refresh" class="ghost" type="button">刷新</button>
   </div>
 </header>
+<div class="healthbar" id="healthBar" title="配置一致性与门禁指纹（只读）">配置健康：读取中…</div>
 <nav class="tabs" id="tabs"></nav>
 <main id="view"><div class="empty">加载中…</div></main>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -121,6 +127,7 @@
     { id: "step02b", label: "02b 视频" },
     { id: "step03", label: "03 语音" },
     { id: "step04", label: "04 成片" },
+    { id: "review", label: "审片" },
     { id: "cost", label: "费用准备" }
   ];
 
@@ -779,6 +786,7 @@
         var top = window.scrollY;
         renderMeta(ov);
         renderTabs(ov);
+        renderHealth();
         render();
         window.scrollTo(0, top);
       }
@@ -809,8 +817,115 @@
     else if (state.tab === "step02a") renderStep02a(ov);
     else if (state.tab === "step02b") renderVideoTable();
     else if (state.tab === "step03") renderVoiceTable();
+    else if (state.tab === "review") renderReview(ov);
     else if (state.tab === "cost") renderCost();
     else renderMedia(ov, "step04");
+  }
+
+  // ---------------------------------------------------- 审片看板（O12，只读）
+  var reviewState = { filter: "all", rows: null, chapter: null };
+  var REVIEW_FILTERS = [
+    { id: "all", label: "全部" },
+    { id: "qc_rejected", label: "仅看 QC 拒收" },
+    { id: "missing_video", label: "仅看未生成" },
+    { id: "audio_over_window", label: "仅看音频超窗" }
+  ];
+
+  function chapterId(ov) {
+    var ch = ov && ov.chapter;
+    if (ch && typeof ch === "object") ch = ch.chapter;
+    return ch || 1;
+  }
+
+  function renderHealth() {
+    var bar = document.getElementById("healthBar");
+    if (!bar) return;
+    api("/api/system/config_health").then(function (res) {
+      var c = res.consistency || {};
+      var fp = res.fingerprint || {};
+      bar.textContent = "";
+      bar.appendChild(h("span", { text: "画风 " + (res.video_style || "（未设置）") + " ｜ 配置一致性 " }));
+      bar.appendChild(h("b", { class: c.ok ? "" : "bad",
+        text: c.ok ? "0 error / " + (c.warning_count || 0) + " warning"
+                   : (c.error_count || 0) + " error / " + (c.warning_count || 0) + " warning" }));
+      bar.appendChild(h("span", { text: " ｜ 门禁指纹 " }));
+      bar.appendChild(h("b", { class: fp.matches ? "" : "bad",
+        text: fp.matches ? "一致（" + fp.live + "）"
+                         : "不一致（运行 " + fp.live + " ≠ 采纳 " + (fp.adopted || "缺失") + "）" }));
+    }).catch(function (err) {
+      bar.textContent = "配置健康读取失败：" + err.message;
+    });
+  }
+
+  function renderReview(ov) {
+    var view = document.getElementById("view");
+    view.textContent = "";
+    view.appendChild(h("div", { class: "review-filters" }, REVIEW_FILTERS.map(function (f) {
+      return h("button", {
+        class: "ghost" + (reviewState.filter === f.id ? " on" : ""),
+        type: "button", text: f.label,
+        onclick: function () {
+          reviewState.filter = f.id;
+          reviewState.rows = null;
+          renderReview(ov);
+        }
+      });
+    })));
+    var holder = h("div", {}, [emptyBox("加载审片清单…")]);
+    view.appendChild(holder);
+    var fetchRows = function () {
+      api("/api/chapter/" + chapterId(ov) + "/shots_review").then(function (res) {
+        reviewState.rows = res;
+        reviewState.chapter = chapterId(ov);
+        holder.textContent = "";
+        holder.appendChild(renderReviewRows(res));
+      }).catch(function (err) {
+        holder.textContent = "";
+        holder.appendChild(emptyBox("审片清单加载失败：" + err.message));
+      });
+    };
+    if (reviewState.rows && reviewState.chapter === chapterId(ov)) {
+      holder.textContent = "";
+      holder.appendChild(renderReviewRows(reviewState.rows));
+      return;
+    }
+    fetchRows();
+  }
+
+  function renderReviewRows(res) {
+    var rows = (res.rows || []).filter(function (row) {
+      return reviewState.filter === "all" || (row.filters || {})[reviewState.filter];
+    });
+    var counts = res.filter_counts || {};
+    var wrap = h("div", {});
+    wrap.appendChild(h("div", { class: "sub", text:
+      "共 " + (res.shot_count || 0) + " 镜 ｜ QC 拒收 " + (counts.qc_rejected || 0) +
+      " ｜ 未生成 " + (counts.missing_video || 0) +
+      " ｜ 音频超窗 " + (counts.audio_over_window || 0) +
+      " ｜ 当前筛选 " + rows.length }));
+    rows.forEach(function (row) {
+      var flags = [];
+      if ((row.filters || {}).qc_rejected) flags.push("QC 拒收");
+      if ((row.filters || {}).missing_video) flags.push("未生成视频");
+      if ((row.filters || {}).audio_over_window) flags.push("音频超窗");
+      var frames = Object.keys(row.frames || {}).map(function (k) {
+        return k + (row.frames[k].exists ? "✓" : "✗");
+      }).join(" ");
+      wrap.appendChild(h("div", { class: "card" }, [
+        h("div", { class: "row" }, [
+          h("b", { text: "#" + row.shot }),
+          h("span", { class: "sub", text: row.scene || "" }),
+          h("span", { class: "sub", text: flags.length ? " ｜ " + flags.join(" / ") : "" })
+        ]),
+        h("div", { class: "sub", text: row.subtitle || "" }),
+        h("div", { class: "sub", text:
+          "帧 " + frames + " ｜ 关键帧 " + (row.keyframes || []).length +
+          " ｜ 参考 " + (row.refs || []).length +
+          " ｜ QC " + ((row.qc || {}).status || "?") +
+          " ｜ 视频 " + ((row.video || {}).state || "missing") })
+      ]));
+    });
+    return wrap;
   }
 
   function toggleKeep(shot) {

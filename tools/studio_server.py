@@ -554,6 +554,158 @@ class Studio:
             "model_sends": 0,
         }
 
+    # ------------------------------------------- 全链路看板 / 配置健康（O12）
+    def chapter_number(self) -> int:
+        """当前打开的章号（从章节目录名 `chapter_001` 解析；解析不到返回 0）."""
+        import re as _re
+
+        match = _re.search(r"(\d+)$", self.chapter.name)
+        return int(match.group(1)) if match else 0
+
+    def pipeline_report(self) -> dict:
+        """直接消费 O5 的跨阶段台账（只读，不重复计算）."""
+        from tools.chapter_pipeline_report import build_chapter_report
+
+        report = build_chapter_report(self.chapter)
+        # 台账里的 `chapter` 是目录名；这里补一个数字章号并保留原名
+        return {**report, "ok": True, "chapter": self.chapter_number(),
+                "chapter_name": report.get("chapter")}
+
+    def config_health(self) -> dict:
+        """配置一致性（O1 的 `--check` 同源）+ 门禁指纹对照（只读）."""
+        from shared.env_guard import validate_config_consistency
+        from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+        issues = [issue.as_dict() for issue in validate_config_consistency(stage="all")]
+        errors = [i for i in issues if i.get("severity") == "error"]
+        warnings = [i for i in issues if i.get("severity") != "error"]
+        gate = self._gate_summary()
+        adopted = str(gate.get("rule_source_fingerprint")
+                      or (self.receipt or {}).get("rule_source_fingerprint") or "")
+        return {
+            "ok": True,
+            "schema": "studio.config_health/1",
+            "chapter": self.chapter_number(),
+            "video_style": str(os.getenv("VIDEO_STYLE") or ""),
+            "consistency": {"ok": not errors, "issues": issues,
+                            "error_count": len(errors),
+                            "warning_count": len(warnings)},
+            "fingerprint": {"live": RULE_SOURCE_FINGERPRINT, "adopted": adopted,
+                            "matches": (not adopted) or adopted == RULE_SOURCE_FINGERPRINT,
+                            "adopted_missing": not adopted},
+            "provider_calls": 0,
+        }
+
+    def _qc_summary(self, shot_dir: Path) -> dict:
+        """汇总该镜的视觉 QC 侧车（只读；没有侧车就如实说 not_checked）."""
+        sidecars = sorted(shot_dir.glob("*hallucination*.json"))
+        for pattern in ("*qc*.json", "qc_*.json"):
+            sidecars.extend(sorted(shot_dir.glob(pattern)))
+        sidecars = sorted({p for p in sidecars if p.is_file()})
+        reasons: list[str] = []
+        person_count = None
+        rejected = False
+        for path in sidecars:
+            data = self._read_json_soft(path)
+            if not isinstance(data, dict):
+                continue
+            if isinstance(data.get("person_count"), int):
+                person_count = data["person_count"]
+            for key in ("status", "verdict", "result"):
+                verdict = str(data.get(key) or "").strip().lower()
+                if verdict in ("reject", "rejected", "fail", "failed", "blocked"):
+                    rejected = True
+            for key in ("ok", "passed"):
+                if data.get(key) is False:
+                    rejected = True
+            for key in ("reason", "message"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    reasons.append(value.strip())
+            for key in ("reasons", "issues"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    for item in value:
+                        text = (item.get("message") or item.get("code")
+                                if isinstance(item, dict) else item)
+                        if text:
+                            reasons.append(str(text))
+        return {
+            "status": ("rejected" if rejected
+                       else ("checked" if sidecars else "not_checked")),
+            "sidecars": [p.name for p in sidecars],
+            "person_count": person_count,
+            "reasons": reasons[:8],
+        }
+
+    def shots_review(self) -> dict:
+        """逐镜审片清单：帧/关键帧/参考图/QC/视频/字幕/音频超窗（只读）."""
+        from shared.paths import is_core_keyframe_file
+
+        videos = {int(row.get("shot") or 0): row
+                  for row in ((self.video_table() or {}).get("rows") or [])}
+        voice: dict[int, list] = {}
+        try:
+            for row in ((self.voice_table() or {}).get("rows") or []):
+                shot = row.get("shot")
+                if shot is not None:
+                    voice.setdefault(int(shot), []).append(row)
+        except Exception:                                # noqa: BLE001 - 语音表缺失不影响审片
+            voice = {}
+        rows = []
+        for unit in self.units():
+            idx = int(unit.get("index", 0) or 0)
+            shot_dir = self.shot_dir(idx)
+            review = self.review(idx)
+            keyframes = []
+            if shot_dir.is_dir():
+                keyframes = sorted(
+                    (p.name for p in shot_dir.glob("keyframe_*.png")
+                     if is_core_keyframe_file(p)),
+                    key=lambda name: (len(name), name))
+            qc = self._qc_summary(shot_dir)
+            video = videos.get(idx) or {}
+            over = []
+            for item in voice.get(idx) or []:
+                window = item.get("window")
+                est = item.get("est_sec")
+                if (isinstance(window, (list, tuple)) and len(window) == 2
+                        and est is not None):
+                    span = float(window[1]) - float(window[0])
+                    if float(est) > span + 0.05:
+                        over.append({"unit_id": item.get("unit_id"),
+                                     "est_sec": est, "window": list(window)})
+            rows.append({
+                "shot": idx,
+                "kind": "hook" if idx == 0 else "shot",
+                "subtitle": str(unit.get("subtitle") or ""),
+                "scene": str(unit.get("scene") or unit.get("location") or ""),
+                "duration_sec": unit.get("duration_sec"),
+                "frames": {kind: {"exists": bool(info.get("image_exists")),
+                                  "state": info.get("state"),
+                                  "image": info.get("image")}
+                           for kind, info in (review.get("frames") or {}).items()},
+                "keyframes": keyframes,
+                "refs": [item.get("name") for item in
+                         ((review.get("media_policy") or {}).get("items") or [])],
+                "qc": qc,
+                "video": {"exists": bool(video.get("video_exists")),
+                          "state": video.get("state"),
+                          "url": video.get("url"),
+                          "bytes": video.get("bytes") or 0},
+                "audio_over_window": over,
+                "filters": {
+                    "qc_rejected": qc["status"] == "rejected",
+                    "missing_video": not bool(video.get("video_exists")),
+                    "audio_over_window": bool(over),
+                },
+            })
+        counts = {key: sum(1 for row in rows if row["filters"][key])
+                  for key in ("qc_rejected", "missing_video", "audio_over_window")}
+        return {"ok": True, "schema": "studio.shots_review/1",
+                "chapter": self.chapter_number(), "shot_count": len(rows),
+                "rows": rows, "filter_counts": counts, "provider_calls": 0}
+
     # ----------------------------------------------------- 单镜 FFmpeg 合成
     def merge_shot(self, shot: int) -> dict:
         unit = self.unit(shot)
@@ -1075,6 +1227,10 @@ class StudioHandler(BaseHTTPRequestHandler):
                 return self._json(200, self.studio.cost_prep())
             if parsed.path == "/api/checkpoints":
                 return self._json(200, self.studio.checkpoints())
+            if parsed.path == "/api/system/config_health":
+                return self._json(200, self.studio.config_health())
+            if parsed.path.startswith("/api/chapter/"):
+                return self._chapter_api(parsed.path)
             if parsed.path == "/media":
                 return self._media(parse_qs(parsed.query))
             if parsed.path == "/favicon.ico":
@@ -1084,6 +1240,28 @@ class StudioHandler(BaseHTTPRequestHandler):
             self._error(exc)
 
     do_HEAD = do_GET
+
+    def _chapter_api(self, path: str):
+        """`/api/chapter/<id>/<name>`：只认**当前打开章节**的数字 id，挡穿越."""
+        import re as _re
+
+        parts = [part for part in str(path).split("/") if part]
+        if len(parts) != 4:
+            return self._json(404, {"ok": False, "code": "not_found",
+                                    "message": str(path)})
+        raw_id, name = parts[2], parts[3]
+        match = _re.fullmatch(r"(?:chapter_)?(\d{1,4})", raw_id)
+        if not match:
+            raise StudioError("bad_chapter_id", "章节 id 非法：%r" % raw_id, 400)
+        if int(match.group(1)) != self.studio.chapter_number():
+            raise StudioError("chapter_not_open",
+                              "当前打开的章节是 %s，不是 %r"
+                              % (self.studio.chapter.name, raw_id), 404)
+        if name == "pipeline_report":
+            return self._json(200, self.studio.pipeline_report())
+        if name == "shots_review":
+            return self._json(200, self.studio.shots_review())
+        return self._json(404, {"ok": False, "code": "not_found", "message": name})
 
     def do_POST(self):
         parsed = urlparse(self.path)

@@ -580,3 +580,105 @@ def test_http_video_voice_cost_and_plan_stage(http_server):
         assert payload["model_sends"] == 0, path
     # /api/plan 仍是 Step02a 的 POST 入口；阶段归属由返回体声明。
     assert studio.plan_step02a(None)["stage"] == "step02a"
+
+
+# ---------------------------------------------------------------------------
+# 7) 全链路看板 API（O12，2026-11-28）
+# ---------------------------------------------------------------------------
+def test_shots_review_reports_all_shots(studio):
+    _write_frame(studio, "ff")
+    payload = studio.shots_review()
+    assert payload["ok"] is True and payload["schema"] == "studio.shots_review/1"
+    assert payload["chapter"] == 1
+    assert payload["shot_count"] == len(payload["rows"]) == 1
+    row = payload["rows"][0]
+    assert row["shot"] == 1
+    assert row["subtitle"] == "line 1"
+    assert row["frames"]["ff"]["exists"] is True
+    assert row["qc"]["status"] == "not_checked"
+    # 没有视频时如实标"未生成"
+    assert row["filters"]["missing_video"] is True
+    assert row["video"]["exists"] is False
+    assert payload["provider_calls"] == 0
+
+
+def test_shots_review_flags_qc_rejection(studio):
+    shot_dir = studio.shot_dir(1)
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    (shot_dir / "ff_hallucination.json").write_text(
+        json.dumps({"person_count": 2, "status": "rejected",
+                    "reasons": [{"message": "extra person"}]}, ensure_ascii=False),
+        encoding="utf-8")
+    payload = studio.shots_review()
+    row = payload["rows"][0]
+    assert row["qc"]["status"] == "rejected"
+    assert row["qc"]["person_count"] == 2
+    assert "extra person" in row["qc"]["reasons"]
+    assert row["filters"]["qc_rejected"] is True
+    assert payload["filter_counts"]["qc_rejected"] == 1
+
+
+def test_config_health_reports_fingerprint_and_consistency(studio):
+    from step01_script_gen.quality_issues import RULE_SOURCE_FINGERPRINT
+
+    payload = studio.config_health()
+    assert payload["ok"] is True and payload["schema"] == "studio.config_health/1"
+    assert payload["fingerprint"]["live"] == RULE_SOURCE_FINGERPRINT
+    assert payload["fingerprint"]["adopted"] == RULE_SOURCE_FINGERPRINT
+    assert payload["fingerprint"]["matches"] is True
+    assert set(payload["consistency"]) >= {"ok", "issues", "error_count", "warning_count"}
+    assert payload["provider_calls"] == 0
+
+
+def test_pipeline_report_wraps_chapter_report(studio):
+    payload = studio.pipeline_report()
+    assert payload["ok"] is True
+    assert payload["schema"] == "pipeline.chapter_report/1"
+    assert payload["chapter"] == 1
+    assert payload["stage_status"]["step01"] in ("complete", "partial")
+    assert payload["totals"]["paid_requests_total"] == 0
+
+
+def test_http_chapter_and_health_endpoints(http_server):
+    base, studio = http_server
+    with _get(base + "/api/chapter/1/pipeline_report") as res:
+        assert res.status == 200
+        assert json.loads(res.read().decode("utf-8"))["ok"] is True
+    with _get(base + "/api/chapter/chapter_001/shots_review") as res:
+        assert res.status == 200
+        payload = json.loads(res.read().decode("utf-8"))
+    assert payload["shot_count"] == 1
+    with _get(base + "/api/system/config_health") as res:
+        assert res.status == 200
+        assert json.loads(res.read().decode("utf-8"))["fingerprint"]["live"]
+
+
+def test_http_chapter_api_rejects_foreign_and_traversal_ids(http_server):
+    base, studio = http_server
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _get(base + "/api/chapter/999/pipeline_report")
+    assert exc.value.code == 404
+    body = json.loads(exc.value.read().decode("utf-8"))
+    assert body["code"] == "chapter_not_open"
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _get(base + "/api/chapter/not-a-number/shots_review")
+    assert exc.value.code == 400
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _get(base + "/api/chapter/../../etc/pipeline_report")
+    assert exc.value.code == 404
+    # 百分号编码的穿越同样被 id 白名单挡下（不是靠路径归一化）
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _get(base + "/api/chapter/%2e%2e/pipeline_report")
+    assert exc.value.code == 400
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _get(base + "/api/chapter/1/unknown_endpoint")
+    assert exc.value.code == 404
+
+
+def test_index_html_references_review_endpoints(http_server):
+    base, studio = http_server
+    with _get(base + "/") as res:
+        body = res.read().decode("utf-8")
+    assert "/api/system/config_health" in body
+    assert "/shots_review" in body
+    assert "审片" in body
