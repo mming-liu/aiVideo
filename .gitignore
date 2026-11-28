@@ -673,3 +673,7 @@ start_studio.bat
 !tests/tools/test_chapter_pipeline_report.py
 # 2026-11-28：O6 声线分级扩容的离线验收用例
 !tests/step03_tts_audio/test_voice_tier_expansion_offline.py
+# 2026-11-28：O7 发音词典用例
+!tests/step03_tts_audio/test_pronunciation_lexicon.py
+# 2026-11-28：O7 字幕屏显质量门用例
+!tests/step04_merge/test_subtitle_ergonomics_gate.py

@@ -53,10 +53,17 @@ def generate_srt(shots: List[dict], durations: List[float], output: Path,
 
     v5.2：长字幕按标点智能拆分（逻辑已迁至 shared.subtitle_contract）。
     S 包：``validated_timings`` 为 C 包校验后的合法对齐结果（可选，位置参数不变）。
+    2026-11-28 O7：写盘前过一遍字幕屏显质量门（`step04_merge.subtitle_gate`）。
+    默认策略 `warn` 只记问题、不改写 plan；`MERGE_SUBTITLE_GATE=block` 才会拆行/拒收。
     """
     plan = build_srt_plan(shots, durations, clip_windows=clip_windows,
                           speech_durations=speech_durations,
                           validated_timings=validated_timings)
+    from step04_merge.subtitle_gate import enforce as _enforce_subtitle
+
+    total_duration = float(sum(durations)) if durations else None
+    gate = _enforce_subtitle(plan, warn=print, total_duration=total_duration)
+    plan = gate["plan"]
     write_srt(plan, output)
     total = plan.cues[-1].end_sec if plan.cues else 0.0
     print(f"[OK] SRT generated: {output} ({len(plan.cues)} subtitles, total {total:.1f}s)")

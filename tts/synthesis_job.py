@@ -282,6 +282,11 @@ def request_key_for(unit: SpeechUnit, *, applied: dict | None = None,
     }
     if unit.voice_role:
         payload["voice_role"] = unit.voice_role
+    # 2026-11-28 O7：读音修正文本进 key——词典一改，命中句自动失效重算；未命中句
+    # 的 key 不变（`tts_text` 为空或与展示文本相同 ⇒ 不写该字段，零行为变化）。
+    tts_text = str(getattr(unit, "tts_text", "") or "")
+    if tts_text and tts_text != str(unit.text):
+        payload["tts_text"] = tts_text
     return sha256_text(_canonical(payload))
 
 
@@ -788,8 +793,11 @@ def synthesize_unit(unit: SpeechUnit | dict, candidate_context: TtsCandidateCont
 
     sample_rate = int(unit.sample_rate or 24000)
     channels = 1
-    segments = segment_text(unit.text, caps.max_chars_per_call)
-    assert_lossless(unit.text, segments)
+    # 2026-11-28 O7：`tts_text` 是读音修正后的送检文本（空 = 与展示文本一致）。
+    # 分段/无损校验都基于真正要念的文本；`unit.text`（字幕展示）永不被改写。
+    speak_text = str(getattr(unit, "tts_text", "") or "") or unit.text
+    segments = segment_text(speak_text, caps.max_chars_per_call)
+    assert_lossless(speak_text, segments)
 
     request_key = request_key_for(unit, applied=applied,
                                   provider=caps.provider or unit.provider,

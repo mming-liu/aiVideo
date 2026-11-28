@@ -30,6 +30,7 @@ load_dotenv(_PROJECT_ROOT / ".env.keys")
 import json
 from tts import create_provider
 from tts.config import config as tts_config
+from tts.pronunciation_lexicon import apply_tts_text
 from tts.voice_registry import (NARRATOR_ROLE, NARRATOR_VOICE, UNIQUE_VOICE_TIERS,
                                 VOICE_TIER_EXTRA, VOICE_TIER_PRIMARY,
                                 VoicePoolExhaustedError, declared_voice_tier,
@@ -610,6 +611,7 @@ def dialogue_speech_unit(shot: dict, *, scope: dict, script_revision: str,
     legacy = voice.get("legacy_voice")
     unit = SpeechUnit(
         unit_id="shot-%d" % idx, kind="dialogue", text=text,
+        tts_text=apply_tts_text(text),
         scope=dict(scope), script_revision=str(script_revision),
         source_locator="shots[%d]" % idx, planned_window=_window_of(shot),
         source_index=idx, voice_role=str(voice_role or ""),
@@ -637,6 +639,7 @@ def narration_speech_unit(entry_index: int, *, text: str, scope: dict,
     legacy = voice.get("legacy_voice")
     return SpeechUnit(
         unit_id="narration-N%d" % int(entry_index), kind="narration", text=text,
+        tts_text=apply_tts_text(text),
         scope=dict(scope), script_revision=str(script_revision),
         source_locator="narration_lines[%d]" % int(entry_index),
         source_index=int(entry_index), planned_window=window, voice_role=voice_role,

@@ -112,6 +112,9 @@ class SpeechUnit:
     unit_id: str = ""
     kind: str = ""
     text: str = ""
+    #: 送 TTS 的读音修正文本（发音词典派生）；空 = 与 `text` 相同。
+    #: **不得**回写进字幕/台账：`text` 才是展示文本（2026-11-28 O7）。
+    tts_text: str = ""
     scope: dict = field(default_factory=dict)
     script_revision: str = ""
     source_locator: str = ""            # 源文本位置，如 `shots[3]` / `narration_lines[1]`
