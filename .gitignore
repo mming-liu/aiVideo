@@ -342,6 +342,8 @@ tests/enhancements/*
 !docs/step03-zero-call-check-2026-11-01.md
 !docs/shot01-patch-application-2026-11-01.md
 !docs/step02a-frame-contract/
+# 2026-11-28：离线优化计划（O0–O6）取证记录，逐包一份基线/收口记录
+!/docs/offline-optimization/
 
 # 2026-10：根目录「代理/复核隔离」调试产物曾被误入库
 # （`review-f-isolated-*` / `review-candidate-isolated-*` / `review-f-round2-*` / `unused.wav`）。
