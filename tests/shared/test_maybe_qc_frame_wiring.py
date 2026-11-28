@@ -19,6 +19,7 @@ if str(_ROOT) not in sys.path:
 def _patch(monkeypatch, result):
     import shared.image_qc as iq
     import shared.vimax_bridge as vb
+    import shared.vimax_bridge_parts.paths_and_cache as vbp
     from shared import post_budget
     calls, logs = [], []
     monkeypatch.setattr(iq, "maybe_qc_sync", lambda *a, **k: calls.append(a) or result)
@@ -26,7 +27,9 @@ def _patch(monkeypatch, result):
     monkeypatch.setattr(iq, "write_sidecar", lambda *a, **k: None)
     monkeypatch.setattr(iq, "qc_state", lambda p: {"status": "ok"})
     monkeypatch.setattr(post_budget, "record_qc_rejected", lambda kind: None)
-    monkeypatch.setattr(vb, "_bridge_log", lambda msg: logs.append(str(msg)))
+    # 2026-11-28 O11：`_maybe_qc_frame` 已迁入 paths_and_cache，它调用的是**该模块**
+    # 里的 `_bridge_log`（父模块上的补丁不会作用到子模块的全局查找）。
+    monkeypatch.setattr(vbp, "_bridge_log", lambda msg: logs.append(str(msg)))
     return vb, calls, logs
 
 

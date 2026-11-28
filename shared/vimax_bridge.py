@@ -39,6 +39,99 @@ from shared.paths import (
 
 import hashlib
 
+# 2026-11-28 O11：结构拆分后从 parts/ 显式回导，保持模块路径与
+# monkeypatch 语义不变（父模块仍是唯一对外入口）。
+from shared.vimax_bridge_parts.contract_and_refs import (  # noqa: F401
+    PORTRAIT_VIEW_ROLES,
+    PROMPT_TEMPLATE_VERSION,
+    _ACTION_STRONG_VERBS,
+    _ATTEMPT_VARIATIONS,
+    _BODY_POSITION_WORDS,
+    _CURRENT_FRAME_COLOR_WORDS,
+    _EXPLICIT_VEHICLE_MOTION,
+    _INERT_STATE_WORDS,
+    _LATER_STATE_WORDS,
+    _LF_GAZE_LOST_OBJECT,
+    _LF_VICTIM_HINTS,
+    _PROP_POSITION_WINDOW,
+    _PROP_POSITION_WORDS,
+    _PROP_SYNONYM_GROUPS,
+    _SPATIAL_FALLBACK_DEFAULTS,
+    _UNAPPROVED_PORTRAIT_STATUSES,
+    _bridge_log,
+    _build_camera_tree,
+    _build_char_anchor,
+    _build_kf_prop_scan,
+    _build_reference_list,
+    _characters_in_units,
+    _collect_scene_asset_refs,
+    _collect_space_object_refs,
+    _compose_frame_refs_by_category,
+    _dedupe_char_anchor_guard,
+    _dedupe_prompt_clauses,
+    _detect_action_subject,
+    _detect_spatial_fallback,
+    _detect_view_preference,
+    _dump_json,
+    _fixed_camera_shift_anchor,
+    _frame_spec_closeup,
+    _frame_spec_roster,
+    _inject_object_size_anchor,
+    _inject_tone_anchor,
+    _is_action_shot,
+    _is_image_file_readable_readonly,
+    _is_space_object_prop,
+    _load_portrait_stores_readonly,
+    _norm_portrait_char_name,
+    _portrait_approved_ok,
+    _portrait_identity_ok,
+    _prop_terms,
+    _resolve_missing_lf_desc,
+    _select_all_character_refs,
+    _select_best_reference,
+    _select_states_by_contract,
+    _state_present_for_char,
+    _strip_frame_action_result,
+    _strip_later_timeline_clauses,
+    _units_for_indices,
+)
+from shared.vimax_bridge_parts.ledger_and_errors import (  # noqa: F401
+    FAILURE_INFRA_UNAVAILABLE,
+    FAILURE_MISSING_ASSET,
+    FAILURE_QC_DISPUTE,
+    FAILURE_REQUEST_CONFLICT,
+    FAILURE_STOCHASTIC_MISS,
+    _NON_RETRYABLE_FAILURES,
+    _check_frame_contract_preflight,
+    _classify_generation_failure,
+    _resolve_ledger_qc_verdict,
+)
+from shared.vimax_bridge_parts.paths_and_cache import (  # noqa: F401
+    _PROTECTED_FRAME_MARKER,
+    _accept_doodle_refinement,
+    _adapter_resolved_model_id,
+    _cleanup_doodle_candidate,
+    _closeup_directive,
+    _configured_image_provider_model,
+    _del_frame_and_hash,
+    _del_frame_unless_protected,
+    _doodle_refine_first_frame,
+    _emit_stage4_ledger,
+    _frame_is_protected,
+    _generate_missing_portraits,
+    _get_frame_content_hash,
+    _head_portrait_path,
+    _keep_protected_frame,
+    _maybe_qc_frame,
+    _no_auto_repair,
+    _persist_frame_request_snapshot,
+    _protected_frames_env,
+    _resolve_style_anchor_path,
+    _shot_complexity_label,
+    _try_qc_repair,
+    _validate_frame,
+)
+
 # ─── API 冻结（v6.60.1，硬编码清理后的工程卫生项）───────────────────────────
 # 本模块 3900+ 行，拆分为包的计划已排期但延后；冻结期内：
 #   1) 下列名字是全部被跨模块消费的 API（含 image_qc/validation/prompt_builder
@@ -70,47 +163,21 @@ __all__ = [
     "_inject_frame_spec",
     "_doodle_refine_first_frame",
     "_build_char_anchor",
+    # 2026-11-28 O11：拆分后这些名字的调用点已移入 parts/，但它们仍是本模块的
+    # 公开命名空间（外部 import / 测试 monkeypatch 依赖），显式保留。
+    "Camera",
+    "_NO_ANIMAL_FEATURES_GUARD",
+    "_HAIR_STATIC_PHRASES",
+    "_HAIR_STATE_WORDS",
+    "_ANIMAL_FACE_KEYWORDS",
+    "_ANIMAL_METAPHOR_FACE_REPLACEMENTS",
+    "shot_work_dir",
+    "_safety_strip_action_result",
+    "fnmatch",
+    "hashlib",
 ]
 
-# 静默日志: 桥接日志写入 step02.log，不污染控制台
-def _bridge_log(msg: str):
-    """写入文件日志.
 
-    2026-11-14（U6-FIN WP1b）：落点必须走 :func:`shared.log_utils.resolve_log_file`。
-    旧写法硬编码 `chapter_dir()/step02.log`，于是 `step02b --plan-only` 一碰哈希
-    计算就往**正式章目录**建了 step02.log，被 production snapshot 判成
-    `production_write_detected`（exit 3）——plan-only 的"零写入"其实只是没写产物。
-    """
-    from shared.tee_logger import get_logger
-    try:
-        from shared.log_utils import resolve_log_file
-        log = get_logger(resolve_log_file("step02.log"), console_level="INFO")
-        log.verbose(msg)
-    except Exception as _degrade_exc:
-        from shared.degrade import note_degraded as _note_degraded
-        _note_degraded("shared/vimax_bridge.py:_bridge_log", _degrade_exc)
-
-# v6.x 重抽多样性：per-attempt prompt 微扰动菜单。
-# 仅在 QC 重试时按 attempt 下标取模追加到 desc_full 尾部，**仅局部变量**——
-# 不回写 shot 字段（08-29 膨胀教训），哈希基于 shot 字段不受影响，
-# QC 断言源也不受影响。attempt 0 恒为原 prompt（variation[0]=""）。
-# 维度选「构图/机位/人物间距」：QC 断言不查的视觉维度，廉价偏移构图分布。
-#
-# 🔴 红线（v6.x.x P3）：换扰动词时**必须避开 QC 断言维度**——
-#   - `build_claim_checks`（image_qc.py）拆的原子子句会扫这些词
-#   - 避开：「画左/画右/画中/前景/中景/远景/船头/船尾/中舱/甲板/
-#          水中/水下/水面/岸边/门口/车辕/仰卧/仰面/躺/跪/蹲/探出/
-#          俯身/倒/刀/匕首/短刃/武器/持/握/蒙面/白袍/血/伤/洇/红/
-#          伞/灯笼/马车/箫/肩宽/船宽」等
-#   - 安全：「构图/机位/角度/透视/间距/松紧/视野/景别/色温/氛围/笔触」等
-#   - 命中红词 → 扰动维度被 QC 判"与描述不符"产生 critical → 反向放大问题
-#     （修复为「保持维度与描述一致」反而把扰动抹掉）
-_ATTEMPT_VARIATIONS = (
-    "",                                            # attempt 0: 原 prompt
-    "镜头构图稍紧，人物间距略近。",                  # attempt 1
-    "机位角度略低，仰角透视自然。",                  # attempt 2
-    "构图稍宽松，人物间距略远。",                    # attempt 3+ 取模回到 0/1/2
-)
 
 # 首帧/尾帧生成需要风格前缀（与视频生成保持一致）
 from shared.style_prefix import (style_prefix_for_canvas, frame_canvas_ratio, sanitize_prompt,
@@ -128,54 +195,6 @@ from shared.style_prefix import IMAGE_HALLUCINATION_LOCK_PROMPT_NO_LAYOUT, image
 # 摄像机树构建（算法驱动，无 LLM）
 # ---------------------------------------------------------------------------
 
-def _build_camera_tree(shots: list[dict]) -> list[Camera]:
-    """根据 shot.cam_idx 算法构建多摄像机树.
-
-    规则：
-    1. 按 cam_idx 分组镜头（同一摄像机内镜头连续不交错，由 LLM 保证）
-    2. 摄像机按 idx 升序排列
-    3. 前一台摄像机作为后一台的 parent（线性链）
-    4. parent_shot_idx = 父摄像机最后一个镜头（转场衔接点）
-    """
-    # 按 cam_idx 分组（保持插入顺序）
-    cam_to_shots: dict[int, list[int]] = OrderedDict()
-    for shot in shots:
-        cam = shot.get("cam_idx", 1)
-        cam_to_shots.setdefault(cam, []).append(shot["index"])
-
-    cameras: list[Camera] = []
-    sorted_cam_ids = sorted(cam_to_shots.keys())
-
-    for i, cam_id in enumerate(sorted_cam_ids):
-        shot_idxs = cam_to_shots[cam_id]
-        parent_cam_idx = None
-        parent_shot_idx = None
-        reason = None
-        if i > 0:
-            # 前一台摄像机是本摄像机的 parent
-            prev_cam = cameras[i - 1]
-            parent_cam_idx = prev_cam.idx
-            parent_shot_idx = prev_cam.active_shot_idxs[-1]  # 父摄像机最后一个镜头
-            reason = f"摄像机{cam_id}承接摄像机{parent_cam_idx}的空间关系，"
-            reason += f"以摄像机{parent_cam_idx}最后一镜（镜头{parent_shot_idx}）为转场起点"
-
-        cameras.append(Camera(
-            idx=cam_id,
-            active_shot_idxs=shot_idxs,
-            parent_cam_idx=parent_cam_idx,
-            parent_shot_idx=parent_shot_idx,
-            reason=reason,
-            is_parent_fully_covers_child=False,
-            missing_info="机位切换，空间关系与景别发生变化" if parent_cam_idx else None,
-        ))
-
-    _bridge_log(f"  [bridge] camera_tree: {len(cameras)} 台摄像机 "
-          f"{[c.idx for c in cameras]}")
-    for c in cameras:
-        if c.parent_cam_idx:
-            _bridge_log(f"    cam_{c.idx} -> parent=cam_{c.parent_cam_idx}"
-                  f" 镜头{c.parent_shot_idx}")
-    return cameras
 
 
 async def build_working_dir(
@@ -468,1131 +487,66 @@ async def _gen_frames_for_camera_group(
 # 参考图列表构建（摄像机锚定）
 # ---------------------------------------------------------------------------
 
-def _build_kf_prop_scan(shot: dict, kf_idx_in_shot: int | None, kf_desc_raw: str) -> str:
-    """per-frame 道具扫描文本（09-13 逐帧重配根因：合并全文让 ff 武器词漏进无关帧）.
-
-    Returns:
-        ``<kf_desc_raw> <spec_parts>`` 当本帧 spec 存在且非空；否则降级 ``kf_desc_raw``。
-
-    静默 fallback（review 5）：
-      - frame_layouts 缺失 / 非 dict / 缺 kfs → kf_desc_raw
-      - kf_idx_in_shot 越界 / 为 None → kf_desc_raw
-      - kfs[kf_idx_in_shot] 是非 list / 元素非 dict → skip 该 entry
-      - 任何异常（数据污染）→ swallow，回 kf_desc_raw
-    永不返回空字符串（kf_desc_raw 前置非空保证）；不抛异常给上游。
-    """
-    try:
-        _kfs_spec = (shot.get("frame_layouts") or {}).get("kfs") or []
-        if kf_idx_in_shot is None or kf_idx_in_shot >= len(_kfs_spec):
-            return kf_desc_raw
-        _spec_parts: list[str] = []
-        for _e in (_kfs_spec[kf_idx_in_shot] or []):
-            if not isinstance(_e, dict):
-                continue
-            _spec_parts.extend(t for t in (_e.get("position"), _e.get("pose")) if t)
-            _pr = _e.get("props") or []
-            _spec_parts.extend(str(p) for p in (_pr if isinstance(_pr, list) else [_pr]) if p)
-        if _spec_parts:
-            return f"{kf_desc_raw} {' '.join(_spec_parts)}"
-    except Exception:
-        pass
-    return kf_desc_raw
 
 
-def _build_reference_list(
-    shot: dict,
-    bank: CharacterBank,
-    style_bank: StyleBank,
-    characters_data: list[dict],
-    camera_first_frames: dict[int, str],
-    cam_idx: int,
-    is_first_in_cam: bool,
-) -> list[str]:
-    """为镜头构建参考图列表，优先级：
-    1. 同摄像机首帧锚定（非首镜头时）
-    2. 角色正面肖像（prompt 中提到的角色）
-    3. 风格锚点（跨摄像机回退）
-
-    空镜不注入任何参考图：锚定帧/肖像里的人物会被图生图带进空镜画面。
-    """
-    refs: list[str] = []
-
-    # 空镜：不注入角色肖像（人物会渗入画面），但传入背景参考（风格锚点/
-    # 摄像机首帧），确保场景一致性而非纯 text-to-image 无约束生成。
-    if is_empty_scene(shot, characters_data):
-        # 优先使用摄像机首帧锚定（同摄像机的已生成帧，场景一致）
-        if not is_first_in_cam and cam_idx in camera_first_frames:
-            anchor = camera_first_frames[cam_idx]
-            if anchor and Path(anchor).exists():
-                refs.append(anchor)
-                _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=摄像机{cam_idx}首帧锚定（背景）")
-        # 回退到风格锚点（Ch1 锁定的全局风格）
-        if not refs and style_bank.is_locked():
-            style_anchor = style_bank.get_anchor_path()
-            if style_anchor and Path(style_anchor).exists():
-                refs.append(style_anchor)
-                _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，参考图=风格锚点（背景）")
-        if not refs:
-            _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，无可用背景参考图，降级为 text-to-image")
-        return refs[:1]
-
-    # 非首镜头：引用本摄像机首帧作为锚定（保证场景连贯，优先级最高）
-    if not is_first_in_cam and cam_idx in camera_first_frames:
-        anchor = camera_first_frames[cam_idx]
-        if anchor and Path(anchor).exists():
-            refs.append(anchor)
-            _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=摄像机{cam_idx}首帧锚定")
-
-    # 角色肖像：参考图上限 = min(用户偏好 IMAGE_MULTI_REF, 模型能力 active_image_ref_limit)
-    # 模型上限来自 shared.ref_compose 注册表（qwen=3 / seedream 4.5=14 / image-01=1 ...），
-    # 不写死在此；IMAGE_MULTI_REF 只是省钱偏好（软上限），模型能力是硬上限（防 400）。
-    from shared.config import IMAGE_MULTI_REF
-    from shared.ref_compose import active_image_ref_limit
-    ref_cap = min(IMAGE_MULTI_REF, active_image_ref_limit())
-    if ref_cap >= 2:
-        # 多参考图：剩余名额分给出镜角色（同框多角色各自传入肖像）
-        remaining = ref_cap - len(refs)
-        char_refs = _select_all_character_refs(shot, bank, characters_data, limit=remaining)
-        for cr in char_refs:
-            if cr not in refs:
-                refs.append(cr)
-        # 一个角色都没匹配到时，回退到单张最优参考图（含风格锚点）
-        if not char_refs:
-            char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
-            if char_ref and char_ref not in refs:
-                refs.append(char_ref)
-        return refs[:ref_cap]
-
-    # 单参考图（默认，向后兼容）：锚定帧优先，否则单张最优角色肖像
-    char_ref = _select_best_reference(shot, bank, style_bank, characters_data)
-    if char_ref and char_ref not in refs:
-        refs.append(char_ref)
-
-    return refs[:1]  # 单参考图模式，取最优第一个
 
 
 # ---------------------------------------------------------------------------
 # 角色肖像生成
 # ---------------------------------------------------------------------------
 
-def _units_for_indices(script: dict, only_indices) -> list[dict]:
-    """按 --shots 选出目标单元（hook 的 index=0 + 指定 shot）."""
-    wanted = {int(i) for i in only_indices}
-    units: list[dict] = []
-    hook = script.get("hook")
-    if isinstance(hook, dict) and 0 in wanted:
-        units.append(hook)
-    for shot in script.get("shots") or []:
-        try:
-            if int(shot.get("index", -1)) in wanted:
-                units.append(shot)
-        except (TypeError, ValueError):
-            continue
-    return units
 
 
-def _characters_in_units(characters: list[dict], units: list[dict]) -> list[dict]:
-    """目标单元里实际出场的角色（spec 出镜名单优先，退回全文匹配）.
-
-    spec 名单走 `_frame_spec_roster`（per-frame 事实源）；没有 spec 时用角色名
-    是否出现在单元文本里兜底。宁可少生成（后续全量跑会补齐），不连带全章。
-    """
-    if not units:
-        return []
-    names: set = set()
-    for unit in units:
-        for frame_kind in ("ff", "lf"):
-            try:
-                names |= set(_frame_spec_roster(unit, frame_kind) or ())
-            except Exception:
-                pass
-        kfs = (unit.get("frame_layouts") or {}).get("kfs") or []
-        for i in range(len(kfs)):
-            try:
-                names |= set(_frame_spec_roster(unit, "keyframe", i) or ())
-            except Exception:
-                pass
-        for entry in unit.get("char_layout") or []:
-            if isinstance(entry, dict):
-                for key in ("name", "identifier"):
-                    if entry.get(key):
-                        names.add(str(entry[key]))
-    text = json.dumps(units, ensure_ascii=False)
-    out = []
-    for char in characters:
-        ident = str(char.get("identifier") or "")
-        if ident and (ident in names or ident in text):
-            out.append(char)
-    return out
 
 
-async def _generate_missing_portraits(
-    characters: list[dict],
-    bank: CharacterBank,
-    image_adapter,
-    chapter_idx: int,
-) -> dict:
-    """用 CharacterPortraitsGenerator 为新角色生成前/侧/背面肖像.
-
-    已有肖像的角色直接复用，新角色生成后注册到 bank.
-    返回 ViMax 兼容的 character_portraits_registry dict.
-
-    肖像生成需要横屏白底纯角色图（不加风格前缀），与首帧视频的竖屏+前缀不同。
-    因此创建专用 portrait_adapter：横屏尺寸 + 跳过风格前缀/合规清洗。
-    """
-    from vimax.agents.character_portraits_generator import CharacterPortraitsGenerator
-    from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
-
-    # 肖像专用适配器：9:16 竖屏全身（与分镜帧同画幅，脸占画面高度更大）、
-    # 不加风格前缀（风格由生成器按 VIDEO_STYLE 注入）、不替换敏感词（英文 prompt）。
-    # 2026-08-22 升级 1440x2560（= 3,686,400 像素）满足 Seedream 4.5 像素下限 3686400
-    portrait_adapter = ImageGeneratorAiVideoAdapter(
-        size="1440x2560",
-        skip_prefix=True,
-        skip_sanitize=True,
-    )
-    portrait_gen = CharacterPortraitsGenerator(image_generator=portrait_adapter)
-    # 按量试跑：一次失败即中止整批（默认关闭，保持历史"逐视角继续"行为）。
-    _fail_fast = os.getenv("STEP02A_FAIL_FAST", "0").strip() == "1"
-    registry = {}  # 注掉的代码保持不变
-
-    for char in characters:
-        identifier = char.get("identifier", "")
-        if not identifier:
-            continue
-
-        # 已有肖像且图片文件存在 → 直接复用
-        if bank.has_character(identifier):
-            entry = bank.get_character(identifier)
-            if entry and entry.get("portraits"):
-                portraits = entry["portraits"]
-                # 检查实际文件是否存在（bank 有记录但旧图片已删除时需重生成）
-                front_p = portraits.get("front", {}).get("path", "")
-                if front_p and Path(front_p).exists():
-                    registry[identifier] = portraits
-                    _bridge_log(f"  [bank] 复用角色 {identifier} 的已有肖像")
-                    bank.update_character_chapter(identifier, chapter_idx)
-                    bank.update_dynamic_features(identifier, char.get("dynamic_features", ""))
-                    continue
-                else:
-                    _bridge_log(f"  [bank] 角色 {identifier} 肖像文件不存在，重新生成...")
-
-        # 新角色 → 生成肖像
-        char_in_scene = CharacterInScene(
-            idx=0,
-            identifier_in_scene=identifier,
-            is_visible=char.get("is_visible", True),
-            static_features=char.get("static_features", ""),
-            dynamic_features=char.get("dynamic_features", ""),
-        )
-
-        portrait_dir = bank.get_portrait_dir(identifier)
-        portrait_dir.mkdir(parents=True, exist_ok=True)
-
-        # === 基础图优先策略 ===
-        # Step 1: 生成基础全景图（front = base），锁定核心特征并传入无人物画风参考锚点
-        base_path = portrait_dir / "base.png"
-        if not base_path.exists():
-            style_ref = _resolve_style_anchor_path()
-            if style_ref:
-                _sa_sc = Path(style_ref).with_name(f"{Path(style_ref).stem}_hallucination.json")
-                if _sa_sc.is_file():
-                    try:
-                        _sc_data = json.loads(_sa_sc.read_text(encoding="utf-8"))
-                        if isinstance(_sc_data.get("person_count"), int) and _sc_data["person_count"] > 0:
-                            _bridge_log(
-                                f"  [bank] 警告：画风锚点 {style_ref} 含 {_sc_data['person_count']} 名人物，"
-                                "建议改用纯空镜画风锚点"
-                            )
-                    except Exception:
-                        pass
-            _bridge_log(
-                f"  [bank] 生成 {identifier} 基础全景图"
-                + (f"（画风参考={Path(style_ref).name}）" if style_ref else "")
-                + " ..."
-            )
-            try:
-                img_out = await portrait_gen.generate_base_portrait(
-                    char_in_scene,
-                    style="",
-                    save_path=str(base_path),
-                    style_reference_path=style_ref,
-                )
-                if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
-                    img_out.data.save(str(base_path))
-                elif hasattr(img_out, "save"):
-                    img_out.save(str(base_path))
-                else:
-                    _bridge_log(f"  [bank] {identifier} 基础全景图: 未知返回类型 {type(img_out)}")
-                    continue
-                _bridge_log(f"  [bank] {identifier} 基础全景图 -> {base_path}")
-            except Exception as e:
-                _bridge_log(f"  [bank] {identifier} 基础全景图生成失败: {e}")
-                if _fail_fast:
-                    raise
-                continue
-
-        # Step 2: 基于基础图生成侧面照
-        side_path = portrait_dir / "side.png"
-        if not side_path.exists() and base_path.exists():
-            _bridge_log(f"  [bank] 基于基础图生成 {identifier} 侧面肖像 ...")
-            try:
-                img_out = await portrait_gen.generate_side_portrait(
-                    char_in_scene, base_image_path=str(base_path),
-                    save_path=str(side_path),
-                )
-                if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
-                    img_out.data.save(str(side_path))
-                elif hasattr(img_out, "save"):
-                    img_out.save(str(side_path))
-                _bridge_log(f"  [bank] {identifier} 侧面肖像 -> {side_path}")
-            except Exception as e:
-                _bridge_log(f"  [bank] {identifier} 侧面肖像生成失败: {e}")
-                if _fail_fast:
-                    raise
-
-        # Step 3: 基于基础图生成背面照
-        back_path = portrait_dir / "back.png"
-        if not back_path.exists() and base_path.exists():
-            _bridge_log(f"  [bank] 基于基础图生成 {identifier} 背面肖像 ...")
-            try:
-                img_out = await portrait_gen.generate_back_portrait(
-                    char_in_scene, base_image_path=str(base_path),
-                    save_path=str(back_path),
-                )
-                if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
-                    img_out.data.save(str(back_path))
-                elif hasattr(img_out, "save"):
-                    img_out.save(str(back_path))
-                _bridge_log(f"  [bank] {identifier} 背面肖像 -> {back_path}")
-            except Exception as e:
-                _bridge_log(f"  [bank] {identifier} 背面肖像生成失败: {e}")
-                if _fail_fast:
-                    raise
-
-        # Step 4: 基于基础图生成独立高清面部特写（组合参考图法，锁脸防变脸）
-        # 面部是"变脸"重灾区——三视图 + 单独面部特写同时输入，模型优先锁面部特征。
-        face_path = portrait_dir / "face.png"
-        if not face_path.exists() and base_path.exists():
-            _bridge_log(f"  [bank] 基于基础图生成 {identifier} 面部特写肖像 ...")
-            try:
-                img_out = await portrait_gen.generate_face_closeup(
-                    char_in_scene, base_image_path=str(base_path),
-                    save_path=str(face_path),
-                )
-                if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
-                    img_out.data.save(str(face_path))
-                elif hasattr(img_out, "save"):
-                    img_out.save(str(face_path))
-                _bridge_log(f"  [bank] {identifier} 面部特写肖像 -> {face_path}")
-            except Exception as e:
-                _bridge_log(f"  [bank] {identifier} 面部特写肖像生成失败: {e}")
-                if _fail_fast:
-                    raise
-
-        # 构建 portraits dict（兼容旧 front 字段名）
-        portraits = {}
-        if base_path.exists():
-            portraits["front"] = {
-                "path": str(base_path.resolve()),
-                "description": f"{identifier} 基础全景肖像（参考源）",
-            }
-            portraits["base"] = {
-                "path": str(base_path.resolve()),
-                "description": f"{identifier} 基础全景肖像",
-            }
-        if side_path.exists():
-            portraits["side"] = {
-                "path": str(side_path.resolve()),
-                "description": f"{identifier} 侧面全身肖像",
-            }
-        if back_path.exists():
-            portraits["back"] = {
-                "path": str(back_path.resolve()),
-                "description": f"{identifier} 背面全身肖像",
-            }
-        if face_path.exists():
-            portraits["face"] = {
-                "path": str(face_path.resolve()),
-                "description": f"{identifier} 面部特写肖像（锁脸防变脸）",
-            }
-
-        # 注册到 bank
-        if not bank.has_character(identifier):
-            bank.register_character(
-                identifier=identifier,
-                static_features=char.get("static_features", ""),
-                dynamic_features=char.get("dynamic_features", ""),
-                chapter_num=chapter_idx,
-            )
-        bank.set_portraits(identifier, portraits)
-        bank.save()
-        if portraits:
-            registry[identifier] = portraits
-
-    return registry
 
 
 # ---------------------------------------------------------------------------
 # 参考图选择（增强版：视角检测 + 多字段搜索 + 摄像机优先）
 # ---------------------------------------------------------------------------
 
-def _detect_view_preference(text: str) -> str:
-    """从中文文本中检测角色视角偏好.
-
-    返回 "front" / "side" / "back"，默认 "front".
-    """
-    back_kw = {"背面", "背影", "背向", "背对", "远去", "背身", "后背", "背朝"}
-    side_kw = {"侧身", "侧面", "侧脸", "侧目", "斜视", "半侧", "侧对", "侧立", "侧坐", "侧卧"}
-    front_kw = {"正面", "面对", "面向", "正视", "直面", "看向镜头", "正对", "直视"}
-
-    for kw in back_kw:
-        if kw in text:
-            return "back"
-    for kw in side_kw:
-        if kw in text:
-            return "side"
-    for kw in front_kw:
-        if kw in text:
-            return "front"
-    return "front"  # 默认正面
 
 
-def _select_best_reference(
-    shot: dict,
-    bank: CharacterBank,
-    style_bank: StyleBank,
-    characters_data: list[dict],
-) -> str | None:
-    """为镜头选择最优单张参考图（增强版）.
-
-    增强点:
-    1. 搜索 ff_desc、prompt 两个字段（不含 context_bridge —— 它描述的是
-       上一镜头画面，常含上一镜头角色名，会把无关角色肖像注入本镜头）
-    2. 根据描述中的视角词（侧身/背面/正面）选择最合适的角色肖像视图
-    3. 视角不存在时按 front → side → back 降级
-    4. 空镜（画面不应出现人物）不注入任何参考图，避免参考图里的人物
-       被图生图带进空镜画面
-
-    优先级:
-    1. ff_desc/prompt 中提到某角色 + 有匹配视角的肖像 → 用该视角
-    2. 风格锚点（Ch2+ 或 Ch1 已锁定；仅非空镜）
-    3. None（text-to-image）
-    """
-    # 空镜：任何含人物的参考图都会诱导模型把人画进空镜
-    if is_empty_scene(shot, characters_data):
-        _bridge_log(f"  [bridge] 镜头{shot['index']}: 空镜，不注入参考图")
-        return None
-
-    ff_desc = shot.get("ff_desc", "").strip() or ""
-    prompt = shot.get("prompt", "")
-    search_text = f"{ff_desc} {prompt}"
-
-    # 视角检测
-    view_pref = _detect_view_preference(search_text)
-
-    # 检查角色名是否出现在搜索文本中
-    for char in characters_data:
-        identifier = char.get("identifier", "")
-        if identifier and identifier in search_text:
-            entry = bank.get_character(identifier)
-            if entry and entry.get("portraits"):
-                portraits = entry["portraits"]
-                # 特写镜头：face 面部特写优先（锁五官防变脸，组合参考图法）；
-                # 否则按优先级尝试：检测到的视角 → front → side → back
-                is_closeup = any(kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部"))
-                if is_closeup:
-                    face_p = portraits.get("face", {}).get("path")
-                    if face_p and Path(face_p).exists():
-                        _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=角色 {identifier} 面部特写")
-                        return face_p
-                for view in [view_pref, "front", "side", "back"]:
-                    p = portraits.get(view, {}).get("path")
-                    if p and Path(p).exists():
-                        view_tag = f"（视角={view}" + (" 自动匹配)" if view == view_pref else " 降级)")
-                        _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=角色 {identifier} {view}肖像{view_tag}")
-                        return p
-                # 极端情况：portraits dict 里没有任何视图
-                break
-
-    # 回退：风格锚点
-    anchor = style_bank.get_anchor_path()
-    if anchor and Path(anchor).exists():
-        _bridge_log(f"  [bridge] 镜头{shot['index']}: 参考图=风格锚点")
-        return anchor
-
-    return None
 
 
-def _select_all_character_refs(
-    shot: dict,
-    bank: CharacterBank,
-    characters_data: list[dict],
-    limit: int = 2,
-) -> list[str]:
-    """为镜头选择所有出镜角色的肖像参考图（多角色一致性）.
-
-    与 _select_best_reference 的区别：后者只返回单张最优参考图（含风格锚点回退），
-    本函数遍历 ff_desc/prompt 中提到的**所有**角色，返回各自最优视角肖像，
-    用于同框多角色镜头——每个角色都传入自己的肖像，避免次要角色长相漂移。
-
-    Args:
-        limit: 最多返回的角色肖像数量（默认 2，配合锚定帧共 3 张）
-
-    Returns:
-        角色肖像路径列表（按 ff_desc/prompt 中出现顺序），不含锚定帧/风格锚点
-    """
-    if limit <= 0:
-        return []
-
-    ff_desc = shot.get("ff_desc", "").strip() or ""
-    prompt = shot.get("prompt", "")
-    search_text = f"{ff_desc} {prompt}"
-    view_pref = _detect_view_preference(search_text)
-
-    refs: list[str] = []
-    is_closeup = any(kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部"))
-    for char in characters_data:
-        identifier = char.get("identifier", "")
-        if not identifier or identifier not in search_text:
-            continue
-        entry = bank.get_character(identifier)
-        if not entry or not entry.get("portraits"):
-            continue
-        portraits = entry["portraits"]
-        # 特写镜头：face 面部特写优先（锁五官防变脸）
-        if is_closeup:
-            face_p = portraits.get("face", {}).get("path")
-            if face_p and Path(face_p).exists():
-                refs.append(face_p)
-                _bridge_log(f"  [bridge] 镜头{shot['index']}: 多角色参考=角色 {identifier} 面部特写")
-                if len(refs) >= limit:
-                    break
-                continue
-        # 按优先级尝试：检测到的视角 → front → side → back
-        for view in [view_pref, "front", "side", "back"]:
-            p = portraits.get(view, {}).get("path")
-            if p and Path(p).exists():
-                refs.append(p)
-                _bridge_log(f"  [bridge] 镜头{shot['index']}: 多角色参考=角色 {identifier} {view}肖像")
-                break
-        if len(refs) >= limit:
-            break
-
-    return refs
 
 
 # ---------------------------------------------------------------------------
 # 首帧/尾帧生成（带校验重试）
 # ---------------------------------------------------------------------------
 
-def _validate_frame(path: str, min_kb: float = 5) -> bool:
-    """校验生成的帧图片文件是否有效（文件大小 > min_kb KB）."""
-    if not path:
-        return False
-    p = Path(path)
-    if not p.exists():
-        return False
-    size_kb = p.stat().st_size / 1024
-    if size_kb < min_kb:
-        _bridge_log(f"  [bridge] 帧图片过小: {p} ({size_kb:.1f}KB < {min_kb}KB)，判定无效")
-        return False
-    return True
 
 
-async def _maybe_qc_frame(shot: dict, frame_path: str | None, frame_kind: str,
-                          characters: list | None = None, empty_scene: bool = False,
-                          prompt: str | None = None, variation: str = "",
-                          kf_index: int | None = None) -> bool:
-    """帧生成后执行视觉质检（软失败，不阻断流水线）.
-
-    通过 shared/image_qc.py（OpenCode Go 视觉通道）对帧图做内容质检；
-    QC 成功（ok=True）即写 sidecar（检出与否都写，has_hallucination=false 表示"已检过无问题"，
-    供 should_run_qc 靠 sidecar 新鲜度跳过重复质检）。默认封顶 warning，不触发 step02b 自动重生成。
-    asyncio.to_thread 避免阻塞事件循环（单次质检 2-4 分钟）。
-
-    prompt: v1.1 语义核对用——实际生成图片的最终 prompt。不传时从
-    shot["ff_desc_final"]/["lf_desc_final"] 取（_gen_first_frame_async 挂载）。
-
-    Returns:
-        bool（B7 修复 08-10）：True = 检出 critical（调用方应 unlink 坏帧 + 删哈希
-        触发重生成——修复 QC 只记日志、坏帧继续进视频的断链）；False = 无 critical。
-    """
-    if not frame_path:
-        return False
-    # 未显式传 prompt 时，从 shot 挂载的最终 prompt 取（QC 语义核对用）
-    if prompt is None and isinstance(shot, dict):
-        if frame_kind == "last_frame":
-            prompt = shot.get("lf_desc_final") or shot.get("ff_desc_final")
-        elif frame_kind == "keyframe":
-            prompt = ((shot.get(f"kf_{kf_index}_desc_final")
-                       if kf_index is not None else None)
-                      or shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
-                      or shot.get("ff_desc_final") or shot.get("lf_desc_final"))
-        else:
-            prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final")
-    try:
-        from shared.image_qc import (
-            build_qc_frame_meta, frame_identity, maybe_qc_sync, qc_provider,
-            qc_state, write_sidecar,
-        )
-        # U4：QC 开始前记录图片摘要——写回时再次核对，期间换图则结果记 qc_stale，
-        # 绝不给新图写有效 PASS。
-        pre = frame_identity(frame_path)
-        pre_digest = pre.get("sha256") or None
-        frame_meta = build_qc_frame_meta(
-            shot, frame_kind, characters, kf_index=kf_index, frame_path=frame_path,
-        )
-        result = await asyncio.to_thread(
-            maybe_qc_sync, frame_path, shot, frame_kind, characters, empty_scene, prompt,
-            kf_index,
-        )
-        # v6.54.1：完整结果暂存——QC critical 分支据此构建局部修复计划
-        try:
-            shot["_qc_last"] = result
-        except Exception:
-            pass
-        if result.error == "skipped":
-            # S05：依据真实 sidecar 绑定状态记账，不把 settled qc_rejected 伪装成 qc_not_run 或放行。
-            try:
-                settled = qc_state(frame_path, expected_frame=frame_meta)
-            except TypeError:
-                settled = qc_state(frame_path)
-            settled_status = str(settled.get("status") or "qc_not_run")
-            _bridge_log(
-                f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
-                f"sidecar 已结算 ({settled_status})，跳过重检"
-            )
-            from shared import request_events
-            try:
-                evt = settled_status if settled_status in ("qc_passed", "qc_rejected") else "qc_not_run"
-                request_events.emit(
-                    evt, kind="image_qc",
-                    frame={"path": str(frame_path), "sha256": pre_digest or ""},
-                    reason=("sidecar_settled" if evt != "qc_not_run"
-                            else str(settled.get("reason") or "qc_disabled")),
-                )
-            except Exception as _degrade_exc:
-                from shared.degrade import note_degraded as _note_degraded
-                _note_degraded("shared/vimax_bridge.py:_maybe_qc_frame", _degrade_exc)
-            return settled_status == "qc_rejected"
-        if not result.ok:
-            # 调用失败：写结构化 qc_call_failed（含旧结果历史），下次仍会重检。
-            try:
-                write_sidecar(Path(frame_path), result, pre_digest=pre_digest,
-                              frame_meta=frame_meta)
-            except Exception as e:
-                _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
-                            f"失败记录写入失败: {e}")
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
-                        f"质检失败（qc_call_failed）: {result.error}")
-            return False
-        # QC 成功 → 写 sidecar（检出与否都写），供下次跳过与 step02b 消费
-        wrote_status = ""
-        try:
-            write_sidecar(Path(frame_path), result, pre_digest=pre_digest,
-                          frame_meta=frame_meta)
-            wrote_status = qc_state(frame_path).get("status", "")
-        except Exception as e:
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} sidecar 写入失败: {e}")
-        if wrote_status == "qc_stale":
-            # 检查期间图片被替换：本次结果不属于新图，不能据此删帧。
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} "
-                        f"检查期间图片已变化，结果记 qc_stale（不删帧）")
-            return False
-        # v6.53 A.4：尝试日志落盘（人数/问答答案/判定），重抽对比「哪里变了」
-        try:
-            import time as _time
-            log_path = Path(frame_path).parent / f"{Path(frame_path).stem}_qc_log.json"
-            log = []
-            if log_path.exists():
-                try:
-                    log = json.loads(log_path.read_text(encoding="utf-8"))
-                except Exception:
-                    log = []
-            log.append({
-                "ts": _time.strftime("%Y-%m-%d %H:%M:%S"),
-                "provider": qc_provider(),
-                "has_hallucination": result.has_hallucination,
-                "person_count": getattr(result, "person_count", None),
-                "answers": getattr(result, "answers", None),
-                "issues": [{"category": i.category, "severity": i.severity,
-                            "description": i.description} for i in result.issues],
-                # v6.x C 项留痕：per-attempt 变体
-                "variation": variation,
-            })
-            # v6.55 D 方案窄化 B 留痕：high 类关键断言跨 attempt 翻转点
-            # （理论上矛盾率 <10%，出现意味着模型状态异常而非 VLM 噪声）
-            _flips = getattr(result, "unstable_flips", None)
-            if _flips:
-                log[-1]["unstable_flips"] = _flips
-            log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception as e:
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 尝试日志写入失败: {e}")
-        has_critical = result.has_hallucination and any(
-            getattr(i, "severity", "") == "critical" for i in result.issues)
-        if has_critical:
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出 critical，"
-                        f"将删帧重生成: " + "; ".join(
-                            f"[{i.severity}]{i.category} {i.description}" for i in result.issues))
-            # M0.3：把刚生成、已被质检拒收的图片从 generated_ok 改判为 qc_rejected。
-            # 只在账本启用时有副作用；无 generated_ok 可扣时返回 False（不制造负计数）。
-            from shared import post_budget
-            try:
-                post_budget.record_qc_rejected("image")
-            except Exception as _degrade_exc:
-                from shared.degrade import note_degraded as _note_degraded
-                _note_degraded("shared/vimax_bridge.py:_maybe_qc_frame", _degrade_exc)
-            return True
-        if result.has_hallucination:
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 检出问题: "
-                        + "; ".join(f"[{i.severity}]{i.category} {i.description}" for i in result.issues))
-        else:
-            _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检通过")
-        return False
-    except Exception as e:
-        _bridge_log(f"  [QC] shot_{shot.get('index','?')} {frame_kind} 质检异常（不阻断）: {e}")
-        return False
 
 
-def _no_auto_repair() -> bool:
-    """是否禁止自动修图（QC i2i 修复 / doodle 二修）.
-
-    S22-3：修图是额外 i2i 请求，会挤占图片 POST 预算，必须在**发送前**禁止，
-    而不是靠预算耗尽。默认**关闭修图**；只有显式 `IMAGE_QC_REPAIR_ENABLED=1`
-    且 QC 允许重抽（`QC_MAX_ATTEMPTS > 1`）时才开启。
-    """
-    if os.getenv("STEP02A_NO_REPAIR", "0").strip() == "1":
-        return True
-    if os.getenv("IMAGE_QC_REPAIR_ENABLED", "0").strip() != "1":
-        return True
-    try:
-        return int(os.getenv("QC_MAX_ATTEMPTS", "2") or "2") <= 1
-    except ValueError:
-        return True
 
 
-def _cleanup_doodle_candidate(frame_path, tmp) -> None:
-    """二修未被采纳时清理候选产物，只保留 `*_repair_qc_log.json` 审计留痕.
-
-    失败候选图与 `<stem>_repair_hallucination.json` 没有消费者；留在镜目录里会让
-    人工排查把「被拒的图」当成可用帧。红框标注图同理，一并删除。
-    """
-    from shared.image_qc import sidecar_path
-
-    base = Path(frame_path)
-    for path in (Path(tmp), sidecar_path(Path(tmp)),
-                 base.parent / f"{base.stem}_doodle.png"):
-        try:
-            path.unlink(missing_ok=True)
-        except OSError as e:
-            _bridge_log(f"  [REPAIR] 候选清理失败 {path}: {e}")
 
 
-async def _try_qc_repair(image_adapter, shot: dict, frame_path: str, frame_kind: str,
-                         characters: list | None, empty_scene: bool, idx, kf_index: int | None = None) -> bool:
-    """QC critical 后先试局部修复（v6.54.1 先修后抽）.
-
-    build_repair_plan 分类：局部可修（睁眼/刀接触/红痕/篷/发光）→ doodle 红框
-    i2i 改写 1 次（复用 v6.30 机制，bbox 来自 L1 检测）→ 复检；复检通过 = True
-    （帧已替换，哈希不删——下次缓存命中的就是修好的图）。全局失败/编辑失败/
-    复检仍 critical → False（调用方走原删帧重抽路径）。
-    """
-    if _no_auto_repair():
-        _bridge_log(f"  [REPAIR] shot_{idx} {frame_kind} 已禁用自动修图（STEP02A_NO_REPAIR=1）")
-        return False
-    from shared.image_qc import build_repair_plan
-    qc_result = shot.get("_qc_last")
-    if not qc_result:
-        return False
-    plan = build_repair_plan(shot, frame_kind, qc_result)
-    if plan.get("action") != "edit":
-        _bridge_log(f"  [REPAIR] shot_{idx} {frame_kind} 走重抽: {plan.get('reason', '')[:60]}")
-        return False
-    _bridge_log(f"  [REPAIR] shot_{idx} 局部修复 ({','.join(plan.get('matched_patterns', []))}) "
-                f"region={plan['bbox_ratio']} area={plan.get('area_pct')}%")
-    tmp = Path(frame_path).parent / f"{Path(frame_path).stem}_repair.png"
-    edited = await _doodle_refine_first_frame(
-        image_adapter, frame_path, plan["bbox_ratio"], plan["edit_prompt"], str(tmp), idx)
-    if not edited or not _validate_frame(edited):
-        _cleanup_doodle_candidate(frame_path, tmp)
-        _bridge_log("  [REPAIR] 编辑失败/输出无效，回落重抽")
-        return False
-    # P0-6：任何二修覆盖原图前都必须复检（含「不得保留红框」断言）；
-    # 免检/跳过 QC 不算通过。旧实现先 replace 再复检，且把 error=skipped 当通过。
-    if await _accept_doodle_refinement(edited, frame_path, shot, frame_kind, characters,
-                                       empty_scene, prompt=None, kf_index=kf_index):
-        _bridge_log("  [REPAIR] 修复后复检通过")
-        return True
-    _cleanup_doodle_candidate(frame_path, tmp)
-    _bridge_log("  [REPAIR] 修复后复检未通过/未执行，回落重抽")
-    return False
 
 
-def _del_frame_and_hash(frame_path, hash_path, label, idx, logger):
-    """QC critical 后删除坏帧 + 哈希文件（B7 修复，触发下次重生成）."""
-    try:
-        Path(frame_path).unlink(missing_ok=True)
-    except Exception:
-        pass
-    try:
-        Path(hash_path).unlink(missing_ok=True)
-    except Exception:
-        pass
-    logger.verbose(f"  [FRAME] {label} shot_{idx} QC critical，已删坏帧+哈希，重新生成")
 
 
-#: 2026-11-14 Step D：受保护帧标记（只影响「删不删」，不影响生成与 QC）。
-_PROTECTED_FRAME_MARKER = ".lock_frame"
 
 
-def _protected_frames_env() -> list[str]:
-    raw = os.getenv("STEP02A_PROTECTED_FRAMES") or ""
-    return [part.strip().lower() for part in re.split(r"[,;]", raw) if part.strip()]
 
 
-def _frame_is_protected(shot: dict, frame_path, frame_kind: str = "",
-                        kf_index: int | None = None) -> bool:
-    """该帧是否被显式锁定：受保护帧即使 QC critical 也不得删除原图.
-
-    两种声明方式（都只影响删除动作）：
-
-    1. 镜头目录标记文件（推荐，按镜头/按帧）：
-       `.lock_frame`（整镜）或 `.lock_frame_<frame_kind>`
-       （`first_frame` / `last_frame` / `keyframe_<i>`）；
-    2. 环境变量 `STEP02A_PROTECTED_FRAMES`（逗号/分号分隔）：
-       - `<shot_index>:<frame_kind>[:<kf_index>]`，如 `2:first_frame`；
-       - 路径 glob（对完整路径与文件名各匹配一次），如 `*first_frame.png`。
-
-    未声明 = 旧行为（QC critical 仍按 B7 删帧重抽）。
-    """
-    path = Path(frame_path)
-    shot_dir = path.parent
-    kind = str(frame_kind or "")
-    markers = [_PROTECTED_FRAME_MARKER]
-    if kind:
-        markers.append("%s_%s" % (_PROTECTED_FRAME_MARKER, kind))
-    if kind == "keyframe" and kf_index is not None:
-        markers.append("%s_keyframe_%d" % (_PROTECTED_FRAME_MARKER, int(kf_index)))
-    for name in markers:
-        if (shot_dir / name).exists():
-            return True
-
-    idx = str((shot or {}).get("index") if isinstance(shot, dict) else "")
-    for token in _protected_frames_env():
-        if ":" in token:
-            parts = token.split(":")
-            if parts[0] != idx:
-                continue
-            if len(parts) >= 2 and parts[1] and parts[1] != kind:
-                continue
-            if len(parts) >= 3 and parts[2]:
-                try:
-                    if int(parts[2]) != int(kf_index):
-                        continue
-                except (TypeError, ValueError):
-                    continue
-            return True
-        if (fnmatch.fnmatch(path.as_posix().lower(), token)
-                or fnmatch.fnmatch(path.name.lower(), token)):
-            return True
-    return False
 
 
-def _del_frame_unless_protected(shot, frame_path, hash_path, label, idx, logger,
-                                frame_kind: str = "",
-                                kf_index: int | None = None) -> bool:
-    """QC critical 的删帧动作：受保护帧只告警、不删；返回是否真的删除.
-
-    返回 True = 已删除（调用方继续重抽）；False = 受保护，调用方必须保留原图。
-    """
-    if _frame_is_protected(shot, frame_path, frame_kind, kf_index):
-        logger.verbose(
-            f"  [FRAME] {label} shot_{idx} 受保护，QC critical 不删原图"
-            "（sidecar 已记录，交人工复核）")
-        return False
-    _del_frame_and_hash(frame_path, hash_path, label, idx, logger)
-    return True
 
 
-def _keep_protected_frame(shot, frame_path, frame_kind: str, logger, label, idx,
-                          kf_index: int | None = None) -> bool:
-    """受保护帧防覆写：原图存在、锁定且可读 ⇒ 不重新生成（--force 也不覆写）.
-
-    2026-11-15（U7 收口）：``.lock_frame`` 原先只拦「QC critical 删帧」——哈希
-    失配（如参考表落点/fit_refs 调整改变哈希键）与 ``--force`` 仍会原位覆写已
-    验收原图。锁保语义补全为「**不删、也不覆写**」：确需重生时由人工移除
-    标记文件（或解除 STEP02A_PROTECTED_FRAMES）。原图不可读（损坏/截断）
-    时不拦，允许照常重生成。
-    """
-    path = Path(frame_path)
-    if not path.exists() or not _frame_is_protected(shot, frame_path, frame_kind, kf_index):
-        return False
-    if not _validate_frame(str(path)):
-        logger.verbose(f"  [FRAME] {label} shot_{idx} 已锁定但原图不可读，按未锁定处理重新生成")
-        return False
-    logger.verbose(f"  [FRAME] {label} shot_{idx} 受保护：跳过重新生成，保留原图"
-                   "（哈希失配/--force 不覆写锁保帧；确需重生请删除 .lock_frame 标记）")
-    return True
 
 
-def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
-                            reference_paths: list | None = None,
-                            lock_kind: str = "layout",
-                            extra_fields: dict | None = None, characters: list | None = None,
-                            *, frame_kind: str | None = None) -> str:
-    """计算首帧/尾帧的稳定哈希值 v4.
-
-    v4: 新增 _prompt_sig() 对实际图片 prompt (ff_desc/lf_desc) 做规范化哈希，
-    解决分镜词（ff_desc/lf_desc/motion_desc）变更后图片缓存不失效的问题。
-    规范化（strip + 统一空白字符）避免 LLM 微小格式差异导致永不命中。
-
-    v3: 使用稳定字段（main_subject/scene/core_keywords）代替完整 prompt，
-    避免 LLM 生成的 prompt 文本有微小差异（换行/空格/词汇顺序）导致
-    哈希永远不匹配，缓存永远失效的问题。
-
-    lock_kind: 图片锁类型——"layout"（完整锁图，含场景布局不变）或
-    "no_layout"（动作镜头解除布局锁）。锁类型是 prompt 语义的一部分，
-    作为哈希键而非魔法后缀（替代 v6.19 的 _ff_nl/_lf_nl/_kf_nl 后缀补丁，
-    审计 S4）。
-
-    reference_paths: 参考图路径。语义变化（增删/换图）应触发重新生成——
-    路径及文件字节摘要同时入键，角色静态/动态外观也入键，原位替换不能复用旧帧。
-    """
-    def _normalize(text: str) -> str:
-        """规范化文本：strip + 统一空白字符，消除 LLM 格式噪音。"""
-        import re
-        t = (text or "").strip()
-        t = re.sub(r'\s+', ' ', t)
-        return t
-
-    # 稳定字段作为基线
-    stable_fields = [
-        shot.get("main_subject", ""),      # 主体最稳定
-        shot.get("location", ""),          # 物理地点（新增）
-    ]
-    # 如果 location 为空则回退到 scene
-    if not stable_fields[1]:
-        stable_fields[1] = shot.get("scene", "")
-    # core_keywords 是列表，转为字符串
-    keywords = shot.get("core_keywords", [])
-    if isinstance(keywords, list):
-        keywords_str = ",".join(sorted(keywords))
-    else:
-        keywords_str = str(keywords) if keywords else ""
-    stable_fields.append(keywords_str)
-
-    key_parts = [
-        style_prefix_for_canvas(frame_canvas_ratio(), orient=True),          # 风格前缀（含本帧画幅）变化时首帧也应重新生成
-        f"lock={lock_kind}",               # 锁类型是 prompt 语义的一部分
-    ]
-    key_parts.extend(stable_fields)
-
-    # v4: 规范化后的实际图片 prompt 文本 — 分镜词变了图片就该重新生成
-    # 2026-11-08（WP2-5）：只把**本帧**用到的描述纳入摘要，否则改尾帧会把首帧
-    # 一起判为过期（未受影响的媒体被误废）。frame_kind 缺省时保持旧口径。
-    if frame_kind == "first_frame":
-        _hash_fields = ("ff_desc", "motion_desc")
-    elif frame_kind == "last_frame":
-        _hash_fields = ("lf_desc", "motion_desc")
-    else:
-        _hash_fields = ("ff_desc", "lf_desc", "motion_desc")
-    for field_name in _hash_fields:
-        val = shot.get(field_name, "")
-        if val:
-            key_parts.append(f"{field_name}={_normalize(val)}")
-
-    # extra_fields: 关键帧专用——哈希含 kf_desc + time_ratio，使每个中间帧独立
-    # 哈希且改 kf desc 能触发该帧重出（原复用 shot 哈希，改 kf desc 缓存不失效）。
-    for k, v in (extra_fields or {}).items():
-        if v is not None:
-            key_parts.append(f"{k}={_normalize(str(v))}")
-
-    if empty_scene:
-        key_parts.append("empty_scene")    # 空镜判定翻转时帧应重做
-
-    # 参考图路径语义纳入哈希（审计 S4：此前不入哈希，参考图变了但哈希不变）。
-    # 2026-10-31 P1-7：只哈希路径会漏掉「同路径原位替换」（重做 base.png/wide.png
-    # 后路径不变、图像已变）→ 旧帧被误判缓存命中继续复用。改为路径 + 文件字节摘要。
-    for ref in (reference_paths or []):
-        p = Path(ref)
-        try:
-            digest = hashlib.sha256(p.read_bytes()).hexdigest()
-        except OSError:
-            digest = "unreadable"   # 读不到就按不可读入键，绝不静默复用旧帧
-        key_parts.append(f"ref={_normalize(str(ref))}:sha256={digest}")
-    key_parts.append(json.dumps([
-        {k: c.get(k) for k in ("identifier", "static_features", "dynamic_features")}
-        for c in (characters or []) if isinstance(c, dict)
-    ], ensure_ascii=False, sort_keys=True))
-    key_parts.append("doodle=" + os.getenv("DOODLE_REFINE_ENABLED", "0"))
-
-    # S23-3：固定机位尾帧的系统文案（只约束相机、放开人物/道具/环境）是
-    # prompt 语义的一部分。旧实现未把它纳入哈希，导致 71f6baa 改了尾帧文案后
-    # 旧 last_frame.png 仍命中缓存。只在尾帧加入策略标识；首帧/关键帧哈希不变。
-    if frame_kind == "last_frame":
-        from shared.shot_motion_checks import is_fixed_camera
-        if is_fixed_camera(str(shot.get("camera_movement") or "")):
-            key_parts.append("lf_camera=fixed_camera_only_v1")
-
-    # 多人同载的固定构图已移除；只使受影响首尾帧的旧缓存过期。
-    if frame_kind in ("first_frame", "last_frame"):
-        from collections import Counter
-        from shared.frame_spec import get_frame_spec, is_on_screen
-        support_ids = []
-        for item in get_frame_spec(shot, frame_kind):
-            if not is_on_screen(item):
-                continue
-            support = item.get("support")
-            sid = (support.get("id") if isinstance(support, dict)
-                   else item.get("support_id"))
-            if sid:
-                support_ids.append(str(sid))
-        if any(count >= 2 for count in Counter(support_ids).values()):
-            key_parts.append("support_prompt=relations_only_v1")
-
-    key = "|".join(key_parts)
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
-def _collect_scene_asset_refs(shot: dict) -> list[str]:
-    """为本镜头匹配场景资产图（scenes_bank wide/near）作环境参考.
-
-    用于 step02a 首帧图生图：注入与 r2v 同源的场景资产图，保证首帧的
-    场景/环境/光线/船型与全局资产库一致，避免图生图自由发挥导致场景漂移。
-
-    时间段匹配（重要）：资产库的 wide（大场景建立镜头）和 near（近景功能场景）
-    常带不同时段/光线——如「照月湾小舟」wide=黄昏暖金、near=夜晚冷月。
-    首帧的时间由 ff_desc 决定，若注入时段冲突的场景图（黄昏 wide 配夜晚
-    首帧），会把时间带偏。故：画面描述含夜晚/月光/夜色 → 优先 near；
-    含黄昏/夕阳/落日 → 优先 wide；无法判断时近景 near 兜底（含正确船型）。
-    场景身份按 shared.scene_identity 解析：显式 scene_asset_id/scene_id 优先，
-    否则只认完整 identifier/别名唯一命中；歧义与无命中只写诊断并跳过，
-    不再按 bank 顺序或公共地名猜（2026-11-08 WP7-Prep 复核）。
-    注意：step02b 的 r2v 参考链仍用旧的模糊匹配，属后续收敛项。
-    """
-    try:
-        from shared.assets_bank import SceneAssetsBank
-        from shared.scene_identity import resolve_scene_identity
-        sbank = SceneAssetsBank()
-        sbank.load()
-        entries = {}
-        for sid in sbank.get_all_identifiers():
-            if sid:
-                entries[str(sid)] = sbank.get_scene(sid) or {}
-        # 2026-11-08 WP7-Prep：显式 id -> 完整 identifier/别名唯一命中；
-        # 歧义/无命中只诊断、不按 bank 顺序猜（照月湾荷湾/荷塘静默选图根因）。
-        match = resolve_scene_identity(
-            entries,
-            explicit_id=shot.get("scene_asset_id") or shot.get("scene_id"),
-            scene_name=shot.get("scene"),
-            location=shot.get("location"),
-        )
-        try:
-            shot["_scene_match"] = match.as_dict()
-        except Exception:
-            pass
-        if not match.ok:
-            _bridge_log(
-                "  [bridge] 镜头%s 场景参考跳过（%s）: %s"
-                % (shot.get("index", "?"), match.reason,
-                   "; ".join(match.diagnostics)))
-            return []
-        sid = match.scene_id
-        wide = sbank.get_wide_image(sid)
-        near = sbank.get_near_image(sid)
-        # 时间段判定：夜间 → near；黄昏/白天 → wide；默认 near（含正确物体尺寸）
-        probe = " ".join([shot.get("ff_desc", ""), shot.get("motion_desc", ""),
-                          shot.get("lf_desc", ""), shot.get("prompt", "")])
-        night_kw = ("夜", "月", "星光", "星", "灯笼", "烛火", "黑暗", "入夜", "暮色")
-        dusk_kw = ("黄昏", "夕阳", "落日", "傍晚", "余晖", "晚霞", "西下")
-        is_night = any(k in probe for k in night_kw)
-        is_dusk = any(k in probe for k in dusk_kw)
-        picked = None
-        if is_night and near:
-            picked = near
-        elif is_dusk and wide:
-            picked = wide
-        else:
-            picked = near or wide
-        if picked and Path(picked).exists():
-            _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧参考图=场景 {sid} {Path(picked).name}"
-                        f"（{'夜→near' if is_night else '昏→wide' if is_dusk else '近景兜底'}）")
-            return [picked]
-        return []
-    except Exception as e:
-        _bridge_log(f"  [bridge] 场景资产参考图收集异常: {e}")
-        return []
 
 
-def _is_space_object_prop(entry: dict) -> bool:
-    """判断道具 bank 条目是否为空间物体（船/马车/轿等，作环境/尺寸锚点）.
-
-    与 prompt_builder._is_space_object_prop 保持一致（两处各自持一份判定，
-    避免跨模块耦合——vimax_bridge 不 import prompt_builder）。
-    空间物体决定画面空间比例（防模型画小），手持道具不决定，故拆出优先。
-    """
-    category = (entry.get("category") or "").strip()
-    return category in ("交通工具",) or any(
-        w in category for w in ("船", "车", "轿", "辇", "舟")
-    )
 
 
-def _collect_space_object_refs(shot: dict) -> list[str]:
-    """收集本镜头出现的空间物体参考图（船/马车/轿，category=交通工具）.
-
-    v6.25：空间物体是环境/尺寸锚点，决定画面空间比例（防船画小），与手持道具
-    分开收集——组装时排在场景图后、角色肖像前。图片模型默认按「一个人躺满
-    整艘船」画船，船图在 5 名额里若不提前必然被手持道具挤掉（code-audit 08-08
-    钩子首帧「3角色+2道具」占满名额，舴艋舟无位）。
-    """
-    try:
-        from shared.assets_bank import PropAssetsBank
-        pbank = PropAssetsBank()
-        pbank.load()
-        search_text = " ".join([
-            shot.get("ff_desc", "").strip() or "",
-            shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
-            shot.get("lf_desc", "").strip() or "",
-        ])
-        loc = shot.get("location", "") or shot.get("scene", "")
-        refs: list[str] = []
-        for pid in pbank.get_all_identifiers():
-            if not pid:
-                continue
-            entry = pbank.get_prop(pid) or {}
-            if not _is_space_object_prop(entry):
-                continue
-            match_sources = [pid] + list(entry.get("consistent_terms", []) or [])
-            if not any(src and (src in search_text or src in loc) for src in match_sources):
-                continue
-            img = pbank.get_asset_image(pid)
-            if img and Path(img).exists() and img not in refs:
-                refs.append(img)
-                _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧参考图=空间物体 {pid} {Path(img).name}")
-        return refs
-    except Exception as e:
-        _bridge_log(f"  [bridge] 空间物体参考图收集异常: {e}")
-        return []
 
 
-_PROP_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("钓杆", "钓竿", "鱼竿"),
-)
 
 
-def _prop_terms(name: str) -> list[str]:
-    """Return canonical orthographic synonyms for a prop name without duplicating."""
-    t = str(name or "").strip()
-    if not t:
-        return []
-    out = [t]
-    for grp in _PROP_SYNONYM_GROUPS:
-        if t in grp:
-            for item in grp:
-                if item not in out:
-                    out.append(item)
-    return out
 
 
 def _collect_prop_asset_refs(shot: dict, limit: int = 2,
@@ -1706,67 +660,8 @@ def _collect_prop_asset_refs(shot: dict, limit: int = 2,
         return []
 
 
-def _compose_frame_refs_by_category(
-    shot: dict,
-    for_frame: str,
-    scene_refs: list[str],
-    space_refs: list[str],
-    portrait_refs: list[str],
-    prop_refs: list[str],
-    limit: int = 5,
-) -> list[str]:
-    """按类别（环境/人物/道具）把参考图压缩到 IMAGE_MAX_REFS 以内.
-
-    总数不超上限时原样返回（截断到 limit，兼容 wan2.7 等多参考图模型行为）；
-    超上限时每个多图类别横向拼成一张同质参考表，三类别合计 ≤3 张：
-      - 环境（scene）= 场景资产图 + 空间物体（船/马车，同为空间比例锚点）
-      - 人物（chars）= 出镜角色肖像
-      - 道具（props）= 手持道具资产图
-    相比适配器层「前N张原样 + 尾部混拼」，每张参考表语义同质——模型能明确
-    知道这张全是人物长相、那张全是环境，不再出现「2角色+1道具」混拼表。
-    上限按当前 IMAGE_PROVIDER 主模型从 shared.ref_compose 注册表解析
-    （qwen-image=3 / wan2.7-image=9 / ...），未注册模型回退 IMAGE_MAX_REFS。
-    拼图失败时 fit_refs 内部裁剪兜底（保优先级，不中断生成）。
-    """
-    from shared.ref_compose import fit_refs, active_image_ref_limit
-
-    max_refs = active_image_ref_limit()
-    buckets = [
-        ("scene", list(scene_refs) + list(space_refs)),
-        ("chars", list(portrait_refs)),
-        ("props", list(prop_refs)),
-    ]
-    n_total = len({p for _, items in buckets for p in (items or []) if p and Path(p).exists()})
-    frame_tag = {"首帧": "ff", "尾帧": "lf"}.get(for_frame, "kf")
-    shot_dir = shot_work_dir(shot.get("index", 0))
-    composed = fit_refs(buckets, max_refs, shot_dir, frame_tag)
-    if n_total > max_refs:
-        _bridge_log(
-            f"  [bridge] 镜头{shot.get('index', '?')} {for_frame}: 参考图 {n_total} 张超上限 "
-            f"{max_refs}，按类别无损压缩为 {len(composed)} 张"
-        )
-    return composed
 
 
-def _resolve_style_anchor_path() -> str | None:
-    """Read-only lookup for locked global style_anchor.png (returns path or None without creating dirs)."""
-    try:
-        from shared.paths import style_bank_dir
-        sdir = style_bank_dir()
-        if not sdir.is_dir():
-            return None
-        json_path = sdir / "style_bank.json"
-        if json_path.is_file():
-            data = json.loads(json_path.read_text(encoding="utf-8"))
-            img = str(data.get("style_anchor_image") or "").strip()
-            if img and Path(img).is_file():
-                return img
-        default = sdir / "style_anchor.png"
-        if default.is_file():
-            return str(default.resolve())
-    except Exception:
-        return None
-    return None
 
 
 def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
@@ -1890,268 +785,24 @@ def _collect_frame_refs_for_shot(shot: dict, characters: list | None = None,
     )
 
 
-def _detect_action_subject(shot: dict, characters: list | None = None) -> str:
-    """从镜头描述中检测动作主体（动词主语）.
-
-    组合参考图法：多人镜头参考图名额优先给动作主体——它是镜头画面里做核心
-    动作的角色（钩子"刺客自水面窜出、匕首劈落"→刺客）。用 motion_desc /
-    ff_desc 里「主体+动作动词」的最早出现判定：遍历已知角色名，找到
-    「角色名+（了/地/一/向/自…）+动作动词」在描述中出现位置最靠前的那个。
-
-    返回角色名；无法判定时返回空字符串（调用方保持原顺序）。
-    """
-    text = " ".join([
-        shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
-        shot.get("ff_desc", "").strip() or "",
-        shot.get("prompt", "").strip() or "",
-    ])
-    if not text:
-        return ""
-    # 角色名候选：参数 characters（script 顺序优先）→ 注册表 key 兜底
-    known = [c.get("identifier", "") for c in (characters or []) if c.get("identifier", "")]
-    if not known:
-        try:
-            from shared.paths import vimax_working_dir
-            reg_path = vimax_working_dir() / "character_portraits_registry.json"
-            if reg_path.exists():
-                import json as _json
-                known = list(_json.load(open(reg_path, encoding="utf-8")).keys())
-        except Exception:
-            known = []
-    if not known:
-        return ""
-    # 动作动词（做核心动作的标记）
-    # v1.1：加出水/入水动作（破水/出水/没入/入水/落水）——钩子「刺客破水而出，
-    # 刺中杨旭心口；杨旭仰面后倒」里，「破水」最早出现且主语是刺客；缺它时
-    # 会误识别「仰面后倒」的主语杨旭，导致 action_ref 生成"杨旭自捅"
-    # （code-audit 2026-08-08）。
-    action_verbs = (
-        "破水", "出水", "窜出", "冲出", "跃出", "没入", "入水", "落水",
-        "刺", "劈", "砍", "扑", "杀", "倒", "喊", "叫",
-        "尖叫", "仰面", "后倒", "摔", "跑", "追", "跪", "拜", "夺", "抢",
-        "拔", "抽", "挥", "斩", "轰", "踹", "踢", "挥手", "怒喝", "厉喝",
-        "哭", "笑", "转身", "回头", "出手", "攻击",
-    )
-    best: str = ""
-    best_pos = len(text)
-    for verb in action_verbs:
-        pos = text.find(verb)
-        if pos < 0:
-            continue
-        # 动词往前找最近的角色名（主语在动词前，通常在 0~8 字内）
-        window = text[max(0, pos - 8):pos]
-        for ident in known:
-            if ident and ident in window:
-                if pos < best_pos:
-                    best = ident
-                    best_pos = pos
-                break
-    return best
 
 
-def _head_portrait_path(src: str, create_if_missing: bool = True) -> str:
-    """把角色立绘转换为头肩胸像缓存（v6.52 参考图防姿态/持物泄漏）.
-
-    全身站姿会被图生图照抄成画面构图（hook ff 要「半身探出水面」画出站立
-    巨人、船尾多出第二个蒙面人实测）；刺客像里的发光匕首也随参考图泄入
-    画面。裁到头肩胸后姿态与持物不再入参考，身份特征（脸/发型/上装）保留。
-
-    裁切缓存于 vimax_working/portrait_crops/（源 mtime 变化才重裁）——
-    放在收集层而非拼图层，fit_refs 的「≤limit 原图直传」单图路径与拼图
-    路径拿到的是同一份已裁图。失败返回原路径（graceful degradation）。
-    """
-    face = Path(src).parent / "face.png"
-    if Path(src).stem in ("base", "front", "front_no_weapon") and face.is_file():
-        return str(face)
-    try:
-        sp = Path(src)
-        if not sp.exists():
-            return src
-        from shared.paths import vimax_working_dir
-        out_dir = vimax_working_dir() / "portrait_crops"
-        out = out_dir / f"{sp.parent.name}_{sp.stem}.png"
-        if out.exists() and out.stat().st_mtime >= sp.stat().st_mtime:
-            return str(out)
-        if not create_if_missing:
-            return src
-        from shared.portrait_stitch import crop_head_portrait
-        out_dir.mkdir(parents=True, exist_ok=True)
-        from PIL import Image as _PILImage
-        img = _PILImage.open(sp).convert("RGB")
-        crop_head_portrait(img).save(out, "PNG")
-        return str(out)
-    except Exception:
-        return src
 
 
-def _frame_spec_closeup(shot: dict, frame_kind: str,
-                        kf_index: int | None = None) -> bool:
-    """特写帧判定（场景资产图门控用）.
-
-    spec 条目（ff/lf/kfs[i]）的 position/pose 含「特写」→ 本帧是局部特写。
-    场景资产图是广角建立镜头，塞进特写帧参考图会把构图拉回全景
-    （09-13 shot_4 lf「手部特写」3 次 QC 未中根因：参考图全是广角场景+肖像，
-    模型只会画全景）。shot_size 字段不可靠（实测为 None），特写信号以 spec
-    文本为准（如「画中央（手部特写）」）。
-    """
-    fl = shot.get("frame_layouts") or {}
-    if frame_kind == "keyframe":
-        kfs = fl.get("kfs") or []
-        entries = (kfs[kf_index]
-                   if (kf_index is not None and 0 <= kf_index < len(kfs)) else [])
-    else:
-        entries = fl.get(frame_kind) or []
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        if "特写" in (str(e.get("position") or "") + str(e.get("pose") or "")):
-            return True
-    return False
 
 
-def _frame_spec_roster(shot: dict, frame_kind: str,
-                       kf_index: int | None = None) -> set[str] | None:
-    """本帧出镜名单（frame_layouts spec，v6.57 per-frame 事实源）.
-
-    09-13「用到才拼」根修：参考图/拼图只放本帧实际出镜的角色。文本提到 ≠
-    出镜——「刺客已遁水」「钓杆已脱手」类离场/否定语境会把缺席角色带进
-    文本匹配，全量拼接诱导模型画全员（09-13 shot_0 lf extra_person 3 vs 1
-    根因：QC 名单 1 人但 3 张肖像都在 refs 里）。
-
-    frame_kind: "ff" / "lf" / "keyframe"（keyframe 需 kf_index——keyframes
-    数组序号，frame_layouts.kfs 与其一一对应）。
-    返回 on_screen=true 的 name 集合（**空集 = spec 明确本帧无人出镜**——
-    空镜/离场帧，调用方必须照空名单处理，禁止回退文本）；spec 缺失/无条目
-    → None（调用方回退文本匹配）。on_screen 缺省判定走 shared.frame_spec.
-    is_on_screen（True，单一事实源，与 QC 侧一致）。
-    """
-    from shared.frame_spec import spec_roster_or_none
-    return spec_roster_or_none(shot, frame_kind, kf_index)
 
 
-PORTRAIT_VIEW_ROLES = {
-    "front": "primary_full_body",
-    "base": "primary_full_body",
-    "side": "side_full_body",
-    "back": "back_full_body",
-    "face": "closeup_identity",
-}
-_UNAPPROVED_PORTRAIT_STATUSES = frozenset({
-    "unapproved", "rejected", "pending", "draft", "stale", "failed",
-    "qc_rejected", "qc_call_failed",
-})
 
 
-def _norm_portrait_char_name(name: str) -> str:
-    from shared.character_bank import normalize_identifier
-    return normalize_identifier(str(name or "").strip())
 
 
-def _is_image_file_readable_readonly(path: Path) -> bool:
-    try:
-        if not path.is_file() or path.stat().st_size <= 0:
-            return False
-        from PIL import Image as _PILImage
-        with _PILImage.open(path) as im:
-            im.load()
-        return True
-    except Exception:
-        return False
 
 
-def _portrait_identity_ok(
-    char_id: str,
-    aliases: list[str],
-    entry: dict | None,
-    img_path: Path,
-    bank_dir: Path | None,
-) -> bool:
-    norm_id = _norm_portrait_char_name(char_id)
-    allowed_norms = {_norm_portrait_char_name(a) for a in ([char_id] + list(aliases or [])) if a}
-
-    if isinstance(entry, dict):
-        for k in ("character_id", "identifier", "owner", "subject"):
-            val = str(entry.get(k) or "").strip()
-            if val and _norm_portrait_char_name(val) not in allowed_norms:
-                return False
-
-    # Check if asset sits under a conflicting character directory in characters_bank
-    try:
-        resolved_img = img_path.resolve()
-        if bank_dir is not None:
-            resolved_bank = Path(bank_dir).resolve()
-            try:
-                rel = resolved_img.relative_to(resolved_bank)
-                if len(rel.parts) >= 2:
-                    folder_owner = _norm_portrait_char_name(rel.parts[0])
-                    if folder_owner and folder_owner not in allowed_norms:
-                        return False
-            except ValueError:
-                pass
-    except OSError:
-        pass
-
-    # Check optional adjacent metadata sidecar (<stem>.json or meta.json)
-    for meta_candidate in (img_path.with_suffix(".json"), img_path.parent / "meta.json"):
-        if meta_candidate.is_file():
-            try:
-                md = json.loads(meta_candidate.read_text(encoding="utf-8"))
-                if isinstance(md, dict):
-                    for k in ("character_id", "identifier", "owner", "subject"):
-                        val = str(md.get(k) or "").strip()
-                        if val and _norm_portrait_char_name(val) not in allowed_norms:
-                            return False
-            except Exception:
-                pass
-    return bool(norm_id)
 
 
-def _portrait_approved_ok(entry: dict | None, bank_entry: dict | None, img_path: Path) -> bool:
-    for rec in (entry, bank_entry):
-        if not isinstance(rec, dict):
-            continue
-        if rec.get("approved") is False:
-            return False
-        st = str(rec.get("status") or "").strip().lower()
-        if st in _UNAPPROVED_PORTRAIT_STATUSES:
-            return False
-    qc_sc = img_path.with_name(f"{img_path.stem}_hallucination.json")
-    if qc_sc.is_file():
-        try:
-            sc_data = json.loads(qc_sc.read_text(encoding="utf-8"))
-            if str(sc_data.get("status") or "").strip().lower() in ("qc_rejected", "qc_call_failed"):
-                return False
-        except Exception:
-            pass
-    return True
 
 
-def _load_portrait_stores_readonly() -> tuple[dict, object | None, Path | None]:
-    reg: dict = {}
-    bank = None
-    bank_dir: Path | None = None
-    try:
-        from shared.paths import characters_bank_dir, vimax_working_dir
-        bank_dir = characters_bank_dir()
-        registry_path = vimax_working_dir() / "character_portraits_registry.json"
-        if registry_path.is_file():
-            try:
-                loaded = json.loads(registry_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    reg = loaded
-            except Exception:
-                reg = {}
-    except Exception:
-        pass
-    try:
-        from shared.character_bank import CharacterBank
-        bank = CharacterBank()
-        bank.load()
-        if not reg:
-            reg = bank.get_all_portraits_as_registry() or {}
-    except Exception:
-        bank = None
-    return reg, bank, bank_dir
 
 
 def resolve_character_portrait_assets(
@@ -2551,140 +1202,12 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
 # 参考图直接用角色肖像 + 场景/道具资产（gen_shot_frames）。
 # ---------------------------------------------------------------------------
 
-# 强动作动词（无具名主体时的兜底判定）。
-# 刻意收窄：不含"转身/回头/起/坐/站"等对话镜头高频静态词，避免普通镜头
-# 被误判为动作镜头而解除布局锁、导致构图漂移。
-_ACTION_STRONG_VERBS = (
-    "窜出", "跃出", "冲出", "破水", "腾空", "翻身", "下坠", "跌",
-    "劈", "刺", "挥", "扑", "砍", "斩", "撞", "抓", "夺", "举", "捅", "踹",
-    "尖叫", "惊呼", "怒喝", "厉喝",
-)
 
 
-def _is_action_shot(shot: dict, characters: list | None = None) -> bool:
-    """统一动作镜头判定（修改1/2/3 共用）.
-
-    1. _detect_action_subject 返回非空（motion_desc/ff_desc 找到「角色名+动作动词」）
-    2. 兜底：motion_desc/ff_desc 含强动作动词（无具名主体也视为动作）
-    钩子镜头（index==0，如破水/惊觉/尖叫）经上面两条天然命中。
-    空镜/纯静态描述不判定为动作镜头。
-    """
-    if is_empty_scene(shot, characters or []):
-        return False
-    if _detect_action_subject(shot, characters):
-        return True
-    text = " ".join([
-        shot.get("motion_desc", "").strip() or shot.get("prompt", ""),
-        shot.get("ff_desc", "").strip() or "",
-    ])
-    return any(v in text for v in _ACTION_STRONG_VERBS)
 
 
-def _inject_object_size_anchor(shot: dict, text: str) -> str:
-    """把场景物体尺寸锚定注入帧 prompt（防船/车等物体比例漂移）.
-
-    图片模型默认按「一个人躺满整艘船」的直觉画船——尺寸信息在
-    script_result.json 的 scene_objects（如 照月湾小舟 6米×1.4米），
-    但帧 prompt 只用了 ff_desc/lf_desc（LLM 生成时不一定带尺寸）。
-    按 shot.location 匹配 scene_objects，命中则把尺寸+称呼追加到 prompt，
-    让首帧/尾帧的物体比例与原文一致（code-audit 2026-08-06 钩子"船太小"）。
-
-    B5 修复（08-11）：
-    1. **匹配增强**——旧实现 `src in (loc + text)` 是纯子串匹配，location 写
-       「湖上」不写「小舟」（或镜头文本里用别称/漏词）就漏配、尺寸永不注入。
-       改为：location 走 `scene_matches_location` 模糊匹配（公共连续子串 ≥2 字，
-       如"照月湾小舟"↔"湖上"… 仍不强，但对象名/consistent_terms/形制字
-       （舴艋舟/乌篷/扁舟）在镜头全文（ff/lf/motion/prompt/main_subject）任一
-       命中即算同一物体），大幅减少漏配。
-    2. **比例后验**——注入前校验长宽比合理性（船 2-15m 长宽比应 ∈ [2, 12]，
-       超出说明 LLM 推导的尺寸比例可疑，只注入宽/长单值不注入离谱比值），
-       防止「长15m 宽0.5m」这类比例崩坏进帧 prompt。
-
-    shot: 镜头 dict（含 location/scene）
-    text: 已组装的帧 prompt
-    """
-    loc = shot.get("location", "") or shot.get("scene", "") or ""
-    if not loc:
-        return text
-    try:
-        from shared.paths import script_file
-        from shared.scene_objects_bank import iter_matched_scene_objects
-        import json as _json
-        script_path = script_file()
-        if not script_path.exists():
-            return text
-        script = _json.load(open(script_path, encoding="utf-8"))
-        objs = script.get("scene_objects", {})
-        if not isinstance(objs, dict) or not objs:
-            return text
-        # 镜头全文（匹配对象名/consistent_terms/形制字用；比 loc+text 覆盖面广）
-        probe = " ".join(filter(None, [
-            loc,
-            shot.get("scene", ""), shot.get("ff_desc", ""), shot.get("lf_desc", ""),
-            shot.get("motion_desc", "") or shot.get("prompt", ""),
-            shot.get("main_subject", ""),
-        ]))
-        for name, obj in iter_matched_scene_objects(objs, loc, probe):
-            subtype = str(obj.get("subtype", "") or "")
-            length = obj.get("length_m")
-            width = obj.get("width_m")
-            # B5 比例后验：长宽比离谱（长/宽 <1.5 或 >12）说明 LLM 推导的比例可疑，
-            # 只注入长度单值（宽度不可信），防「长15m 宽0.5m 的木条」进帧 prompt
-            if length and width:
-                try:
-                    ratio = float(length) / float(width)
-                    if ratio < 1.5 or ratio > 12:
-                        _bridge_log(
-                            f"  [bridge] 场景物体 {name} 长宽比 {ratio:.1f} 离谱，"
-                            f"仅注入长度，跳过宽度（B5 比例后验）"
-                        )
-                        width = None
-                except (TypeError, ValueError):
-                    width = None
-            if not length and not width:
-                continue
-            # v6.52：剥离 desc 内嵌的 LLM 尺寸残留——「（宽1.4米，可容3人）」「（长6米
-            # 宽1.4米无篷舴艋舟）」与 scene_objects 注入的尺寸自相矛盾（16:34 脚本
-            # 实测 6 处 1.4米 vs 注入 1.6米），模型两侧都不信、船宽随机抽奖。
-            # 尺寸一律以本函数注入的 scene_objects 锚为准。幂等：剥完再跑无变化。
-            # 2026-11-13（S04 复核）：只在**确实有来源尺寸要注入**时才剥离——旧实现
-            # 在匹配前无条件剥，未命中 scene_objects 时尺寸被删且无替代（内容净丢失）。
-            text = re.sub(r"[（(][^（）()]*\d+(?:\.\d+)?米[^（）()]*[）)]", "", text)
-            # 只注入尺寸/称呼，不注入容量结构（避免与画面描述冲突）。
-            # S25：正向 prompt 不出现“无篷”二字（扩散模型对“篷/舟”名词
-            # 激活强于“无”），展示名统一改成“敞口”。
-            _display_name = str(name).replace("无船篷", "敞口").replace("无篷", "敞口")
-            _display_subtype = str(subtype).replace("无船篷", "敞口").replace("无篷", "敞口")
-            size_desc = f"该{_display_name}为{_display_subtype}{'，长' + str(length) + '米' if length else ''}{'、宽' + str(width) + '米' if width else ''}"
-            # 2026-11-13（S04 复核）：这里只保留**有来源**的属性（名称/形制/长宽）。
-            # 旧实现还追加过两段无依据假设，已删除：
-            #   ① 「船宽约为人物肩宽的三倍，…仍有落脚空档」——肩宽比例没有输入来源，
-            #      且与绝对米数并存时会给出两套互相打架的尺度；
-            #   ② 命中「近景/中景/中近景」就「只画船头/船舷局部，船体向画外延伸」——
-            #      裁切与构图是输入/计划的决定，不能由下游按景别词补造。
-            # 无篷形制反向锚仍有来源（subtype/name 里的「无篷」），保留：
-            # 「舴艋舟」易被联想成乌篷船（hook ff 实测画出大竹篷遮挡舱面）。
-            if "无篷" in subtype or "无篷" in name:
-                size_desc += "，敞口无遮挡，舱面完全敞开可见"
-            if size_desc not in text:
-                return f"{text}。{size_desc}"
-        return text
-    except Exception:
-        return text
 
 
-def _inject_tone_anchor(shot: dict, text: str) -> str:
-    """把镜头色调锚点（color_tone：夜景冷蓝/暖金烛光等）注入帧 prompt.
-
-    图片模型对「夜色中」这类弱词不敏感，容易自造色调导致前后镜头漂色
-    （08-15 hook 验证：加「冷蓝色调夜景」后风格稳定）。shot.color_tone
-    由 LLM 按场景生成（如「冷月清辉，深蓝夜色」），但此前从未进入图片
-    prompt，这里追加到帧 prompt，让每镜色调一致。
-    """
-    tone = (shot.get("color_tone") or "").strip()
-    if not tone or tone in text:
-        return text
-    return f"{text}。场景色调：{tone}"
 
 
 # ============================================================================
@@ -3382,23 +1905,7 @@ def _extract_char_layout(
 # 代码级兜底（不依赖 LLM 遵守 rule50/22.9）。
 # ============================================================================
 
-# 道具方位词（画面方位 + 手部 + 位置落点；覆盖 rule22.9 的空间词）
-_PROP_POSITION_WORDS = (
-    "画左", "画右", "画中", "画上方", "画下方",
-    "左手", "右手", "双手", "手中", "手边", "身侧", "身前", "身下",
-    "前方", "身后", "头顶", "肩头", "腰间", "背后",
-    "水中", "水下", "水面", "船头", "船尾", "船板", "船舷", "船侧", "甲板",
-    "地上", "岸上", "桌上", "几上", "案上",
-)
-# 道具方位词命中窗口（道具名后找方位）
-_PROP_POSITION_WINDOW = 16
 
-# v6.45：威胁武器入体方位词——匕首/刀/剑「插/扎/刺在角色身体部位」时，
-# 标准方位词表没有胸口/心口等身体词，且角色名距武器常超 12 字窗口，
-# 导致【道具锚定】整体丢失（08-26 hook kf0 匕首消失根因）。仅威胁武器 +
-# 身体部位词命中时兜底，普通道具不触发。
-_BODY_POSITION_WORDS = ("胸口", "心口", "胸前", "腹部", "后背", "后心",
-                        "咽喉", "喉头", "肩头", "腰眼")
 
 
 def _extract_prop_layout(
@@ -3663,14 +2170,6 @@ from step01_script_gen.prompt_semantic import (
     ANIMAL_METAPHOR_FACE_REPLACEMENTS as _ANIMAL_METAPHOR_FACE_REPLACEMENTS,
 )
 
-# v6.45：角色惰性/失能状态词——本镜呈躺/卧/倒/昏迷/闭目/中刀等状态时，
-# 不可能手持任何物件。chapter 级 dynamic_features 的"手持钓杆"等跨镜手部物件
-# 不得注入该角色（08-26 hook kf0 杨旭"手持钓杆"污染根因）。
-_INERT_STATE_WORDS = (
-    "仰卧", "倒地", "倒下", "躺", "卧", "瘫坐",
-    "昏迷", "晕倒", "闭目", "双目紧闭", "已死", "身亡", "毙命",
-    "中刀", "中剑", "胸口插", "心口插", "被刺",
-)
 
 
 def _char_inert_in_shot(ident: str, scan_text: str, characters: list | None) -> bool:
@@ -3689,22 +2188,6 @@ def _char_inert_in_shot(ident: str, scan_text: str, characters: list | None) -> 
     return False
 
 
-def _dedupe_char_anchor_guard(additions: list[str]) -> tuple[list[str], str]:
-    """Strip duplicated head/face guard from character strings and return standalone frame-level sentence."""
-    guard = str(_NO_ANIMAL_FEATURES_GUARD or "")
-    if not guard or not additions:
-        return additions, ""
-    seen_guard = False
-    cleaned: list[str] = []
-    for item in additions:
-        if guard in item:
-            seen_guard = True
-            cleaned.append(item.replace(guard, ""))
-        else:
-            cleaned.append(item)
-    if not seen_guard:
-        return cleaned, ""
-    return cleaned, f"全员{guard}。"
 
 
 def _inject_character_costume(desc: str, characters: list | None,
@@ -3808,10 +2291,6 @@ def _inject_character_costume(desc: str, characters: list | None,
         return desc
 
 
-_CURRENT_FRAME_COLOR_WORDS = (
-    "素白", "白色", "白衣", "玄色", "黑衣", "青色", "青衣", "藕荷", "春衫",
-    "红衣", "血色", "暗红", "黑", "白", "青", "红", "蓝", "灰", "褐", "金", "银",
-)
 
 
 def _current_frame_has_costume(desc: str, ident: str, characters: list | None) -> bool:
@@ -3834,156 +2313,16 @@ def _current_frame_has_costume(desc: str, ident: str, characters: list | None) -
     return False
 
 
-def _build_char_anchor(ident: str, static: str, dynamic: str) -> str:
-    """组装单个角色的脸型+服装锚字符串（v6.57+ 提取自 _inject_character_costume 复用）.
-
-    行为与原 _inject_character_costume 末尾 2468-2518 行一致：
-      - conn: 服装词开头用「身着」，否则用「，」
-      - hair_state 前置（披头散发/散落等已配 dynamic 时不重复）
-      - X 系脸 → 人类五官词替换（治听香鹿角幻觉）
-      - 动物头面特征护栏
-    """
-    # v6.61（09-05 hook kf1 刺客猫耳根因之一）：LLM 在 static_features 里
-    # 自带的负向兽化声明（「无兽化特征」「无任何兽化特征」）是**提到即渲染**
-    # 的 priming——Seedream 5.0-lite 对否定列举服从度弱，画了猫耳。入口剥掉
-    # 负向句（正面的 NO_ANIMAL_FEATURES_GUARD 已改正向人类形态锚）。
-    # 剥离必须在 canonical_anchor 组装**之前**（组装后改已无意义）。
-    import re as _re_beast
-    static = _re_beast.sub(r"无任何兽化特征[，。]?|无兽化特征[，。]?", "", static)
-    dynamic = _re_beast.sub(r"无任何兽化特征[，。]?|无兽化特征[，。]?", "", dynamic)
-    conn = "，身着" if any(w in dynamic for w in _COSTUME_WORDS) else "，"
-    _hair_state = next((w for w in _HAIR_STATE_WORDS if w in dynamic), "")
-    try:
-        from step01_script_gen.prompt_semantic import Character as _PSC
-        _char = _PSC(
-            name=ident, static_features=static, dynamic_features=dynamic,
-            hair_state=_hair_state,
-        )
-        combined = _char.canonical_anchor()
-    except ImportError:
-        # 兜底：保持原硬编码行为（无 prompt_semantic 包时回退）
-        if _hair_state:
-            for _phrase in _HAIR_STATIC_PHRASES:
-                static = static.replace(_phrase, "")
-            _parts = [p for p in static.split("，") if p.strip()]
-            static = "，".join(_parts)
-            if _hair_state in dynamic:
-                if static:
-                    static = f"{static}，"
-            else:
-                if static:
-                    static = f"{static}，此刻{_hair_state}"
-                else:
-                    static = f"此刻{_hair_state}"
-        combined = (f"{ident}：{static}{conn}{dynamic}" if static
-                    else f"{ident}{conn}{dynamic}")
-    # v6.50（08-28）：先做「X系脸」比喻词 → 人类五官词替换——比喻词
-    # （鹿系脸/猫系脸）本身诱导兽化，靠下面的否定护栏对抗是下策；
-    # 替换后 static/dynamic 不再含动物字根，护栏自然不触发，prompt 更短。
-    for _meta, _human in _ANIMAL_METAPHOR_FACE_REPLACEMENTS:
-        if _meta in static:
-            static = static.replace(_meta, _human)
-        if _meta in dynamic:
-            dynamic = dynamic.replace(_meta, _human)
-    # 08-16 听香鹿角幻觉：角色脸型含动物关键词（虎目/狼腰等残余动物词）
-    # + 头饰（步摇/簪钗/冠）→ 模型把动物延伸成兽耳/角/犄角。追加护栏
-    # 明确禁止动物头面特征。检查 static+dynamic 任一含关键词即触发。
-    if any(k in (static + dynamic) for k in _ANIMAL_FACE_KEYWORDS):
-        combined = f"{combined}{_NO_ANIMAL_FEATURES_GUARD}"
-    return combined
 
 
-def _closeup_directive(shot: dict, frame_kind: str, kf_index: int | None = None) -> str:
-    """spec 含「X特写」时生成特写构图指令（注入帧 prompt）.
-
-    09-13 shot_4 lf 根因：QC 锚点要「手部特写」但帧 prompt 无特写指令——
-    spec 构图要求只进 QC 不进 prompt，模型只能画全景，重抽必然复败
-    （场景参考图门控见 _frame_spec_closeup，只是半价；prompt 指令才是根修）。
-    spec 构图要求必须与 QC 同源地进 prompt。
-    """
-    fl = shot.get("frame_layouts") or {}
-    if frame_kind == "keyframe":
-        kfs = fl.get("kfs") or []
-        entries = (kfs[kf_index]
-                   if (kf_index is not None and 0 <= kf_index < len(kfs)) else [])
-    elif frame_kind in ("first_frame", "last_frame"):
-        entries = fl.get("ff" if frame_kind == "first_frame" else "lf") or []
-    else:
-        entries = []
-    import re as _re
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        for field in ("position", "pose"):
-            v = str(e.get(field) or "")
-            m = _re.search(r"（([^）]*特写)）", v)
-            if m:
-                obj = m.group(1)                                # 手部特写 / 面部特写…
-                core = obj[:-2] if obj.endswith("特写") else obj  # 手部 / 面部
-                base = _re.sub(r"（[^）]*）", "", v).strip() or "画中央"
-                return (f"【特写构图】{obj}镜头：画面聚焦{core}，主体位于{base}，"
-                        f"背景大幅虚化，禁止全景式环境展示")
-    return ""
 
 
-_LATER_STATE_WORDS = ("落水", "散发", "凌乱", "湿透", "受伤", "昏迷", "倒地",
-                     "血迹", "血污")
 
 
-def _state_present_for_char(text: str, state: str) -> bool:
-    """当前角色文本里是否**肯定**出现该状态（排除“未/无/没有/不”否定）."""
-    import re as _re
-    for m in _re.finditer(re.escape(state), str(text or "")):
-        pre = str(text)[max(0, m.start() - 3):m.start()]
-        if not any(neg in pre for neg in ("未", "无", "没有", "不", "非")):
-            return True
-    return False
 
 
-def _select_states_by_contract(dynamic: str, allowed_states) -> str:
-    """显式状态合同：只保留 allowed_states 里的状态分句。
-
-    这是通用入口；调用方必须给出本帧该角色有效状态（可含继承状态）。
-    不在 allowed 里的状态分句被丢弃；静态服装/头饰分句保留。
-    """
-    text = str(dynamic or "")
-    allowed = {str(s).strip() for s in (allowed_states or []) if str(s).strip()}
-    if not text:
-        return text
-    import re as _re
-    kept = []
-    for clause in (c.strip() for c in _re.split(r"[，、,；;]", text) if c.strip()):
-        states = [w for w in _LATER_STATE_WORDS if w in clause]
-        if (not states or any(w in allowed for w in states)
-                or any(a in clause for a in allowed)):
-            kept.append(clause)
-    return "，".join(kept)
 
 
-def _strip_later_timeline_clauses(dynamic: str, frame_desc: str,
-                                  current_text: str | None = None) -> str:
-    """按本帧角色文本过滤 dynamic_features 中的状态分句.
-
-    旧实现用“本帧提到任意状态词”做全局开关，且“，后”后整段截断；这里改为
-    逐分句、逐角色：只保留本帧该角色文本里**肯定出现**的状态分句；静态服装/
-    头饰分句始终保留。当前文本写“未受伤/没有散发”不视为状态成立。
-    """
-    text = str(dynamic or "")
-    current = str(current_text if current_text is not None else frame_desc or "")
-    if not text:
-        return text
-    import re as _re
-    clauses = [c.strip() for c in _re.split(r"[，、,；;]", text) if c.strip()]
-    kept = []
-    for clause in clauses:
-        states = [w for w in _LATER_STATE_WORDS if w in clause]
-        if not states:
-            kept.append(clause)          # 服装/头饰/静态特征
-            continue
-        if any(_state_present_for_char(current, w) for w in states):
-            kept.append(clause)          # 本帧该角色确实处于此状态
-        # 否则只丢这个状态分句，不按“后”字砍掉后续所有静态信息
-    return "，".join(kept)
 
 
 def _inject_frame_spec(
@@ -4116,9 +2455,6 @@ from shared.content_safety import (
 )
 
 
-def _strip_frame_action_result(dynamic: str) -> str:
-    """从 dynamic_features 中剥离首帧不应出现的动作结果/武器词（复用 shared 单一实现）."""
-    return _safety_strip_action_result(dynamic)
 
 
 # 尾帧目光确定性修复：错别字 + 看向动作结果对象
@@ -4126,13 +2462,6 @@ _LF_GAZE_TYPO = (
     ("倒倒", "紧紧"), ("倒到", "紧紧"),
     ("望望", "望着"), ("看看", "看着"),
 )
-# 目光看向"不在场/消失对象"的模式（触发改为看动作结果对象）
-_LF_GAZE_LOST_OBJECT = (
-    "消失之处", "消失处", "水面刺客", "刺客消失", "画右水面", "画左水面",
-    "水中刺客", "刺客没入之处", "没入之处",
-)
-# 动作结果对象出现（场景含被刺倒的同伴）→ 才触发目光改写
-_LF_VICTIM_HINTS = ("倒下", "仰面倒", "仰面躺", "中刀", "被刺", "心口", "洇开", "倒地", "受伤")
 
 
 def fix_lf_desc_gaze(lf_desc: str, shot: dict | None = None,
@@ -4160,247 +2489,18 @@ def _build_final_frame_prompt(shot: dict, desc: str, frame_kind: str,
     return compose_frame_prompt(shot, characters, frame_kind, desc=desc)
 
 
-# ──────────────────── Doodle 区域编辑 (Seedream 负向词替代品) ────────────────────
-# 2026-08-16 hook ff「刀悬浮/横躺」根因：Seedream 全档不支持 negative_prompt / seed
-# （见 shared/model_caps.py SEEDREAM 全档 supports_negative_prompt=False / supports_seed=False），
-# 文本 prompt 无法可靠约束「指甲盖大小/竖直/正对某人」等**精确空间约束**——模型非确定性
-# 反复画出完整匕首。官方 Seedream 4.0-4.5 提供 image-to-image + 视觉标注（doodle/bbox）
-# 作为空间控制手段：模型会优先改写红框区域，红框外严格保持原图。
-#
-# 把这条做成自动 fallback：常规出图 → 检测 prompt 含空间精确词 → 调 doodle 二修 →
-# 用 refined 覆盖 ff；doodle 失败保留原图（graceful degradation）。Per-shot 优先：
-# shot["doodle_refine"] = {"bbox_ratio": (x1,y1,x2,y2), "refined_prompt": "..."}
-# 命中即跳过 auto-detect，用 shot 提供的 bbox + 专用 prompt 覆盖通用模板。
-_SPATIAL_FALLBACK_DEFAULTS = {
-    # hook 案例：右下水面对应 1024×1792 上 (500,850)-(1020,1550)
-    # ratio = (0.488, 0.474, 0.996, 0.865)
-    "微露水面": {
-        "bbox_ratio": (0.49, 0.47, 1.0, 0.86),
-        "refined_prompt": (
-            "在红框区域: 水面上只允许出现一截指甲盖大小的极小物体顶端（高度≤1厘米），"
-            "物体主体/护手/手柄/刀身等必须完全没入水下不可见，"
-            "禁止物体与水面平行、禁止物体悬浮空中、禁止物体横躺。"
-            "红框外: 完全保持与原图一致，人物/船/夜色/荷叶等一切不变。"
-        ),
-    },
-    "悬浮空中": {
-        "bbox_ratio": (0.30, 0.05, 0.95, 0.60),
-        "refined_prompt": (
-            "在红框区域: 物体必须被某只手握住或落在物体表面，禁止悬浮空中。"
-            "红框外: 完全保持与原图一致。"
-        ),
-    },
-}
 
 
-def _detect_spatial_fallback(ff_desc_full: str, shot: dict) -> dict | None:
-    """检测 prompt 是否需要 doodle 区域编辑 fallback.
-
-    Returns dict {phrase, bbox_ratio, refined_prompt} 或 None.
-    """
-    if os.getenv("DOODLE_REFINE_ENABLED", "0").strip() != "1":
-        return None
-
-    override = shot.get("doodle_refine")
-    if override:
-        return {
-            "phrase": "<override>",
-            "bbox_ratio": tuple(override["bbox_ratio"]),
-            "refined_prompt": override["refined_prompt"],
-        }
-    for phrase, cfg in _SPATIAL_FALLBACK_DEFAULTS.items():
-        if phrase in ff_desc_full:
-            return {"phrase": phrase, **cfg}
-    return None
 
 
-async def _doodle_refine_first_frame(
-    image_adapter,
-    base_image_path: str,
-    bbox_ratio: tuple[float, float, float, float],
-    refined_prompt: str,
-    output_path: str,
-    shot_index: int,
-) -> str | None:
-    """在 base_image 上画红框区域，调用 i2i 用 refined_prompt 改写该区域.
-
-    1) 读 base_image → 画 bbox 红色矩形 → 保存为 annotated
-    2) i2i 调用（单参考图 = annotated）
-    3) 写入 output_path
-
-    失败（异常/输出缺失/未生成）→ 返回 None，调用方走 graceful degradation 保留原图。
-    """
-    try:
-        from PIL import Image, ImageDraw
-        base = Path(base_image_path)
-        annotated = base.parent / f"{base.stem}_doodle.png"
-
-        img = Image.open(base_image_path).convert("RGB")
-        w, h = img.size
-        x1, y1, x2, y2 = (int(c * d) for c, d in zip(bbox_ratio, (w, h, w, h)))
-        # 画 bbox：宽线 8px 红色（Seedream 视觉标注会优先改写该区域）
-        draw = ImageDraw.Draw(img)
-        draw.rectangle((x1, y1, x2, y2), outline="red", width=8)
-        img.save(annotated)
-
-        # i2i 调用（单参考图 = 我们的 annotated doodle；force_multi_ref=False 走单图分支）
-        # v6.61（09-05 hook 根因 5）：显式传 save_path=output_path——provider
-        # _download 在 save_path 为空时按 frame_desc 落默认名（"doodle_refine"
-        # 不匹配首帧/尾帧/关键帧 → fallback "kf" → 存成 shot_N_kf.png 冒充
-        # 关键帧槽位，15:08 hook 实证）。显式落盘到调用方指定的临时文件，
-        # provider 中间产物不再污染关键帧命名空间。
-        img_out = await image_adapter.generate_single_image(
-            prompt=refined_prompt,
-            reference_image_paths=[str(annotated)],
-            shot_index=shot_index,
-            frame_desc="doodle_refine",
-            force_multi_ref=False,
-            save_path=str(output_path),
-        )
-        if img_out is None:
-            return None
-        if hasattr(img_out, "data") and hasattr(img_out.data, "save"):
-            img_out.data.save(output_path)
-        elif hasattr(img_out, "save"):
-            img_out.save(output_path)
-        return output_path if Path(output_path).exists() else None
-    except Exception as e:
-        _bridge_log(f"  [DOODLE] 区域编辑失败: {e}")
-        return None
 
 
-async def _accept_doodle_refinement(refined, target, shot, frame_kind, characters,
-                                    empty_scene, prompt=None, kf_index=None):
-    """二修候选的准入：QC 通过才覆盖原图，未知/跳过 QC 一律保留原图.
-
-    P0-6：旧路径把带 8px 红框的候选直接 replace 覆盖已过 QC 的原图，既不复检
-    红框残留、也不留退路。现在：
-      1) 候选先过 _maybe_qc_frame（prompt 追加「不得保留红框」断言）；
-      2) ok=False 或 error=skipped（免检/未真正检过）→ 拒绝覆盖；
-      3) 覆盖前备份原图与 sidecar，替换/写 sidecar 失败时回滚。
-    prompt=None 时按 _maybe_qc_frame 的同一规则从 shot 的 *_desc_final 取。
-    """
-    if not refined or not _validate_frame(refined):
-        return False
-    if prompt is None:
-        if frame_kind == "last_frame":
-            prompt = shot.get("lf_desc_final") or shot.get("ff_desc_final") or ""
-        elif frame_kind == "keyframe":
-            prompt = (shot.get("kf_0_desc_final") or shot.get("kf_desc_final")
-                      or shot.get("ff_desc_final") or shot.get("lf_desc_final") or "")
-        else:
-            prompt = shot.get("ff_desc_final") or shot.get("lf_desc_final") or ""
-    from shared.image_qc import (
-        build_qc_frame_meta,
-        request_snapshot_path,
-        sidecar_path,
-        write_frame_request_snapshot,
-        write_sidecar,
-    )
-    from uuid import uuid4
-    import shutil
-    target = Path(target)
-    candidate = Path(refined)
-    sidecar_path(candidate).unlink(missing_ok=True)
-    probe = dict(shot)
-    probe.pop("_qc_last", None)
-    critical = await _maybe_qc_frame(
-        probe, str(candidate), frame_kind, characters, empty_scene,
-        prompt=prompt + "；不得保留红框、标注线或编辑标记", kf_index=kf_index)
-    result = probe.get("_qc_last")
-    if critical or not getattr(result, "ok", False) or getattr(result, "error", "") == "skipped":
-        return False
-    if any(getattr(i, "severity", "") == "critical" for i in getattr(result, "issues", [])):
-        return False
-    backup = target.with_name("." + target.name + "." + uuid4().hex + ".bak")
-    sidecar = sidecar_path(target)
-    req_file = request_snapshot_path(target)
-    old_sidecar = sidecar.read_bytes() if sidecar.exists() else None
-    old_req = req_file.read_bytes() if req_file.exists() else None
-    shutil.copy2(target, backup)
-    try:
-        candidate.replace(target)
-        write_frame_request_snapshot(
-            target,
-            shot=shot,
-            frame_kind=frame_kind,
-            prompt=prompt + "；不得保留红框、标注线或编辑标记",
-            refs=[str(target)],
-            kf_index=kf_index,
-            model_id=_adapter_resolved_model_id(None),
-        )
-        frame_meta = build_qc_frame_meta(
-            shot, frame_kind, characters, kf_index=kf_index, frame_path=target,
-        )
-        write_sidecar(target, result, frame_meta=frame_meta)
-    except Exception:
-        backup.replace(target)
-        if old_sidecar is None:
-            sidecar.unlink(missing_ok=True)
-        else:
-            sidecar.write_bytes(old_sidecar)
-        if old_req is None:
-            req_file.unlink(missing_ok=True)
-        else:
-            req_file.write_bytes(old_req)
-        raise
-    finally:
-        backup.unlink(missing_ok=True)
-    return True
 
 
-_EXPLICIT_VEHICLE_MOTION = (
-    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:向|朝|沿)画面(?:上方|上)", "up"),
-    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:向|朝|沿)画面(?:下方|下)", "down"),
-    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:向画面左|向画面右|横向)", "horizontal"),
-    (r"(?:船|舟|车|轿|载具)[^，。；]{0,20}(?:迎面|向镜头|驶近|靠近镜头)", "approach"),
-)
 
 
-def _fixed_camera_shift_anchor(desc: str) -> str:
-    """只消费输入明确写出的载具屏幕方向；不凭“深处/前行”猜 Y 轴位移."""
-    import re as _re
-    text = str(desc or "")
-    if "纵向" in text or "近大远小" in text or "横向移动" in text:
-        return ""
-    for pat, direction in _EXPLICIT_VEHICLE_MOTION:
-        if not _re.search(pat, text):
-            continue
-        if direction == "up":
-            return ("；该载具与乘员沿画面纵向向上移动并随距离略微缩小（近大远小），"
-                    "不得用擦除背景代替位移")
-        if direction == "down":
-            return ("；该载具与乘员沿画面纵向向下移动并略微放大（近大远小），"
-                    "不得用擦除背景代替位移")
-        if direction == "horizontal":
-            return "；该载具与乘员沿画面横向移动，不改变船体尺度，不得用擦除背景代替位移"
-        return "；该载具与乘员向镜头靠近并略微放大，不得用擦除背景代替位移"
-    return ""
 
 
-def _dedupe_prompt_clauses(text: str) -> str:
-    """去掉**完全重复**的分句（同一句被多个注入器追加时只留第一处）.
-
-    2026-11-08（WP2）：13 镜图片 prompt 体检里的重复短语，大多来自
-    _inject_frame_spec_and_closeup / _extract_char_layout /
-    add_image_strict_constraints 各自把同一句描述再写一遍。
-    这里只做**确定性去重**（归一化后完全相同的分句），不改写、不删信息。
-    """
-    import re as _re
-    parts = _re.split(r"(?<=[。；;])", str(text or ""))
-    seen = set()
-    out = []
-    for part in parts:
-        # 只把**原文相同**（仅去首尾空白）的分句视为重复：标点参与语义，
-        # 「不，放行」与「不放行」不是同一句（复核 2026-11-08 已复现误删）。
-        key = part.strip()
-        if not key:
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(part)
-    return "".join(out) or str(text or "")
 
 def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
                          *, desc: str | None = None,
@@ -4526,303 +2626,24 @@ def compose_frame_prompt(shot: dict, characters: list | None, frame_kind: str,
     raise ValueError("frame_kind 必须是 first_frame / last_frame / keyframe")
 
 
-FAILURE_REQUEST_CONFLICT = "request_conflict"
-FAILURE_MISSING_ASSET = "missing_asset"
-FAILURE_QC_DISPUTE = "qc_dispute"
-FAILURE_STOCHASTIC_MISS = "stochastic_miss"
-FAILURE_INFRA_UNAVAILABLE = "infra_unavailable"
-_NON_RETRYABLE_FAILURES = (
-    FAILURE_REQUEST_CONFLICT,
-    FAILURE_MISSING_ASSET,
-    FAILURE_QC_DISPUTE,
-    FAILURE_INFRA_UNAVAILABLE,
-)
 
 
-def _classify_generation_failure(
-    exc: BaseException | None = None,
-    qc_result=None,
-    qc_critical: bool = False,
-) -> str:
-    """Classify Step02a frame failure for P1-5 stop-loss routing."""
-    if exc is not None:
-        msg = str(exc or "")
-        if isinstance(exc, FileNotFoundError) or any(
-            tok in msg for tok in (
-                "参考图缺失", "参考图不存在", "portrait_file_missing",
-                "读取/编码失败", "参考图在发送前缺失",
-            )
-        ):
-            return FAILURE_MISSING_ASSET
-        if isinstance(exc, ValueError) or type(exc).__name__ == "PromptContradictionError" or any(
-            tok in msg for tok in (
-                "帧契约", "矛盾", "篡改", "契约摘要不一致",
-                "参考图数量", "参考图超限", "无效分辨率",
-                "ambiguous_character_alias", "frame_contract",
-            )
-        ):
-            return FAILURE_REQUEST_CONFLICT
-        if any(tok in msg for tok in (
-            "qc_call_failed", "QC 异常", "质检失败",
-            "达到尝试上限", "额度耗尽", "[SOFT-SKIP]",
-        )):
-            return FAILURE_QC_DISPUTE
-        return FAILURE_REQUEST_CONFLICT
-    if qc_result is not None and not getattr(qc_result, "ok", True):
-        return FAILURE_QC_DISPUTE
-    if qc_critical:
-        return FAILURE_STOCHASTIC_MISS
-    return "none"
 
 
-PROMPT_TEMPLATE_VERSION = "step02a.prompt/v2"
 
 
-def _configured_image_provider_model() -> tuple[str, str]:
-    try:
-        from shared import config as _cfg
-        from shared.model_alias import canonical_image_model_id
-        provider = str(getattr(_cfg, "IMAGE_PROVIDER", "") or "")
-        model_attr = {
-            "volcengine": "VOLCENGINE_T2I_MODEL",
-            "bailian": "BAILIAN_T2I_MODEL",
-            "agent_plan": "AGENT_PLAN_T2I_MODEL",
-            "agnes": "AGNES_IMAGE_MODEL",
-            "minimax": "MINIMAX_T2I_MODEL",
-        }.get(provider, "")
-        raw_model = str(getattr(_cfg, model_attr, "") or "") if model_attr else ""
-        model_id = canonical_image_model_id(raw_model) if raw_model else ""
-        return provider, model_id
-    except Exception:
-        return "", ""
 
 
-def _adapter_resolved_model_id(image_adapter, img_out=None) -> str:
-    meta = getattr(img_out, "request_meta", None) if img_out is not None else None
-    if isinstance(meta, dict) and str(meta.get("model_id") or "").strip():
-        return str(meta["model_id"]).strip()
-    meta2 = getattr(image_adapter, "last_request_meta", None) if image_adapter is not None else None
-    if isinstance(meta2, dict) and str(meta2.get("model_id") or "").strip():
-        return str(meta2["model_id"]).strip()
-    _, fallback = _configured_image_provider_model()
-    return fallback
 
 
-def _shot_complexity_label(
-    shot: dict | None,
-    characters: list | None,
-    frame_kind: str,
-    kf_index: int | None = None,
-) -> str:
-    if not isinstance(shot, dict):
-        return "unknown"
-    try:
-        from shared.prompt_facts import project_frame_facts
-        proj = project_frame_facts(shot, frame_kind, characters, kf_index=kf_index)
-        ents = proj.get("entities") or []
-        if is_empty_scene(shot, characters or []) or (proj.get("spec_present") and len(ents) == 0):
-            return "empty_scene"
-        if len(ents) == 1:
-            return "single_person"
-        if len(ents) == 2:
-            return "two_person"
-        if len(ents) >= 3:
-            return "multi_person"
-    except Exception:
-        pass
-    return "unknown"
 
 
-def _persist_frame_request_snapshot(
-    frame_path: Path,
-    *,
-    shot: dict,
-    frame_kind: str,
-    prompt_text: str,
-    refs: list | None,
-    image_adapter=None,
-    img_out=None,
-    operation_id: str = "",
-    kf_index: int | None = None,
-) -> dict:
-    """Write `<frame_stem>_request.json` and return resolved request & artifact identity."""
-    from shared.image_qc import frame_identity, write_frame_request_snapshot
-    req_meta = (
-        getattr(img_out, "request_meta", None)
-        or (getattr(image_adapter, "last_request_meta", None) if image_adapter is not None else None)
-    )
-    if not isinstance(req_meta, dict):
-        req_meta = {}
-    eff_prompt = str(req_meta.get("effective_prompt") or prompt_text or "")
-    eff_refs = list(req_meta.get("effective_refs") or refs or [])
-    provider, default_model = _configured_image_provider_model()
-    resolved_provider = str(req_meta.get("provider") or provider or "")
-    resolved_model = str(req_meta.get("model_id") or default_model or "")
-    resolved_op = str(req_meta.get("operation_id") or operation_id or "")
-    snap_path = write_frame_request_snapshot(
-        frame_path,
-        shot=shot,
-        frame_kind=frame_kind,
-        prompt=eff_prompt,
-        refs=eff_refs,
-        kf_index=kf_index,
-        model_id=resolved_model,
-        provider=resolved_provider,
-        operation_id=resolved_op,
-    )
-    img_id = frame_identity(frame_path)
-    try:
-        snap_data = json.loads(snap_path.read_text(encoding="utf-8"))
-    except Exception:
-        snap_data = {}
-    return {
-        "operation_id": resolved_op,
-        "provider": resolved_provider,
-        "model_id": resolved_model,
-        "request_digest": str(snap_data.get("request_digest") or ""),
-        "prompt_sha256": str(snap_data.get("prompt_sha256") or ""),
-        "image_sha256": str(img_id.get("sha256") or ""),
-    }
 
 
-def _resolve_ledger_qc_verdict(
-    frame_path: str | Path,
-    shot: dict,
-    frame_kind: str,
-    characters: list | None,
-    *,
-    qc_critical: bool,
-    qc_last=None,
-    kf_index: int | None = None,
-) -> tuple[str, str, str]:
-    """Derive (defect_class, qc_verdict, detail) from authoritative qc_state()."""
-    if qc_last is not None and not getattr(qc_last, "ok", True):
-        return FAILURE_QC_DISPUTE, "qc_call_failed", str(getattr(qc_last, "error", ""))
-    try:
-        from shared.image_qc import build_qc_frame_meta, qc_state
-        meta = build_qc_frame_meta(
-            shot, frame_kind, characters, kf_index=kf_index, frame_path=frame_path,
-        )
-        state = qc_state(Path(frame_path), expected_frame=meta)
-        status = str(state.get("status") or "")
-        verdict_detail = str((state.get("data") or {}).get("verdict_detail") or "")
-        if status == "qc_call_failed":
-            return FAILURE_QC_DISPUTE, "qc_call_failed", str((state.get("data") or {}).get("error") or "")
-        if status == "qc_rejected" or qc_critical:
-            return FAILURE_STOCHASTIC_MISS, "qc_rejected", verdict_detail or "critical_reject"
-        if status == "qc_passed":
-            return "none", "qc_passed", verdict_detail or "clean_pass"
-        if status:
-            return "none", status, verdict_detail
-    except Exception:
-        pass
-    if qc_critical:
-        return FAILURE_STOCHASTIC_MISS, "qc_rejected", "critical_reject"
-    return "none", "qc_passed", "clean_pass"
 
 
-def _emit_stage4_ledger(
-    shot: dict,
-    frame_role: str,
-    attempt_idx: int,
-    *,
-    kf_index: int | None = None,
-    prompt_text: str = "",
-    refs: list[str] | None = None,
-    action_type: str = "generate",
-    defect_class: str = "none",
-    qc_verdict: str = "",
-    detail: str = "",
-    operation_id: str = "",
-    model_id: str = "",
-    request_digest: str = "",
-    image_sha256: str = "",
-    shot_complexity: str = "",
-    characters: list | None = None,
-) -> None:
-    """Emit a Stage 4 decision ledger record into step02_events.jsonl (fail-soft)."""
-    import hashlib as _hl
-    import re as _re
-    try:
-        from shared.ref_compose import ref_identity
-        from shared.request_events import emit_decision_ledger
-        from shared.run_scope import current_scope_identity
-
-        eff_kfi = kf_index
-        if eff_kfi is None:
-            _km = _re.match(r"^keyframe_(\d+)$", str(frame_role or "").strip())
-            if _km:
-                eff_kfi = int(_km.group(1))
-        cfg_provider, cfg_model = _configured_image_provider_model()
-        eff_model_id = str(model_id or cfg_model or "")
-        scope = current_scope_identity()
-        chapter_scope = f"part_{int(scope.get('part') or 1):02d}/chapter_{int(scope.get('chapter') or 1):03d}"
-        work_id = str(scope.get("book_name") or (shot.get("book_name") if isinstance(shot, dict) else "") or "")
-        script_rev = str((shot.get("_script_revision") if isinstance(shot, dict) else "") or "")
-        req_digest = str(request_digest or (
-            f"sha256:{_hl.sha256(prompt_text.encode('utf-8')).hexdigest()[:16]}"
-            if prompt_text else ""
-        ))
-        eff_complexity = str(shot_complexity or "")
-        if not eff_complexity and isinstance(shot, dict):
-            fk_long = (
-                "last_frame" if frame_role == "last_frame"
-                else ("keyframe" if str(frame_role).startswith("keyframe") else "first_frame")
-            )
-            eff_complexity = _shot_complexity_label(shot, characters, fk_long, kf_index=eff_kfi)
-        ref_ids = []
-        for rp in (refs or []):
-            ident = ref_identity(rp)
-            ref_ids.append(f"{ident.get('kind') or 'ref'}:{ident.get('entity') or Path(rp).name}")
-        emit_decision_ledger(
-            work_id=work_id,
-            chapter_scope=chapter_scope,
-            script_revision=script_rev,
-            shot_index=shot.get("index") if isinstance(shot, dict) else None,
-            frame_role=frame_role,
-            kf_index=eff_kfi,
-            shot_complexity=eff_complexity or "unknown",
-            provider=cfg_provider,
-            model_id=eff_model_id,
-            prompt_template_version=PROMPT_TEMPLATE_VERSION,
-            request_digest=req_digest,
-            prompt_version=PROMPT_TEMPLATE_VERSION,
-            ref_strategy="multi_ref_contract" if refs else "text_only",
-            ref_identities=ref_ids,
-            attempt_index=attempt_idx,
-            operation_id=operation_id,
-            image_sha256=image_sha256,
-            action_type=action_type,
-            defect_class=defect_class,
-            qc_verdict=qc_verdict,
-            human_usability="unknown",
-            non_target_damage=None,
-            estimated_cost_cny=None,
-            detail=detail,
-        )
-    except Exception:
-        return
 
 
-def _check_frame_contract_preflight(
-    shot: dict,
-    frame_kind: str,
-    characters: list | None,
-    *,
-    kf_index: int | None = None,
-) -> dict | None:
-    """Block invalid/contradictory frame contracts before dispatching any image POST."""
-    try:
-        from shared.prompt_facts import project_frame_facts
-        proj = project_frame_facts(shot, frame_kind, characters, kf_index=kf_index)
-        if proj.get("spec_status") == "invalid":
-            return {
-                "code": FAILURE_REQUEST_CONFLICT,
-                "issues": proj.get("spec_issues") or [],
-            }
-    except Exception:
-        return None
-    return None
 
 
 async def _gen_first_frame_async(
@@ -5140,23 +2961,6 @@ async def _gen_first_frame_async(
     return str(ff_path) if ff_path.exists() else None
 
 
-def _resolve_missing_lf_desc(shot: dict) -> str | None:
-    """Return a lossless static fallback for a missing ``lf_desc``.
-
-    Only the same shot's static ``ff_desc`` may be reused.  Deriving a new
-    last-frame scene from ``scene`` / ``main_subject`` / narration would create
-    semantic facts after the step01 audit, so that path is deliberately refused.
-    """
-    ff_desc = str((shot or {}).get("ff_desc") or "").strip()
-    if not ff_desc:
-        return None
-    motion_keywords = (
-        "上移", "下移", "左移", "右移", "推进", "拉远", "跃起", "冲出",
-        "穿越", "飞", "跑", "跳", "蹦", "滑", "冲", "快速", "缓慢",
-    )
-    if any(kw in ff_desc for kw in motion_keywords):
-        return None
-    return ff_desc
 
 
 async def _gen_last_frame_async(
@@ -5456,15 +3260,6 @@ async def _gen_last_frame_async(
     return str(lf_path) if lf_path.exists() else None
 
 
-def _dump_json(path: Path, model) -> None:
-    """写 pydantic 模型或模型列表为 JSON（ViMax 用 model_validate_json 读回）."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(model, list):
-        data = [m.model_dump() for m in model]
-    else:
-        data = model.model_dump()
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 

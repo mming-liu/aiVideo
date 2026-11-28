@@ -739,7 +739,12 @@ def test_try_qc_repair_post_edit_qc_no_attribute_error():
     不在源码中即证明修复生效。
     """
     from pathlib import Path
-    src = Path(_PROJECT_ROOT / "shared" / "vimax_bridge.py").read_text(encoding="utf-8")
+    # 2026-11-28 O11：`_try_qc_repair` 已迁入 `shared/vimax_bridge_parts/`，静态检查
+    # 必须同时覆盖父模块与全部拆分件（否则断言会因为“代码搬走了”而误报）。
+    sources = [(Path(_PROJECT_ROOT) / "shared" / "vimax_bridge.py").read_text(encoding="utf-8")]
+    for part in sorted((Path(_PROJECT_ROOT) / "shared" / "vimax_bridge_parts").glob("*.py")):
+        sources.append(part.read_text(encoding="utf-8"))
+    src = "\n".join(sources)
     # 旧 bug 特征行：访问 .has_hallucination 必须在 bool(qc2 ...) 上下文
     buggy_pattern = "bool(qc2 and qc2.has_hallucination"
     assert buggy_pattern not in src, \
@@ -747,7 +752,10 @@ def test_try_qc_repair_post_edit_qc_no_attribute_error():
         f"（_maybe_qc_frame 返 bool，访问 .has_hallucination 必崩 AttributeError）"
     # 2026-10-31 P0-6：二修覆盖前必须经 _accept_doodle_refinement 的严格 QC
     # （含 error=skipped 拒绝），不再自己 replace + 内联复检。
-    assert "await _accept_doodle_refinement(edited, frame_path" in src, \
+    # 2026-11-28 O11：拆分后该调用走父模块转发代理（`_proxy_accept_doodle`），
+    # 语义不变；两种写法都接受。
+    assert ("await _accept_doodle_refinement(edited, frame_path" in src
+            or "await _proxy_accept_doodle(edited, frame_path" in src), \
         "二修必须经 _accept_doodle_refinement 严格复检后才允许覆盖原图"
     assert "Path(edited).replace(frame_path)" not in src, \
         "不得在复检前直接覆盖原图"
