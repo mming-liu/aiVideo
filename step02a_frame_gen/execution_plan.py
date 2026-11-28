@@ -921,14 +921,15 @@ def check_pre_shot_asset_gate(
     frames: set[str] | None = None,
 ) -> dict:
     """G3/F5 Pre-Shot Asset Gate: read-only check unified with portrait collector."""
-    from shared.paths import style_bank_dir, vimax_working_dir, characters_bank_dir
+    from shared.paths import style_bank_dir
     from shared.vimax_bridge import (
         _frame_spec_closeup,
+        _load_portrait_stores_readonly,
         _resolve_style_anchor_path,
         _units_for_indices,
         resolve_character_portrait_assets,
     )
-    from shared.character_bank import CharacterBank
+    from shared.character_bank import BankLoadError, StyleBank, style_reason_text
     from shared.prompt_facts import project_frame_facts
 
     chars = list(script.get("characters") or []) if isinstance(script, dict) else []
@@ -938,18 +939,23 @@ def check_pre_shot_asset_gate(
     } - _GENERIC_CROWD_ROLES
 
     style_anchor = _resolve_style_anchor_path()
-    reg_path = vimax_working_dir() / "character_portraits_registry.json"
-    reg: dict = {}
-    if reg_path.is_file():
+    anchor_reason = "not_found"
+    if not style_anchor:
         try:
-            loaded = json.loads(reg_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                reg = loaded
-        except Exception:
-            reg = {}
-    bank = CharacterBank()
-    bank.load()
-    bank_dir = characters_bank_dir()
+            _sb = StyleBank()
+            _sb.load(read_only=True)
+            anchor_reason = str(_sb.get_anchor_for_style().get("reason") or "not_found")
+        except BankLoadError as _exc:
+            anchor_reason = f"bank_{_exc.reason}"
+    bank_load_error: dict | None = None
+    try:
+        reg, bank, bank_dir = _load_portrait_stores_readonly()
+    except BankLoadError as _exc:
+        # 损坏/非法结构必须显式阻断，不能当成“没有肖像”继续放行。
+        reg, bank, bank_dir = {}, None, None
+        bank_load_error = {"code": "asset_bank_load_error",
+                           "severity": "reject", "reason": _exc.reason,
+                           "path": _exc.path, "message": str(_exc)}
 
     all_shots = [s for s in (script.get("shots") or []) if isinstance(s, dict)]
     idx_set = only_indices if only_indices is not None else {
@@ -997,12 +1003,21 @@ def check_pre_shot_asset_gate(
                             })
 
     issues: list[dict] = []
+    if bank_load_error:
+        issues.append(bank_load_error)
     if not style_anchor:
+        # 拒收原因透传：画风不符/历史资产不能伪装成“图片不存在”。
+        _style_rejected = anchor_reason in ("style_mismatch", "legacy_unstamped")
         issues.append({
-            "code": "style_anchor_missing",
+            "code": "style_anchor_rejected" if _style_rejected else "style_anchor_missing",
             "severity": "warn",
+            "reason": anchor_reason,
             "path": str(style_bank_dir() / "style_anchor.png"),
-            "message": "全局 style_anchor.png 缺失；缺肖像或空镜帧将无法用视觉参考锚定画风",
+            "message": (
+                f"全局画风锚点不可用（{anchor_reason}：{style_reason_text(anchor_reason)}）"
+                if _style_rejected else
+                "全局 style_anchor.png 缺失；缺肖像或空镜帧将无法用视觉参考锚定画风"
+            ),
         })
     for item in missing_portraits:
         issues.append({
@@ -1013,10 +1028,11 @@ def check_pre_shot_asset_gate(
             "character": item["character"],
             "message": f"镜头 {item['shot_index']} 出镜角色「{item['character']}」肖像不可用（{item['reason']}）",
         })
-    status = "blocked" if missing_portraits else "ok"
+    status = "blocked" if (missing_portraits or bank_load_error) else "ok"
     return {
         "status": status,
         "style_anchor": style_anchor,
+        "style_anchor_reason": anchor_reason,
         "missing_portraits": missing_portraits,
         "issues": issues,
     }

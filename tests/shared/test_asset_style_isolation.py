@@ -108,17 +108,21 @@ def test_legacy_assets_are_adopted_in_the_current_epoch(tmp_path, gufeng_style):
     _raw_bank(tmp_path / "cb", characters={"旧角色": _legacy_char("旧角色")})
     bank = cb.CharacterBank(tmp_path / "cb")
     bank.load()
+    before = json.dumps(bank._data, ensure_ascii=False, sort_keys=True)
 
     resolved = bank.resolve_portraits("旧角色")
     assert resolved["ok"] is True
-    assert resolved["reason"] == "legacy_in_epoch"
-    assert resolved["epoch"] == "gufeng"
+    # S02：查询是纯读取——没有纪元时按 legacy_adopted 放行，但不得就地盖章。
+    assert resolved["reason"] == "legacy_adopted"
+    assert resolved["epoch"] == ""
+    assert json.dumps(bank._data, ensure_ascii=False, sort_keys=True) == before
     assert bank.get_all_portraits_as_registry()
 
     # 纪元随 save 落盘
     assert bank.save(run_id="run-1") is True
     saved = json.loads((tmp_path / "cb" / "characters_bank.json").read_text(encoding="utf-8"))
     assert saved["meta"]["style_stamp"]["video_style"] == "gufeng"
+    assert bank.style_context()[1] == "gufeng"
 
 
 def test_style_switch_rejects_legacy_assets(tmp_path, gufeng_style):

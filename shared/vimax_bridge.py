@@ -889,6 +889,53 @@ def resolve_character_portrait_assets(
     aliases = _char_aliases(char_id, characters)
     bank_entry = bank.get_character(char_id) if bank is not None and hasattr(bank, "get_character") else None
 
+    # 2026-11-28 S02：派生注册表不能绕过 Bank 守卫。Bank 可解析时先取同一判据
+    # 的结论：画风拒收直接失败；可用则只允许 Bank 放行的视图。
+    style_current = ""
+    style_epoch_value = ""
+    style_reason = ""
+    bank_portraits: dict | None = None
+    if bank is not None and hasattr(bank, "resolve_portraits"):
+        try:
+            guard = bank.resolve_portraits(char_id)
+        except Exception:
+            guard = None
+        if isinstance(guard, dict):
+            style_current = str(guard.get("video_style") or "")
+            style_epoch_value = str(guard.get("epoch") or "")
+            style_reason = str(guard.get("reason") or "")
+            if not guard.get("ok") and style_reason in ("style_mismatch", "legacy_unstamped"):
+                return {
+                    "character_id": char_id,
+                    "resolved_views": {},
+                    "selected_view": "",
+                    "selected_path": "",
+                    "readable": False,
+                    "approved": False,
+                    "identity_match": True,
+                    "missing_reason": style_reason,
+                    "style_reason": style_reason,
+                }
+            if guard.get("ok"):
+                bank_portraits = {
+                    str(vk): (dict(rec) if isinstance(rec, dict) else {"path": str(rec or "")})
+                    for vk, rec in (guard.get("portraits") or {}).items()
+                }
+            elif isinstance(bank_entry, dict):
+                # Bank 认得这个角色但没有可用肖像：派生注册表可能是旧缓存，
+                # 不能因为“缓存非空”就继续使用。
+                return {
+                    "character_id": char_id,
+                    "resolved_views": {},
+                    "selected_view": "",
+                    "selected_path": "",
+                    "readable": False,
+                    "approved": False,
+                    "identity_match": True,
+                    "missing_reason": style_reason or "portrait_not_registered",
+                    "style_reason": style_reason,
+                }
+
     # Gather view metadata entries from registry first, or bank_dir if unregistered in reg
     views_raw = reg_dict.get(char_id)
     if views_raw is None:
@@ -915,6 +962,50 @@ def resolve_character_portrait_assets(
                 cand = cdir / f"{vk}.png"
                 if cand.is_file():
                     view_entries[vk] = {"path": str(cand)}
+
+    # 2026-11-28 S02：Bank 可用时以它放行的视图为准（注册表只补路径/描述）；
+    # 没有 Bank 结论时，派生注册表逐视图过同一画风判据——带标记但不匹配的
+    # 视图不得靠“缓存里已经有”进入请求。
+    if bank_portraits is not None:
+        if not bank_portraits:
+            view_entries = {}
+        else:
+            merged: dict[str, dict] = {}
+            for vk, rec in bank_portraits.items():
+                existing = view_entries.get(vk)
+                item = dict(existing) if isinstance(existing, dict) else {}
+                if not str(item.get("path") or "").strip():
+                    item = dict(rec)
+                for key in ("video_style", "asset_contract_version"):
+                    if key in rec and key not in item:
+                        item[key] = rec[key]
+                merged[vk] = item
+            view_entries = merged
+    elif view_entries:
+        from shared.character_bank import (
+            current_video_style as _current_video_style,
+            filter_portraits_by_style,
+        )
+        allowed, rejected = filter_portraits_by_style(
+            view_entries,
+            current=style_current or _current_video_style(),
+            epoch=style_epoch_value,
+        )
+        if rejected and not allowed:
+            reason = str(rejected[0].get("reason") or "style_mismatch")
+            return {
+                "character_id": char_id,
+                "resolved_views": {},
+                "selected_view": "",
+                "selected_path": "",
+                "readable": False,
+                "approved": False,
+                "identity_match": True,
+                "missing_reason": reason,
+                "style_reason": reason,
+                "rejected": rejected,
+            }
+        view_entries = allowed
 
     if not view_entries:
         return {
@@ -1043,6 +1134,7 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
     S04/F5：当 roster 非 None 时，按结构化名册与唯一别名解析，统一消费只读
     resolve_character_portrait_assets() 完成视图角色、可读性、身份与审批检查。
     """
+    from shared.character_bank import BankLoadError
     def _pack(refs_out: list[str], *, omissions=None, missing=None,
               identity_reference: str = "verified"):
         if return_details:
@@ -1186,6 +1278,11 @@ def _collect_portrait_refs_for_shot(shot: dict, characters: list | None = None,
                 _bridge_log(f"  [bridge] 镜头{shot.get('index','?')}: 首帧/尾帧参考图=角色 {ident} {resolved.get('selected_view') or view_pref}肖像")
         id_state = "verified" if refs else ("missing" if missing else "unverified")
         return _pack(refs, omissions=omissions, missing=missing, identity_reference=id_state)
+    except BankLoadError as e:
+        _bridge_log(f"  [bridge] 角色资产库装载失败（{e.reason}）: {e}")
+        return _pack([], missing=[{"reason": "asset_bank_load_error",
+                                   "detail": str(e)}],
+                     identity_reference="error")
     except Exception as e:
         _bridge_log(f"  [bridge] 肖像参考图收集异常: {e}")
         return _pack([], missing=[{"reason": "portrait_collect_error", "detail": str(e)}],

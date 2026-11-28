@@ -381,6 +381,26 @@ def _detect_view_preference(text: str) -> str:
             return "front"
     return "front"  # 默认正面
 
+def _style_resolved_portraits(bank, identifier: str) -> tuple[dict, str]:
+    """按 Bank 的统一画风判据取可用肖像（只读，不建目录）.
+
+    2026-11-28 S02：参考图收集不得直接消费 `get_character()["portraits"]`；
+    Bank 支持 `resolve_portraits()` 时以它为准（跨画风/历史资产按同一判据
+    拒收），不支持时退回旧行为（仅供测试替身）。
+    """
+    if bank is not None and hasattr(bank, "resolve_portraits"):
+        try:
+            resolved = bank.resolve_portraits(identifier)
+        except Exception:
+            resolved = None
+        if isinstance(resolved, dict):
+            return (dict(resolved.get("portraits") or {}),
+                    str(resolved.get("reason") or ""))
+    entry = (bank.get_character(identifier)
+             if bank is not None and hasattr(bank, "get_character") else None)
+    return (dict((entry or {}).get("portraits") or {}), "")
+
+
 def _select_best_reference(
     shot: dict,
     bank: CharacterBank,
@@ -418,9 +438,8 @@ def _select_best_reference(
     for char in characters_data:
         identifier = char.get("identifier", "")
         if identifier and identifier in search_text:
-            entry = bank.get_character(identifier)
-            if entry and entry.get("portraits"):
-                portraits = entry["portraits"]
+            portraits, _style_reason = _style_resolved_portraits(bank, identifier)
+            if portraits:
                 # 特写镜头：face 面部特写优先（锁五官防变脸，组合参考图法）；
                 # 否则按优先级尝试：检测到的视角 → front → side → back
                 is_closeup = any(kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部"))
@@ -478,10 +497,9 @@ def _select_all_character_refs(
         identifier = char.get("identifier", "")
         if not identifier or identifier not in search_text:
             continue
-        entry = bank.get_character(identifier)
-        if not entry or not entry.get("portraits"):
+        portraits, _style_reason = _style_resolved_portraits(bank, identifier)
+        if not portraits:
             continue
-        portraits = entry["portraits"]
         # 特写镜头：face 面部特写优先（锁五官防变脸）
         if is_closeup:
             face_p = portraits.get("face", {}).get("path")
@@ -891,11 +909,14 @@ def _load_portrait_stores_readonly() -> tuple[dict, object | None, Path | None]:
     except Exception:
         pass
     try:
-        from shared.character_bank import CharacterBank
+        from shared.character_bank import CharacterBank, BankLoadError
         bank = CharacterBank()
-        bank.load()
+        bank.load(read_only=True)   # S02：查询路径不建目录；损坏/非法结构抛结构化异常
         if not reg:
             reg = bank.get_all_portraits_as_registry() or {}
+    except BankLoadError:
+        # 损坏/非法结构必须显式：调用方（门禁/收集）据此报告，不静默当成“无肖像”。
+        raise
     except Exception:
         bank = None
     return reg, bank, bank_dir

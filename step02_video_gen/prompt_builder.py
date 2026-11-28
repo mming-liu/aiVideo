@@ -237,6 +237,26 @@ def _is_space_object_identifier(ident: str) -> bool:
     return any(w in ident for w in _SPACE_OBJECT_IDENTIFIER_WORDS)
 
 
+def _filter_portrait_registry_or_fail(registry: dict) -> dict:
+    """派生肖像注册表按统一画风判据过滤（S02；Bank 损坏时逐视图判据仍生效）."""
+    from shared.character_bank import (
+        BankLoadError, CharacterBank, filter_portrait_registry,
+    )
+    bank = CharacterBank()
+    try:
+        bank.load(read_only=True)
+    except BankLoadError as exc:
+        try:
+            from shared.degrade import note_degraded
+            note_degraded(
+                "step02_video_gen/prompt_builder.py:portrait_registry_style", exc)
+        except Exception:
+            pass
+        bank = None
+    allowed, _rejected = filter_portrait_registry(registry, bank=bank)
+    return allowed
+
+
 def _load_character_registry() -> dict:
     """加载角色注册表（存在时）.
 
@@ -253,7 +273,9 @@ def _load_character_registry() -> dict:
             with open(registry_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if data:
-                return data if isinstance(data, dict) else {}
+                if not isinstance(data, dict):
+                    return {}
+                return _filter_portrait_registry_or_fail(data)
     except Exception as _degrade_exc:
         from shared.degrade import note_degraded as _note_degraded
         _note_degraded("step02_video_gen/prompt_builder.py:_load_character_registry", _degrade_exc)
@@ -2066,6 +2088,10 @@ def _find_fallback_reference(working_dir: Path, shot: dict | None = None,
     try:
         with open(registry_path, "r", encoding="utf-8") as f:
             registry = json.load(f)
+        if not isinstance(registry, dict):
+            return None
+        # S02：备用肖像同样过统一画风判据，旧缓存不能绕过 Bank 守卫。
+        registry = _filter_portrait_registry_or_fail(registry)
         is_closeup = any(kw in search_text for kw in ("大特写", "特写", "面部", "表情", "脸部"))
         for ident, views in registry.items():
             if not ident or ident not in search_text:

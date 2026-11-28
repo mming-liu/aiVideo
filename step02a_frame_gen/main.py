@@ -455,16 +455,22 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
     characters = _characters_in_units(script.get("characters") or [], units) \
         if only_indices is not None else list(script.get("characters") or [])
     bank = CharacterBank()
-    bank.load()
+    bank_error = ""
+    try:
+        bank.load(read_only=True)    # S02：预检不建目录；损坏/非法结构显式记录
+    except Exception as _exc:        # noqa: BLE001 - 兼容结构化 BankLoadError
+        bank_error = f"{getattr(_exc, 'reason', 'load_error')}: {_exc}"
     portraits = []
     for char in characters:
         ident = str(char.get("identifier") or "")
         if not ident:
             continue
-        entry = bank.get_character(ident) if bank.has_character(ident) else None
+        resolved = (bank.resolve_portraits(ident) if not bank_error
+                    else {"ok": False, "portraits": {}})
+        allowed = dict(resolved.get("portraits") or {})
         have = set()
         for view in ("base", "side", "back", "face"):
-            path = str(((entry or {}).get("portraits") or {}).get(view, {}).get("path") or "")
+            path = str((allowed.get(view) or {}).get("path") or "")
             if path and Path(path).is_file():
                 have.add(view)
         portraits.append({"character": ident,
@@ -614,6 +620,7 @@ def _plan_only_report(script: dict, work_dir: Path, only_indices, frames,
         "prompt_preflight": {"status": "blocked" if prompt_problems else "ok",
                              "problems": prompt_problems},
         "pre_shot_asset_gate": pre_shot_asset_gate,
+        "asset_bank_error": bank_error or None,
         "visual_plan": visual_plan,
         "visual_plan_status": visual_plan.get("status", "blocked"),
         "visual_plan_issues": plan_issues,

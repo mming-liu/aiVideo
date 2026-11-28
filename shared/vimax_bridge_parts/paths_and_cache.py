@@ -144,10 +144,26 @@ async def _generate_missing_portraits(
         # 已有肖像且图片文件存在 → 直接复用
         if bank.has_character(identifier):
             entry = bank.get_character(identifier)
-            if entry and entry.get("portraits"):
-                portraits = entry["portraits"]
+            resolved = (bank.resolve_portraits(identifier)
+                        if hasattr(bank, "resolve_portraits") else None)
+            if isinstance(resolved, dict):
+                reason = str(resolved.get("reason") or "")
+                if not resolved.get("ok") and reason in ("style_mismatch",
+                                                         "legacy_unstamped"):
+                    # 2026-11-28 S02：画风不符/历史无标记的旧肖像不得复用，也不得
+                    # 借“重建 portraits”把旧图片补盖成当前画风。需要新画风资产时
+                    # 走显式迁移或重新登记，不在查询/复用链里自动改来源。
+                    _bridge_log(
+                        f"  [bank] 角色 {identifier} 的已有肖像被画风判据拒收（{reason}），"
+                        "本次不纳入参考注册表")
+                    continue
+                portraits = dict(resolved.get("portraits") or {})
+            else:
+                portraits = (entry or {}).get("portraits") or {}
+            if portraits:
                 # 检查实际文件是否存在（bank 有记录但旧图片已删除时需重生成）
-                front_p = portraits.get("front", {}).get("path", "")
+                front_p = portraits.get("front", {}).get("path", "") \
+                    or portraits.get("base", {}).get("path", "")
                 if front_p and Path(front_p).exists():
                     registry[identifier] = portraits
                     _bridge_log(f"  [bank] 复用角色 {identifier} 的已有肖像")
@@ -772,47 +788,21 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
 def _resolve_style_anchor_path() -> str | None:
     """Read-only lookup for locked global style_anchor.png (returns path or None without creating dirs).
 
-    2026-11-28 S02：与 `StyleBank.get_anchor_for_style()` 用**同一判据**——带标记
-    但与当前画风不符（`style_mismatch`）、无标记且纪元已是别的画风
-    （`legacy_unstamped`）时一律返回 `None`，不得再回落到裸 JSON 或默认
-    `style_anchor.png`。本函数保持只读：不建目录、不盖纪元戳、不改内存。
+    2026-11-28 S02：**不再自己解析 JSON/默认图**——装载与回退统一走
+    `StyleBank.load(read_only=True)` + `get_anchor_for_style()`，与查询、预检、
+    参考图组装共用同一份解析结果。带标记但画风不符（`style_mismatch`）、
+    无标记且纪元已是别的画风（`legacy_unstamped`）时返回 `None`；损坏/非法
+    结构也返回 `None`，不得回落到默认图。本函数保持只读：不建目录、不盖章。
     """
     try:
-        from shared.character_bank import (
-            current_video_style, normalize_video_style, resolve_style_state,
-            style_strict,
-        )
-        from shared.paths import style_bank_dir
-        sdir = style_bank_dir()
-        if not sdir.is_dir():
+        from shared.character_bank import BankLoadError, StyleBank
+        bank = StyleBank()
+        try:
+            bank.load(read_only=True)
+        except BankLoadError:
             return None
-        data: dict = {}
-        json_path = sdir / "style_bank.json"
-        if json_path.is_file():
-            data = json.loads(json_path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                # 非法顶层（`[]` / `null` / 字符串）**不得**降级成空库：空库会被判成
-                # 「无标记但纪元可采纳」，反而让默认图获得放行资格。
-                return None
-        path = ""
-        img = str(data.get("style_anchor_image") or "").strip()
-        if img and Path(img).is_file():
-            path = img
-        if not path:
-            default = sdir / "style_anchor.png"
-            if default.is_file():
-                path = str(default.resolve())
-        if not path:
-            return None
-        meta = data.get("meta")
-        stamp = meta.get("style_stamp") if isinstance(meta, dict) else None
-        epoch = normalize_video_style(
-            stamp.get("video_style") if isinstance(stamp, dict) else "")
-        state = resolve_style_state(data.get("video_style"),
-                                    current=current_video_style(), epoch=epoch)
-        if state in ("style_mismatch", "legacy_unstamped") and style_strict():
-            return None
-        return path
+        resolved = bank.get_anchor_for_style()
+        return str(resolved.get("path") or "") or None
     except Exception:
         return None
 

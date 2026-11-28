@@ -119,6 +119,191 @@ def stamp_style(data: dict, style: str | None = None) -> str:
     return normalize_video_style(stamp.get("video_style"))
 
 
+class BankLoadError(ValueError):
+    """Bank 只读装载失败（结构化异常，调用方可按 `reason` 分派）.
+
+    `reason` 取值：
+      - `invalid_json`：文件存在但不是合法 JSON；
+      - `invalid_structure`：JSON 合法但结构非法（顶层/字段类型不符）；
+      - `unreadable`：文件存在但无法读取。
+
+    文件缺失不属于异常：`load(read_only=True)` 返回空库并把
+    `load_state` 置为 `"missing"`，调用方据此区分“没有库”和“库坏了”。
+    """
+
+    def __init__(self, path: str | Path, reason: str, message: str = ""):
+        self.path = str(path)
+        self.reason = str(reason)
+        self.message = str(message or "")
+        detail = f"{self.reason}: {self.path}"
+        if self.message:
+            detail = f"{detail}: {self.message}"
+        super().__init__(detail)
+
+    def to_dict(self) -> dict:
+        return {"path": self.path, "reason": self.reason, "message": self.message}
+
+
+def style_epoch(data: dict | None) -> str:
+    """读取资产库里的**风格纪元**（`meta.style_stamp.video_style`），纯读取.
+
+    缺字段/类型非法时返回空串——查询不负责盖章；`stamp_style()` 才写。
+    """
+    if not isinstance(data, dict):
+        return ""
+    meta = data.get("meta")
+    stamp = meta.get("style_stamp") if isinstance(meta, dict) else None
+    return normalize_video_style(stamp.get("video_style") if isinstance(stamp, dict) else "")
+
+
+def filter_portraits_by_style(
+    portraits: dict,
+    *,
+    current: str,
+    epoch: str,
+    strict: bool | None = None,
+) -> tuple[dict, list[dict]]:
+    """按统一画风判据过滤一组肖像视图（纯读取）.
+
+    返回 `(allowed, rejected)`；`rejected` 每项含 `view` / `reason` /
+    `video_style`。与 `resolve_portraits()` 的视图级判定同源。
+    """
+    _strict = style_strict() if strict is None else bool(strict)
+    allowed: dict = {}
+    rejected: list[dict] = []
+    for view, record in (portraits or {}).items():
+        rec = dict(record) if isinstance(record, dict) else {"path": str(record or "")}
+        state = resolve_style_state(rec.get("video_style"), current=current, epoch=epoch)
+        if state in ("style_mismatch", "legacy_unstamped") and _strict:
+            rejected.append({"view": str(view), "reason": state,
+                             "video_style": normalize_video_style(rec.get("video_style"))})
+            continue
+        allowed[view] = rec
+    return allowed, rejected
+
+
+def filter_portrait_registry(
+    registry: dict,
+    *,
+    bank: "CharacterBank | None" = None,
+    style: str | None = None,
+) -> tuple[dict, list[dict]]:
+    """按画风判据过滤派生注册表（`character_portraits_registry.json`）.
+
+    派生缓存**不能替代 Bank 守卫**：给了 `bank` 时逐角色走
+    `resolve_portraits()`；被画风拒收的角色整条剔除，仍可用的角色只保留
+    Bank 允许的视图。没有 Bank（或角色未登记）时退回逐视图判据。
+    """
+    allowed_registry: dict = {}
+    rejected_rows: list[dict] = []
+    current = normalize_video_style(style) if style is not None else ""
+    epoch = ""
+    if bank is not None:
+        current, epoch = bank.style_context(style)
+    elif style is not None:
+        current = normalize_video_style(style)
+    else:
+        current = current_video_style()
+    for ident, views in (registry or {}).items():
+        if not isinstance(views, dict):
+            rejected_rows.append({"identifier": str(ident), "view": "",
+                                  "reason": "invalid_structure"})
+            continue
+        effective = views
+        if bank is not None and hasattr(bank, "resolve_portraits"):
+            resolved = bank.resolve_portraits(ident, style=style)
+            reason = str(resolved.get("reason") or "")
+            if not resolved.get("ok") and reason in ("style_mismatch", "legacy_unstamped"):
+                rejected_rows.append({"identifier": str(ident), "view": "", "reason": reason})
+                continue
+            if resolved.get("ok"):
+                bank_views = resolved.get("portraits") or {}
+                effective = ({k: v for k, v in views.items() if k in bank_views}
+                             or dict(bank_views))
+        filtered, rejected = filter_portraits_by_style(
+            effective, current=current, epoch=epoch)
+        rejected_rows.extend({"identifier": str(ident), **row} for row in rejected)
+        if filtered:
+            allowed_registry[str(ident)] = filtered
+    return allowed_registry, rejected_rows
+
+
+def _bank_load(path: Path, *, read_only: bool, validator, empty: dict) -> dict:
+    """两个 Bank 共用的装载边界（`load_state` + 结构化失败）.
+
+    `read_only=False` 保持历史容错：损坏/非法结构打印后退回空库；
+    `read_only=True` 抛出 `BankLoadError`，由调用方决定拒绝还是降级。
+    """
+    if not path.exists():
+        return {"data": copy.deepcopy(empty), "state": "missing"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return {"data": validator(payload), "state": "ok"}
+    except json.JSONDecodeError as exc:
+        error = BankLoadError(path, "invalid_json", str(exc))
+    except BankLoadError as exc:
+        error = exc
+    except OSError as exc:
+        error = BankLoadError(path, "unreadable", str(exc))
+    if read_only:
+        raise error
+    print(f"[bank] 资产库读取失败，使用空库（{error.reason}）: {error}")
+    return {"data": copy.deepcopy(empty), "state": error.reason}
+
+
+def _validate_characters_payload(payload) -> dict:
+    """CharacterBank 结构校验；非法时抛 `BankLoadError(invalid_structure)`."""
+    if not isinstance(payload, dict):
+        raise BankLoadError("characters_bank.json", "invalid_structure",
+                            "顶层必须是对象")
+    characters = payload.get("characters", {})
+    if not isinstance(characters, dict):
+        raise BankLoadError("characters_bank.json", "invalid_structure",
+                            "characters 必须是对象")
+    for ident, entry in characters.items():
+        if not isinstance(entry, dict):
+            raise BankLoadError("characters_bank.json", "invalid_structure",
+                                f"角色 {ident!r} 的条目必须是对象")
+        if "portraits" in entry and not isinstance(entry.get("portraits"), dict):
+            raise BankLoadError("characters_bank.json", "invalid_structure",
+                                f"角色 {ident!r} 的 portraits 必须是对象")
+    meta = payload.get("meta", {})
+    if not isinstance(meta, dict):
+        raise BankLoadError("characters_bank.json", "invalid_structure",
+                            "meta 必须是对象")
+    loaded = dict(payload)
+    loaded["characters"] = characters
+    loaded.setdefault("meta", {"last_updated_chapter": 0, "total_characters": 0})
+    return loaded
+
+
+def _validate_style_payload(payload) -> dict:
+    """StyleBank 结构校验；非法时抛 `BankLoadError(invalid_structure)`."""
+    if not isinstance(payload, dict):
+        raise BankLoadError("style_bank.json", "invalid_structure", "顶层必须是对象")
+    video_style = payload.get("video_style")
+    if video_style is not None and not isinstance(video_style, str):
+        raise BankLoadError("style_bank.json", "invalid_structure",
+                            "video_style 必须是字符串或 null")
+    meta = payload.get("meta")
+    if meta is not None:
+        if not isinstance(meta, dict):
+            raise BankLoadError("style_bank.json", "invalid_structure",
+                                "meta 必须是对象")
+        stamp = meta.get("style_stamp")
+        if stamp is not None and not isinstance(stamp, dict):
+            raise BankLoadError("style_bank.json", "invalid_structure",
+                                "meta.style_stamp 必须是对象")
+        epoch = stamp.get("video_style") if isinstance(stamp, dict) else None
+        if epoch is not None and not isinstance(epoch, str):
+            raise BankLoadError("style_bank.json", "invalid_structure",
+                                "meta.style_stamp.video_style 必须是字符串或 null")
+    loaded = dict(payload)
+    for k, v in _EMPTY_STYLE.items():
+        loaded.setdefault(k, v)
+    return loaded
+
+
 def _book_global_dir() -> Path:
     """本书跨章节共享目录（统一路径来源: shared/paths.py）."""
     from shared.paths import global_dir
@@ -203,6 +388,9 @@ class CharacterBank:
     # （实测：同一进程里先建 A 库再建 B 库，B 一开库就带着 A 的角色；跨运行还可能把别的
     # 章节的实体当成已存在）。空库是**每个实例一份**状态。
         self._data: dict = copy.deepcopy(_EMPTY_BANK)
+        #: 最近一次 `load()` 的结果：`unloaded` / `ok` / `missing` / 结构化失败原因。
+        #: `read_only=True` 时没有目录副作用，调用方靠它区分“没有库”和“库坏了”。
+        self.load_state: str = "unloaded"
         #: 本次进程**登记/更新过**的角色名（save 时给它们盖 `last_run_id`）——
         #: 只标被这一轮碰过的条目：整库覆盖会让"来源"退化成"最后一次写库的人"。
         self._touched: set = set()
@@ -213,22 +401,20 @@ class CharacterBank:
 
     # -- 读写 ----------------------------------------------------------------
 
-    def load(self) -> dict:
-        """从磁盘加载 bank，不存在则返回空结构."""
-        if self._bank_path.exists():
-            try:
-                with open(self._bank_path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                # 确保必要 key 存在
-                loaded.setdefault("characters", {})
-                loaded.setdefault("meta", {"last_updated_chapter": 0, "total_characters": 0})
-                self._data = loaded
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"[bank] 角色库读取失败，使用空库: {e}")
-                self._data = copy.deepcopy(_EMPTY_BANK)
-        else:
-            self._data = copy.deepcopy(_EMPTY_BANK)
-        self._bank_dir.mkdir(parents=True, exist_ok=True)
+    def load(self, *, read_only: bool = False) -> dict:
+        """从磁盘加载 bank，不存在则返回空结构.
+
+        `read_only=True`：查询/预检专用——**不建目录、不保存、不盖章**；
+        文件缺失返回空库并把 `load_state` 置为 `"missing"`；JSON 损坏、
+        结构非法或不可读抛 `BankLoadError`（带 `reason`），不静默降级。
+        默认 `read_only=False` 保持历史容错与目录创建语义。
+        """
+        result = _bank_load(self._bank_path, read_only=read_only,
+                            validator=_validate_characters_payload, empty=_EMPTY_BANK)
+        self._data = result["data"]
+        self.load_state = result["state"]
+        if not read_only:
+            self._bank_dir.mkdir(parents=True, exist_ok=True)
         return self._data
 
     def save(self, run_id: str = "", call_ids=None) -> bool:
@@ -370,10 +556,13 @@ class CharacterBank:
         return stamp_style(self._data, style)
 
     def style_context(self, style: str | None = None) -> tuple[str, str]:
-        """`(当前画风, 风格纪元)`；当前画风缺省读 `VIDEO_STYLE`."""
-        epoch = self.ensure_style_stamp(style)
+        """`(当前画风, 风格纪元)`；当前画风缺省读 `VIDEO_STYLE`.
+
+        **纯读取**：纪元只从已装载数据里读，查询不盖章、不改 `_data`；
+        盖章由 `ensure_style_stamp()`（显式）或 `save()`（候选副本）负责。
+        """
         current = normalize_video_style(style) if style is not None else current_video_style()
-        return current, epoch
+        return current, style_epoch(self._data)
 
     def resolve_portraits(self, identifier: str, *, style: str | None = None) -> dict:
         """按画风解析某角色的可用肖像；返回 `{ok, reason, video_style, portraits, rejected}`."""
@@ -572,24 +761,23 @@ class StyleBank:
             self._dir = style_bank_dir()
         self._json_path = self._dir / "style_bank.json"
         self._data: dict = copy.deepcopy(_EMPTY_STYLE)
+        #: 与 `CharacterBank.load_state` 同义（`unloaded/ok/missing/失败原因`）。
+        self.load_state: str = "unloaded"
 
     # -- 读写 ----------------------------------------------------------------
 
-    def load(self) -> dict:
-        """从磁盘加载，不存在返回空结构."""
-        if self._json_path.exists():
-            try:
-                with open(self._json_path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                for k, v in _EMPTY_STYLE.items():
-                    loaded.setdefault(k, v)
-                self._data = loaded
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"[bank] 风格库读取失败，使用空库: {e}")
-                self._data = copy.deepcopy(_EMPTY_STYLE)
-        else:
-            self._data = copy.deepcopy(_EMPTY_STYLE)
-        self._dir.mkdir(parents=True, exist_ok=True)
+    def load(self, *, read_only: bool = False) -> dict:
+        """从磁盘加载，不存在返回空结构.
+
+        `read_only=True` 时无目录副作用；损坏/非法结构抛 `BankLoadError`
+        （`not_found` 仍返回空库 + `load_state="missing"`）。
+        """
+        result = _bank_load(self._json_path, read_only=read_only,
+                            validator=_validate_style_payload, empty=_EMPTY_STYLE)
+        self._data = result["data"]
+        self.load_state = result["state"]
+        if not read_only:
+            self._dir.mkdir(parents=True, exist_ok=True)
         return self._data
 
     def save(self) -> None:
@@ -624,9 +812,9 @@ class StyleBank:
         return stamp_style(self._data, style)
 
     def style_context(self, style: str | None = None) -> tuple[str, str]:
-        epoch = self.ensure_style_stamp(style)
+        """`(当前画风, 风格纪元)`；纯读取，查询不盖章（见 `CharacterBank.style_context`）."""
         current = normalize_video_style(style) if style is not None else current_video_style()
-        return current, epoch
+        return current, style_epoch(self._data)
 
     def get_anchor_for_style(self, style: str | None = None) -> dict:
         """按画风解析风格锚点；不一致/历史无标记且已换画风 ⇒ 拒绝复用."""
