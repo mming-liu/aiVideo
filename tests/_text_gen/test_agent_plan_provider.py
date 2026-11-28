@@ -107,50 +107,17 @@ def test_config_validate_agent_plan_missing_key(monkeypatch):
 
 
 # ───────────────────────── provider 单测 helper ─────────────────────────
+# 公用构造器在受控支持模块里（不跨测试文件导入隐含夹具）。
 
+from tests._text_gen.text_service_support import (  # noqa: E402
+    ARK_URL, OPENCODE_URL, make_text_service, ok_response,
+)
 
-#: 两个端点的**请求方言**（2026-10-03）：端点即契约，测试必须显式钉住自己测的是哪一个。
-ARK_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
-OPENCODE_URL = "https://opencode.ai/inference/go/openai/v1"
-
-
-def _make_text_service(monkeypatch, base_url: str = ARK_URL,
-                       shared_base_url: str = ARK_URL):
-    """构造一个最小可用的 AgentPlanTextService（注入假 key + 显式端点）.
-
-    `base_url` 默认给**方舟**端点：本文件历史上写的是 Doubao 方言的断言（`thinking.type`），
-    显式钉住端点后这些断言才名副其实。
-    """
-    from _text_gen import agent_plan_provider as ap_mod
-    from _text_gen import config as tgcfg
-    monkeypatch.setattr(tgcfg, "AGENT_PLAN_API_KEY", "test-key")
-    monkeypatch.setattr(ap_mod.config, "AGENT_PLAN_API_KEY", "test-key")
-    monkeypatch.setattr(ap_mod.config, "AGENT_PLAN_BASE_URL", shared_base_url)
-    monkeypatch.setattr(ap_mod.config, "AGENT_PLAN_TEXT_BASE_URL", base_url)
-    monkeypatch.setattr(ap_mod.config, "AGENT_PLAN_TEXT_MODEL", "doubao-seed-2-1-turbo")
-    # 60 RPM → 1s cooldown，acquire 几乎不阻塞
-    monkeypatch.setattr(ap_mod.config, "AGENT_PLAN_TEXT_RPM", 60)
-    return ap_mod.AgentPlanTextService()
+_make_text_service = make_text_service
+_ok_response = ok_response
 
 
 from _text_gen.models import TextGenerationRequest as _TextReq
-
-
-def _ok_response(content: str = "分镜脚本内容", usage: dict | None = None) -> MagicMock:
-    """构造一个 200 chat completions 响应 mock."""
-    body = {
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": usage or {"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300},
-    }
-    resp = MagicMock(status_code=200, text=str(body)[:200])
-    resp.json.return_value = body
-    return resp
 
 
 def test_empty_content_with_length_is_truncated_not_plain_failure(monkeypatch):
@@ -860,9 +827,6 @@ def test_text_session_header_follows_explicit_config(monkeypatch):
 
 def test_text_endpoint_is_text_specific_with_fallback(monkeypatch):
     """**文本专用端点**：配了用它；留空回落到共享的 `AGENT_PLAN_BASE_URL`（图片侧不受影响）."""
-    from _text_gen import agent_plan_provider as ap_mod
-    from _text_gen import config as tgcfg
-
     # ① 配了文本专用端点 ⇒ 只影响文本通道
     assert _make_text_service(
         monkeypatch, "https://text.example/api")._base_url == "https://text.example/api"

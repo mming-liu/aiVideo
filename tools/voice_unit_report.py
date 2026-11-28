@@ -31,7 +31,8 @@ def _tier_policy() -> str:
 
 def load_report_plan(ch: Path, script: dict, plan_dir=None) -> dict:
     """声音报告与 Step03 共用 v2 缓存校验；无缓存时只接受稿内计划."""
-    from shared.plan_cache import FILENAME, PlanCacheError, load_plan_cache
+    from shared.plan_cache import (FILENAME, SCHEMA, PlanCacheError,
+                                   load_plan_cache)
     revision = str(script.get("script_revision") or "") or compute_script_revision(script)
     scope = {"book_name": script.get("book_name"), "chapter": script.get("chapter_index")}
     base = Path(plan_dir) if plan_dir else Path(ch)
@@ -40,8 +41,15 @@ def load_report_plan(ch: Path, script: dict, plan_dir=None) -> dict:
         try:
             return load_plan_cache(path, scope=scope, script_revision=revision)
         except PlanCacheError as exc:
-            legacy = (json.loads(path.read_text(encoding="utf-8")) or {}).get("outline")
-            if isinstance(legacy, dict) and legacy:
+            # 只对**没有 v2 schema**的旧格式做兼容读取；v2 缓存的章节/稿/摘要
+            # 不符仍然拒绝（不能拿"旧格式"当身份不符的逃生门）。
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raise exc
+            legacy = payload.get("outline") if isinstance(payload, dict) else None
+            is_legacy = isinstance(payload, dict) and payload.get("schema") != SCHEMA
+            if is_legacy and isinstance(legacy, dict) and legacy:
                 print("[WARN] 计划缓存未带身份绑定（按旧格式读取，身份未核）: %s (%s)"
                       % (path, exc), flush=True)
                 return legacy
