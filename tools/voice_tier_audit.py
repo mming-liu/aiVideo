@@ -120,9 +120,16 @@ def build_audit(chapters: list[int]) -> dict:
     union = check_voice_uniqueness(all_units, None, [])
     registry = get_registry()
     work = registry._work_of(None)
+    from tts.voice_registry import (is_shared_tier, tier_policy,
+                                    tiered_sharing_enabled)
+    policy = tier_policy()
     return {
         "schema": "voice_tier_audit.v1",
         "scope": current_scope_identity(),
+        # 2026-11-28 O6：把生效合同与「共享/独占」分流写进报告——同一份 tier 表
+        # 在 strict 下全是独占、在 tiered 下 minor/extra 才进共享桶，报告必须自证口径。
+        "voice_tier_policy": policy,
+        "shared_tiers_enabled": tiered_sharing_enabled(),
         "chapters": per_chapter,
         "union": {
             "unit_count": len(all_units),
@@ -132,6 +139,11 @@ def build_audit(chapters: list[int]) -> dict:
             "shared_roles": union.get("shared_roles") or [],
             "role_voices": {role: sorted(vs)
                             for role, vs in sorted(union.get("roles", {}).items())},
+            # 每个角色在**当前合同**下走独占还是共享（strict 下历史 tier 不生效）
+            "role_pools": {
+                role: ("shared" if is_shared_tier(str((rec or {}).get("tier") or ""))
+                       else "unique")
+                for role, rec in sorted((registry.role_tiers.get(work) or {}).items())},
         },
         "registry": {
             "path": str(registry.registry_path),

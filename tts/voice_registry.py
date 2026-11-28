@@ -498,6 +498,27 @@ class VoiceRegistry(_LegacyVoicePool):
                 used.add(sp)
         return used
 
+    def _unique_used_speakers(self, work: str, *, exclude_role: str = "") -> set:
+        """**独占**角色/旁白已占用的 speaker（共享桶里的龙套不算）.
+
+        2026-11-28 O6：`shared_profile_for` 原来用 `_used_speakers` 判「能不能复用
+        桶内音色」，把**别的龙套**也算成了占用——同一 `(gender, age_range)` 桶的第二个
+        龙套就会报 `VoicePoolExhaustedError`，于是 `VOICE_TIER_POLICY=tiered` 实际
+        只能共享 1 个角色/桶。共享桶能否复用只取决于「独占集合 + 本次 avoid」，本方法
+        给出那个集合（旁白按独占处理）。
+        """
+        used = set()
+        for role, rec in (self.profiles.get(work) or {}).items():
+            if role == exclude_role:
+                continue
+            tier = normalize_voice_tier((rec or {}).get("voice_tier"))
+            if is_shared_tier(tier):
+                continue
+            sp = str((rec or {}).get("speaker") or "").strip()
+            if sp:
+                used.add(sp)
+        return used
+
     def validate_speaker(self, speaker: str, *, provider: str = "", legal=()) -> str:
         """核 speaker 是否合法；合法返回 ""，否则抛 :class:`IllegalSpeakerError`.
 
@@ -677,7 +698,9 @@ class VoiceRegistry(_LegacyVoicePool):
             raise ValueError("get_shared_voice 需要角色标识，收到空值")
         work = self._work_of(work_id)
         key = self._bucket_key(gender, age_range)
-        blocked = set(self.used_voice_ids) | set(avoid or ())
+        # 2026-11-28 O6：共享池只被**独占**角色/旁白与本次 avoid 挡住——同桶龙套的
+        # 音色本来就是要复用的（此前把 shared 音色也算进 blocked，同桶第二个角色就报错）。
+        blocked = (set(self.used_voice_ids) - set(self.shared_voice_ids)) | set(avoid or ())
         with self._lock:
             if role in self.mapping:
                 existing = dict(self.mapping[role])
@@ -737,7 +760,8 @@ class VoiceRegistry(_LegacyVoicePool):
                 return dict(existing)
             blocked = set(avoid or ())
             bucket_value = str((self.shared_buckets.get(work) or {}).get(key) or "")
-            used = self._used_speakers(work, exclude_role=role)
+            # 2026-11-28 O6：只有**独占**角色/旁白挡住共享池；同桶的其他龙套不挡。
+            used = self._unique_used_speakers(work, exclude_role=role)
             chosen = ""
             if bucket_value and bucket_value not in blocked and bucket_value not in used:
                 chosen = bucket_value

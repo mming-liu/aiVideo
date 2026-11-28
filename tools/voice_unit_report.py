@@ -22,6 +22,13 @@ from shared.quality_gate import compute_script_revision
 from shared.run_scope import current_scope_identity
 
 
+def _tier_policy() -> str:
+    """生效的声线合同（`strict` / `tiered`）；非法配置直接抛，不静默当 strict."""
+    from tts.voice_registry import tier_policy
+
+    return tier_policy()
+
+
 def load_report_plan(ch: Path, script: dict, plan_dir=None) -> dict:
     """声音报告与 Step03 共用 v2 缓存校验；无缓存时只接受稿内计划."""
     from shared.plan_cache import FILENAME, PlanCacheError, load_plan_cache
@@ -135,6 +142,10 @@ def build_report(script: dict, *, plan_dir: Path | None = None,
     return {
         "schema": "voice_unit_report.v1",
         "scope": current_scope_identity(),
+        # 2026-11-28 O6：报告必须带出生效声线合同（strict/tiered），否则
+        # 同一份 unit 表在两种合同下语义不同却无法从报告区分。
+        "voice_tier_policy": _tier_policy(),
+        "shared_tiers_enabled": _tier_policy() == "tiered",
         "script_revision": revision,
         "file_script_revision": file_revision,
         "revision_mismatch": bool(file_revision and file_revision != revision),

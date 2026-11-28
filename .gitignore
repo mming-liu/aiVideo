@@ -671,3 +671,5 @@ start_studio.bat
 !tests/shared/test_http_resilience_fault_injection.py
 # 2026-11-28：O5 跨阶段台账的用例
 !tests/tools/test_chapter_pipeline_report.py
+# 2026-11-28：O6 声线分级扩容的离线验收用例
+!tests/step03_tts_audio/test_voice_tier_expansion_offline.py
