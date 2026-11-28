@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import math
+import re
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -131,6 +132,38 @@ def duration_band_matches(record: dict) -> bool:
     return (isinstance(actual, dict) and actual.keys() == expected.keys()
             and all(isinstance(actual[k], (int, float)) and not isinstance(actual[k], bool)
                     and actual[k] == v for k, v in expected.items()))
+
+
+# ============================================================================
+# 画幅解析（单源：style_prefix.frame_canvas_ratio / env_guard / 视频 provider 共用）
+# ============================================================================
+_SIZE_RE = re.compile(r"^\s*(\d+)\s*[x*:]\s*(\d+)\s*$", re.IGNORECASE)
+
+
+def parse_size(size: str | None) -> tuple[int, int] | None:
+    """解析 `1440x2560` / `1440*2560` / `1440:2560` → (w, h)；不可解析或非正返回 None.
+
+    2026-11-28 O1：画幅串此前在 `style_prefix.frame_canvas_ratio`、
+    `vimax_adapters._canvas_ratio`、各视频 provider 里各写一份解析。这里收敛成唯一
+    解析实现（含 `*` / `x` / `:` 三种分隔符），调用方只做「解析 + 取最简比」。
+    """
+    m = _SIZE_RE.match(str(size or ""))
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if w <= 0 or h <= 0:
+        return None
+    return w, h
+
+
+def size_ratio(size: str | None) -> str | None:
+    """最简画幅串（如 `9:16` / `16:9` / `1:1`）；不可解析返回 None."""
+    wh = parse_size(size)
+    if wh is None:
+        return None
+    w, h = wh
+    g = math.gcd(w, h)
+    return f"{w // g}:{h // g}"
 
 
 # ============================================================================
@@ -383,7 +416,11 @@ BAILIAN_R2V_MODEL = os.getenv("BAILIAN_R2V_MODEL", "wan2.7-r2v-2026-06-12")
 # 分辨率 = 目标偏好（省钱用 720P，须在模型能力内——wan2.7/happyhorse 官方支持 720P/1080P），
 # 非模型约束；模型时长上限由 shared/model_caps 注册表按模型解析（wan2.7/happyhorse=15s），不在此写死
 BAILIAN_VIDEO_RESOLUTION = os.getenv("BAILIAN_VIDEO_RESOLUTION", "720P")  # 720P 或 1080P
-BAILIAN_VIDEO_RATIO = os.getenv("BAILIAN_VIDEO_RATIO", "9:16")  # 16:9, 9:16, 1:1
+# 空=按分镜实际画幅推导（与 volcengine/agent_plan 同口径：先 frame_canvas_ratio()，
+# 再 req.size，都不可解析才回退 9:16）；非空（16:9/9:16/1:1）则强制该值。
+# 2026-11-28 O1：留空**不再**等于「固定 9:16」——provider 已补推导，
+# 空串此前会原样透传成空画幅（`self._ratio = ratio or BAILIAN_VIDEO_RATIO`）。
+BAILIAN_VIDEO_RATIO = os.getenv("BAILIAN_VIDEO_RATIO", "")  # 16:9, 9:16, 1:1；空=按 req 推导
 BAILIAN_VIDEO_DURATION = int(os.getenv("BAILIAN_VIDEO_DURATION", "5"))  # 兜底默认时长（step01 duration_sec 优先）
 BAILIAN_VIDEO_POLL_INTERVAL = int(os.getenv("BAILIAN_VIDEO_POLL_INTERVAL", "15"))
 BAILIAN_VIDEO_MAX_POLL_ATTEMPTS = int(os.getenv("BAILIAN_VIDEO_MAX_POLL_ATTEMPTS", "120"))

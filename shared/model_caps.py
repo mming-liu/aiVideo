@@ -198,7 +198,17 @@ def seedance_supports_local_video_reference(model: str | None = None) -> bool:
 # 当前供应商视频模型能力（step01 等上游按 VIDEO_PROVIDER+VIDEO_REFERENCE_MODE 解析）
 # ---------------------------------------------------------------------------
 
-def active_video_model() -> str | None:
+def _env_text(env, key: str, default: str) -> str:
+    """读一个配置键：`env` 为 None 时走进程环境（生产语义），否则只读给定映射.
+
+    2026-11-28 O1：env_guard 的跨键预检需要在**不写 os.environ** 的前提下按同一
+    口径解析「当前实际渲染分镜的视频模型」，因此这些 helper 都接受可选 `env`。
+    """
+    raw = env.get(key) if env is not None else os.getenv(key)
+    return default if raw is None else raw
+
+
+def active_video_model(env=None) -> str | None:
     """当前 VIDEO_PROVIDER + VIDEO_REFERENCE_MODE 下实际渲染分镜的视频模型 ID.
 
     - volcengine：text→T2V 模型；image/r2v→I2V 模型
@@ -206,31 +216,33 @@ def active_video_model() -> str | None:
     - bailian：text→T2V；image→I2V；r2v→R2V（wan2.7/happyhorse 官方时长上限均为 15s）
     - agent_plan：text→T2V；image→I2V；r2v→I2V（Agent Plan 默认模型）
     - dashscope / agnes：返回各自主模型
+
+    `env`：可选配置映射（默认进程环境），见 `_env_text`。
     """
-    provider = os.getenv("VIDEO_PROVIDER", "bailian")
-    mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
+    provider = _env_text(env, "VIDEO_PROVIDER", "bailian")
+    mode = (_env_text(env, "VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
     if provider == "agent_plan":
-        return os.getenv("AGENT_PLAN_T2V_MODEL", "doubao-seedance-2-0")
+        return _env_text(env, "AGENT_PLAN_T2V_MODEL", "doubao-seedance-2-0")
     if provider == "volcengine":
         if mode == "text":
-            return os.getenv("VOLCENGINE_T2V_MODEL", "doubao-seedance-1-5-pro-251215")
-        return os.getenv("VOLCENGINE_I2V_MODEL", "doubao-seedance-1-5-pro-251215")
+            return _env_text(env, "VOLCENGINE_T2V_MODEL", "doubao-seedance-1-5-pro-251215")
+        return _env_text(env, "VOLCENGINE_I2V_MODEL", "doubao-seedance-1-5-pro-251215")
     if provider == "minimax":
         if mode == "r2v":
-            return os.getenv("MINIMAX_H3_MODEL", "MiniMax-H3")
+            return _env_text(env, "MINIMAX_H3_MODEL", "MiniMax-H3")
         if mode == "text":
-            return os.getenv("MINIMAX_T2V_MODEL", "MiniMax-Hailuo-02")
-        return os.getenv("MINIMAX_I2V_MODEL", "MiniMax-Hailuo-2.3-Fast")
+            return _env_text(env, "MINIMAX_T2V_MODEL", "MiniMax-Hailuo-02")
+        return _env_text(env, "MINIMAX_I2V_MODEL", "MiniMax-Hailuo-2.3-Fast")
     if provider == "bailian":
         if mode == "r2v":
-            return os.getenv("BAILIAN_R2V_MODEL", "wan2.7-r2v-2026-06-12")
+            return _env_text(env, "BAILIAN_R2V_MODEL", "wan2.7-r2v-2026-06-12")
         if mode == "image":
-            return os.getenv("BAILIAN_I2V_MODEL", "wan2.7-i2v-2026-04-25")
-        return os.getenv("BAILIAN_T2V_MODEL", "wan2.7-t2v-2026-06-12")
+            return _env_text(env, "BAILIAN_I2V_MODEL", "wan2.7-i2v-2026-04-25")
+        return _env_text(env, "BAILIAN_T2V_MODEL", "wan2.7-t2v-2026-06-12")
     if provider == "dashscope":
-        return os.getenv("DASHSCOPE_VIDEO_MODEL", "wan2.7-t2v")
+        return _env_text(env, "DASHSCOPE_VIDEO_MODEL", "wan2.7-t2v")
     if provider == "agnes":
-        return os.getenv("AGNES_VIDEO_MODEL", "agnes-video-v2.0")
+        return _env_text(env, "AGNES_VIDEO_MODEL", "agnes-video-v2.0")
     return None
 
 
@@ -458,7 +470,7 @@ def active_video_prompt_cap() -> int:
     return _model_prompt_cap(active_video_model())
 
 
-def active_video_supports_audio() -> bool:
+def active_video_supports_audio(env=None) -> bool:
     """当前视频模型是否自带语音（generate_audio / 原生发声）.
 
     2026-09-13 审计修复：本函数此前在 414/439 重复定义，后者覆盖前者且两者
@@ -473,15 +485,18 @@ def active_video_supports_audio() -> bool:
 
     消费点：step01 音频指令段门控 + _warn_silent_video_model；step02
     prompt_builder 对话/背景音注入门控（无声模型注入声音指令是 prompt 噪声）。
+
+    `env`：可选配置映射（默认进程环境），透传给 `active_video_model`。
     """
-    provider = os.getenv("VIDEO_PROVIDER", "bailian")
+    provider = _env_text(env, "VIDEO_PROVIDER", "bailian")
     if provider in ("volcengine", "agent_plan"):
-        return bool(get_seedance_cap(active_video_model()).supports_generate_audio)
+        return bool(get_seedance_cap(active_video_model(env)).supports_generate_audio)
     if provider == "minimax":
-        mode = (os.getenv("VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
-        return mode == "r2v" or "h3" in active_video_model().lower()
+        mode = (_env_text(env, "VIDEO_REFERENCE_MODE", "text") or "text").strip().lower()
+        model = active_video_model(env) or ""
+        return mode == "r2v" or "h3" in model.lower()
     if provider == "bailian":
-        return "wan" in active_video_model().lower()
+        return "wan" in (active_video_model(env) or "").lower()
     return False  # agnes / dashscope 旧链路无声（历史口径）
 
 

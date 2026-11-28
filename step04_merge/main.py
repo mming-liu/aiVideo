@@ -1133,6 +1133,9 @@ def _assert_voice_gate(chapter_dir, *, script_revision: str, voice_required: boo
 def main(options=None):
   """step04 入口。``options=None`` 时取模块顶部已解析的 ``_options``（不二次解析）."""
   opts = options if options is not None else _options
+  # 2026-11-28 O1：跨键配置一致性预检（默认只记录；CONFIG_GUARD_STRICT=1 时 error 阻断）
+  from shared.env_guard import assert_config_consistent
+  assert_config_consistent(stage="step04", logger=_logger)
   attempt = _ensure_attempt(opts)
   lock = None
   if attempt is not None:

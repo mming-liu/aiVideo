@@ -79,6 +79,32 @@ def test_invalid_render_fps_keeps_default(monkeypatch):
     assert get_global_render_config()["fps"] == 24
 
 
+def test_non_positive_render_fps_keeps_default(monkeypatch):
+    """`RENDER_FPS=0/-5` 与 `abc` 同口径（2026-11-28 O1：6a4a3e7 只拦了非数字）."""
+    from shared.style_prefix import get_global_render_config
+
+    for raw in ("0", "-5", "0.0", ""):
+        monkeypatch.setenv("RENDER_FPS", raw)
+        assert get_global_render_config()["fps"] == 24, raw
+
+
+def test_size_ratio_is_a_single_shared_parser(monkeypatch):
+    """画幅解析只有一个实现（shared.config），frame_canvas_ratio 复用它."""
+    from shared.config import parse_size, size_ratio
+    from shared.style_prefix import frame_canvas_ratio
+
+    assert parse_size("1440x2560") == (1440, 2560)
+    assert parse_size("1440*2560") == (1440, 2560)
+    assert parse_size("9:16") == (9, 16)
+    assert parse_size("  ") is None
+    assert parse_size("0x100") is None
+    assert size_ratio("1440x2560") == "9:16"
+    assert size_ratio("2560*1440") == "16:9"
+    assert size_ratio("nope") is None
+    monkeypatch.setenv("VIDEO_SIZE", "2560*1440")
+    assert frame_canvas_ratio() == size_ratio("2560*1440") == "16:9"
+
+
 def test_image_request_ratio_follows_size(monkeypatch):
     from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
 

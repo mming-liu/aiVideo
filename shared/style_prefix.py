@@ -305,20 +305,13 @@ def frame_canvas_ratio() -> str:
     帧 prompt 里的画幅词必须与真正请求的画布一致：写死 9:16 而按 16:9 出图
     （或反之）等于给模型一句错的构图指令。2026-11-06 S27 实测 prompt 说
     「9:16画幅」、实际请求 1280x720，图像只能靠构图句兜住。
+
+    2026-11-28 O1：解析与最简比收敛到 `shared.config.parse_size` / `size_ratio`，
+    与 env_guard 的跨键画幅预检、视频 provider 的 ratio 推导共用同一实现。
     """
-    import math
+    from shared.config import DEFAULT_VIDEO_SIZE, size_ratio
 
-    from shared.config import DEFAULT_VIDEO_SIZE
-
-    raw = (os.getenv("VIDEO_SIZE") or DEFAULT_VIDEO_SIZE).strip().lower().replace("*", "x")
-    m = re.fullmatch(r"(\d+)\s*x\s*(\d+)", raw)
-    if not m:
-        return "9:16"
-    w, h = int(m.group(1)), int(m.group(2))
-    if w <= 0 or h <= 0:
-        return "9:16"
-    g = math.gcd(w, h)
-    return f"{w // g}:{h // g}"
+    return size_ratio(os.getenv("VIDEO_SIZE") or DEFAULT_VIDEO_SIZE) or "9:16"
 
 
 def style_prefix_for_canvas(ratio: str = "16:9", style: str | None = None,
@@ -444,10 +437,15 @@ def get_global_render_config() -> dict:
         if v:
             if k == "fps":
                 try:
-                    config[k] = int(v)
+                    parsed = int(v)
                 except (TypeError, ValueError):
-                    # 非法 RENDER_FPS 不静默改值也不崩：保留 config.RENDER_FPS 的有效值。
-                    pass
+                    # 非数字 RENDER_FPS 不静默改值也不崩：保留 config.RENDER_FPS 的有效值。
+                    continue
+                # 2026-11-28（O1：6a4a3e7 边界补齐）：`RENDER_FPS=0/-5` 此前能写进
+                # config["fps"]（非数字才拦），与 shared/config.py 的 `> 0` 保护不一致；
+                # 非法值一律保留 config.RENDER_FPS，不写坏下游帧率合同。
+                if parsed > 0:
+                    config[k] = parsed
             else:
                 config[k] = v
     return config

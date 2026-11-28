@@ -660,3 +660,6 @@ start_studio.bat
 !/docs/downstream-safe-delivery-evidence/
 !/docs/downstream-safe-delivery-evidence/**
 .archive/
+# 2026-11-28：O1 配置一致性预检与百炼画幅推导的用例
+!tests/shared/test_env_guard_consistency.py
+!tests/step02b_video_gen/test_bailian_ratio.py

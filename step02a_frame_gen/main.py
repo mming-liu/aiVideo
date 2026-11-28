@@ -690,6 +690,10 @@ def main():
     # 运行范围必须在 script_file()/chapter_dir() 之前生效（本入口的章级路径全部惰性解析）
     scope = apply_scope(args.chapter, args.book, args.book_name)
 
+    # 2026-11-28 O1：跨键配置一致性预检（默认只记录；CONFIG_GUARD_STRICT=1 时 error 阻断）
+    from shared.env_guard import assert_config_consistent
+    assert_config_consistent(stage="step02a")
+
     # plan-only 的日志隔离由 `_plan_only_log_isolated` 从进入 `main()` 起覆盖：
     # 不在这里按 `is None` 条件设置，避免继承到正式目录的旧上下文。
     only_indices = parse_shot_selector(args.shots)

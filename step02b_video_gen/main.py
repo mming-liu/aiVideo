@@ -1229,6 +1229,10 @@ def main(options=None):
     # 运行范围必须在 script_file()/chapter_dir() 之前生效（本入口的章级路径全部惰性解析）
     scope = cli.apply_early_scope(options)
 
+    # 2026-11-28 O1：跨键配置一致性预检（默认只记录；CONFIG_GUARD_STRICT=1 时 error 阻断）
+    from shared.env_guard import assert_config_consistent
+    assert_config_consistent(stage="step02b")
+
     only_indices = parse_shot_selector(options.shots)
 
     script_path = script_file()

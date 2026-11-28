@@ -102,6 +102,11 @@ _warn_shell_overrides(
     logger=_logger,
     raise_if_override=True,
 )
+# 2026-11-28 O1：**跨键**配置一致性（模型能力 / 画幅 / 声音 / 数值边界）。
+# 只记录不阻断：既有安全合同仍由上面的 raise_if_override 与各阶段校验负责；
+# 需要 CI/生产硬阻断时设 CONFIG_GUARD_STRICT=1（error 级问题直接抛错）。
+from shared.env_guard import assert_config_consistent as _assert_config_consistent
+_assert_config_consistent(stage="step01", logger=_logger)
 
 
 # ============================================================================

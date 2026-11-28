@@ -422,6 +422,22 @@ def _print_text(report: dict) -> None:
         print("#   " + " ".join(report["configured_but_not_read"]))
 
 
+def _print_consistency(report: dict) -> None:
+    """打印跨键一致性预检结果（只有 `--check` 时报告里才有该字段）."""
+    issues = report.get("consistency_issues")
+    if issues is None:
+        return
+    errors = sum(1 for i in issues if i.get("severity") == "error")
+    warnings = len(issues) - errors
+    print(f"# 配置一致性（--check）：{len(issues)} 条问题（error {errors} / warning {warnings}）")
+    for issue in issues:
+        keys = ",".join(issue.get("keys") or ())
+        print(f"  [{issue.get('severity', '?')}] {issue.get('code', '?')} ({keys}) "
+              f"{issue.get('message', '')} → {issue.get('suggestion', '')}")
+    if not issues:
+        print("#   （无冲突）")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="打印环境变量最终生效值与来源（只读）")
     ap.add_argument("--stage", choices=sorted(STAGES), default="all")
@@ -429,6 +445,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--book")
     ap.add_argument("--book-name")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--check", action="store_true",
+                    help="跑跨键配置一致性预检（shared.env_guard）；有 error 时退出码 2")
     ap.add_argument("--root", type=Path, default=ROOT)
     ap.add_argument("--out", type=Path, help="把报告写到文件（UTF-8），不依赖 shell 重定向编码")
     args = ap.parse_args(argv)
@@ -440,6 +458,14 @@ def main(argv: list[str] | None = None) -> int:
         sys.path.insert(0, str(args.root.resolve()))
     report = collect(args.stage, root=args.root.resolve(), chapter=args.chapter,
                      book=args.book, book_name=args.book_name)
+    if args.check:
+        # 跨键一致性预检（O1）：`collect` 已按生产语义 load_dotenv，故这里读
+        # `os.environ` 得到的就是各阶段入口实际看到的值。纯函数，无副作用。
+        from shared.env_guard import validate_config_consistency
+
+        issues = validate_config_consistency(stage=args.stage)
+        report["consistency_issues"] = [issue.as_dict() for issue in issues]
+        report["consistency_ok"] = not any(i.severity == "error" for i in issues)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -448,6 +474,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=1))
     else:
         _print_text(report)
+        _print_consistency(report)
+    if args.check and not report.get("consistency_ok", True):
+        return 2
     return 0
 
 

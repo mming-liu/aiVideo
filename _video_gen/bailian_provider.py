@@ -27,6 +27,7 @@ from shared.config import (
     BAILIAN_R2V_MODEL,
     BAILIAN_VIDEO_POLL_INTERVAL,
     BAILIAN_VIDEO_MAX_POLL_ATTEMPTS,
+    parse_size,
 )
 from shared.model_caps import _model_duration_cap, _model_prompt_cap, video_supports_param
 
@@ -64,6 +65,50 @@ def _int_duration(value, cap: int | None = None) -> int:
     if cap and cap > 0:
         d = min(d, cap)
     return d
+
+
+_RATIO_VALID = ("16:9", "9:16", "1:1")
+
+
+def _ratio_from_canvas(value: str | None) -> str | None:
+    """把 `1440x2560` / `9:16` 之类画幅串归一成 1:1 / 16:9 / 9:16（不可解析返回 None）.
+
+    wan2.7 只接受这三个画幅（happyhorse 不接受 ratio）。其它比例（如 4:5）只能落到
+    最近的横/竖桶，不能把未注册比例透传给 API。解析由 `shared.config.parse_size`
+    单源完成。
+    """
+    wh = parse_size(value)
+    if wh is None:
+        return None
+    w, h = wh
+    if w == h:
+        return "1:1"
+    return "16:9" if w > h else "9:16"
+
+
+def _resolve_ratio(req, explicit: str | None = None) -> str:
+    """按「显式 override → 分镜实际画幅 → req.size → 9:16」推导 ratio.
+
+    2026-11-28 O1：此前只有 `self._ratio = ratio or BAILIAN_VIDEO_RATIO`，
+    `.env.content` 一留空就得到空串并原样透传给 API。现与
+    `_video_gen/volcengine_provider._resolve_ratio` 同口径推导：`BAILIAN_VIDEO_RATIO`
+    非空且合法则强制生效；否则按 `frame_canvas_ratio()`（VIDEO_SIZE 派生的真画幅，
+    与帧 prompt 里的画幅词同源）再退 `req.size`。
+
+    注意 `step02_video_gen/prompt_builder.py` 里 `VideoGenerationRequest.size` 固定为
+    `720x1280`（省额度档），并不跟随 `VIDEO_SIZE`；因此画布真值必须优先取
+    `frame_canvas_ratio()`，否则改 `VIDEO_SIZE` 后画幅不会跟着变。
+    """
+    override = (explicit or BAILIAN_VIDEO_RATIO or "").strip().lower()
+    if override in _RATIO_VALID:
+        return override
+    from shared.style_prefix import frame_canvas_ratio
+
+    for candidate in (frame_canvas_ratio(), getattr(req, "size", None)):
+        ratio = _ratio_from_canvas(candidate)
+        if ratio:
+            return ratio
+    return "9:16"
 
 
 def _clip_prompt(req, model: str) -> str:
@@ -143,7 +188,7 @@ class BailianVideoService(VideoGenerationService):
 
         # 输出参数（从配置读取，resolution 必须大写：720P 或 1080P）
         self._resolution = resolution or BAILIAN_VIDEO_RESOLUTION  # 默认: 720P
-        self._ratio = ratio or BAILIAN_VIDEO_RATIO                   # 默认: 9:16
+        self._ratio = (ratio or "").strip() or None            # 显式覆盖；空=按 req 推导（_resolve_ratio）
         self._duration = duration or BAILIAN_VIDEO_DURATION          # 默认: 5
 
         # 线程池用于图片编码
@@ -212,7 +257,7 @@ class BailianVideoService(VideoGenerationService):
             "prompt": _clip_prompt(req, model),
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
-            "ratio": self._ratio,
+            "ratio": _resolve_ratio(req, self._ratio),
             "duration": _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             "prompt_extend": True,   # 默认开启智能改写
             "watermark": False,      # 默认不添加水印
@@ -377,7 +422,7 @@ class BailianVideoService(VideoGenerationService):
             "media": media,
             "negative_prompt": req.negative_prompt or "",
             "resolution": self._resolution,
-            "ratio": self._ratio,
+            "ratio": _resolve_ratio(req, self._ratio),
             "duration": _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             "watermark": False,
         }
@@ -476,7 +521,7 @@ class BailianVideoService(VideoGenerationService):
             # 参考图用 media 参数（SDK 签名含 media，不含 references）
             'media': ref_medias,
             'resolution': self._resolution,
-            'ratio': self._ratio,
+            'ratio': _resolve_ratio(req, self._ratio),
             'duration': _int_duration(req.duration or self._duration, _model_duration_cap(model)),
             'watermark': False,
         }

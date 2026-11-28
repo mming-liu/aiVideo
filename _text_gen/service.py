@@ -105,6 +105,13 @@ class _LedgeredService(TextGenerationService):
             "1", "true", "yes", "on")
         if _env_ro or (_rctx is not None and _rctx.read_only):
             raise _ReadOnlyViolation("STEP01_READ_ONLY 启用时禁止发起文本生成请求")
+        # `call_id` 在**调用前**生成（复核之七）：这一次调用的唯一标识——完整正文按它
+        # 归档、修订轮按它关联"这一轮用的是哪份响应"，同一轮多次/并发调用各自定位。
+        # 2026-11-28（O1）：必须早于下面的章节额度扣减——该分支此前引用尚未赋值的
+        # `_cid`（ruff F821），`STEP01_CHAPTER_QUOTA_FILE` 生效且 provider 非
+        # agent_plan 时会抛 UnboundLocalError，把额度扣减变成一次假的生成失败。
+        from shared.call_ledger import new_call_id
+        _cid = new_call_id()
         # 章节额度守卫（发送边界兜底）：若配置了 STEP01_CHAPTER_QUOTA_FILE：
         # - 已走批次预占（TEXT_SEND_QUOTA_FILE 在位）时不在服务层重复扣减（由 send_quota
         #   在每次 POST 前校验 reservation_id 并只扣批次）；
@@ -119,10 +126,6 @@ class _LedgeredService(TextGenerationService):
                 _chapter_quota.check_available(_cq_path)
             else:
                 _chapter_quota.consume_one(_cq_path, provider=self._provider, call_id=_cid)
-        # `call_id` 在**调用前**生成（复核之七）：这一次调用的唯一标识——完整正文按它
-        # 归档、修订轮按它关联"这一轮用的是哪份响应"，同一轮多次/并发调用各自定位。
-        from shared.call_ledger import new_call_id
-        _cid = new_call_id()
         # 2026-10-29（M07）：**发送守卫在这里捕获**，不靠 ContextVar 跨线程传播。
         # 当前线程绑定的一次性授权守卫与本次 `call_id` 一起显式写进请求的本地运行字段，
         # provider 在真正的 SDK 调用前消费它；没有守卫时请求原样返回（旧行为不变）。

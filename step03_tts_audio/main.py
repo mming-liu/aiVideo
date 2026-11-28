@@ -433,6 +433,10 @@ def main(options=None):
     _logger.info("  (Multi-voice support enabled)")
     _logger.separator()
 
+    # 2026-11-28 O1：跨键配置一致性预检（默认只记录；CONFIG_GUARD_STRICT=1 时 error 阻断）
+    from shared.env_guard import assert_config_consistent
+    assert_config_consistent(stage="step03", logger=_logger)
+
     candidate_root = opts.candidate_root or candidate_root_from_env()
     plan_only = bool(opts.plan_only or plan_only_from_env())
     if plan_only and not candidate_root:
