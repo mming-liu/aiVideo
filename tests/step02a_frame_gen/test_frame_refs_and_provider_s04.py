@@ -23,13 +23,14 @@ def _png(path: Path, color=(80, 120, 180)) -> str:
 def test_collect_portrait_refs_uses_roster_without_prose_names(tmp_path, monkeypatch):
     from shared import vimax_bridge as vb
 
+    monkeypatch.setenv("VIDEO_STYLE", "gufeng")
     p1 = _png(tmp_path / "characters_bank" / "角色甲" / "front.png", (200, 40, 40))
     p2 = _png(tmp_path / "characters_bank" / "角色乙" / "front.png", (40, 200, 40))
     reg_path = tmp_path / "vimax_working" / "character_portraits_registry.json"
     reg_path.parent.mkdir(parents=True, exist_ok=True)
     reg_path.write_text(json.dumps({
-        "角色甲": {"front": {"path": p1}},
-        "角色乙": {"front": {"path": p2}},
+        "角色甲": {"front": {"path": p1, "video_style": "gufeng"}},
+        "角色乙": {"front": {"path": p2, "video_style": "gufeng"}},
     }, ensure_ascii=False), encoding="utf-8")
 
     monkeypatch.setattr("shared.paths.vimax_working_dir", lambda: reg_path.parent)
@@ -73,10 +74,12 @@ def test_collect_portrait_refs_uses_roster_without_prose_names(tmp_path, monkeyp
 def test_collect_portrait_refs_flags_missing_file_instead_of_silent_pass(tmp_path, monkeypatch):
     from shared import vimax_bridge as vb
 
+    monkeypatch.setenv("VIDEO_STYLE", "gufeng")
     reg_path = tmp_path / "vimax_working" / "character_portraits_registry.json"
     reg_path.parent.mkdir(parents=True, exist_ok=True)
     reg_path.write_text(json.dumps({
-        "角色甲": {"front": {"path": str(tmp_path / "missing_front.png")}},
+        "角色甲": {"front": {"path": str(tmp_path / "missing_front.png"),
+                             "video_style": "gufeng"}},
     }, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr("shared.paths.vimax_working_dir", lambda: reg_path.parent)
 

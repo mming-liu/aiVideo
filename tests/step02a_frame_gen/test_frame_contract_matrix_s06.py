@@ -68,13 +68,14 @@ def test_domain_a_indoor_repair_titles_states_portraits_and_qc_lifecycle(tmp_pat
     from step02a_frame_gen import verify_acceptance as va
 
     ch_dir, work_dir = _setup_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("VIDEO_STYLE", "gufeng")
     p1 = _png(work_dir / "characters_bank" / "角色甲" / "front.png", (210, 40, 40))
     p2 = _png(work_dir / "characters_bank" / "角色乙" / "front.png", (40, 180, 60))
     sc = _png(work_dir / "scenes_bank" / "木器作坊" / "wide.png", (120, 150, 200))
     reg_path = work_dir / "character_portraits_registry.json"
     reg_path.write_text(json.dumps({
-        "角色甲": {"front": {"path": p1}},
-        "角色乙": {"front": {"path": p2}},
+        "角色甲": {"front": {"path": p1, "video_style": "gufeng"}},
+        "角色乙": {"front": {"path": p2, "video_style": "gufeng"}},
     }, ensure_ascii=False), encoding="utf-8")
 
     monkeypatch.setattr(vb, "_collect_scene_asset_refs", lambda _s: [sc])

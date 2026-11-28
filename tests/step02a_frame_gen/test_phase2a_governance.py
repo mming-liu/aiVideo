@@ -282,6 +282,9 @@ def test_g3_style_anchor_injection_and_pre_shot_asset_gate(tmp_path, monkeypatch
 
     sbank_dir = tmp_path / "global" / "style_bank"
     sa = _png(sbank_dir / "style_anchor.png", (12, 34, 56))
+    (sbank_dir / "style_bank.json").write_text(
+        json.dumps({"video_style": "gufeng", "is_locked": True}), encoding="utf-8")
+    monkeypatch.setenv("VIDEO_STYLE", "gufeng")
     monkeypatch.setattr("shared.paths.style_bank_dir", lambda: sbank_dir)
     monkeypatch.setattr("shared.paths.vimax_working_dir", lambda: tmp_path / "work")
     monkeypatch.setattr("shared.paths.characters_bank_dir", lambda: tmp_path / "global" / "characters_bank")
@@ -303,6 +306,16 @@ def test_g3_style_anchor_injection_and_pre_shot_asset_gate(tmp_path, monkeypatch
     assert gate_blocked["status"] == "blocked"
     assert gate_blocked["missing_portraits"][0]["character"] == "角色丙"
 
+    cb_dir = tmp_path / "global" / "characters_bank"
+    cb_dir.mkdir(parents=True, exist_ok=True)
+    (cb_dir / "characters_bank.json").write_text(json.dumps({
+        "characters": {"角色丙": {
+            "identifier": "角色丙", "video_style": "gufeng",
+            "portraits": {"base": {
+                "path": str((cb_dir / "角色丙" / "base.png").resolve()),
+                "video_style": "gufeng"}},
+        }},
+    }, ensure_ascii=False), encoding="utf-8")
     _png(tmp_path / "global" / "characters_bank" / "角色丙" / "base.png")
     gate_ok = check_pre_shot_asset_gate({"characters": chars, "shots": [shot]}, only_indices={1}, frames={"ff"})
     assert gate_ok["status"] == "ok"

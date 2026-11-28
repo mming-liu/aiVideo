@@ -71,8 +71,8 @@ def test_illegal_top_level_never_falls_back_to_default(tmp_path, monkeypatch, pa
     assert _resolve_style_anchor_path() is None
 
 
-def test_legal_empty_object_keeps_current_behaviour(tmp_path, monkeypatch):
-    """合法空对象仍按既有口径（S03 统一调整）——本测试锁定"不混改"边界."""
+def test_legal_empty_object_is_rejected_by_missing_marker(tmp_path, monkeypatch):
+    """S03：合法空对象没有画风标记，默认拒收（不再回退默认图片）."""
     _bank(tmp_path, monkeypatch, {})
     _set_style(monkeypatch, "gufeng")
-    assert _resolve_style_anchor_path() is not None
+    assert _resolve_style_anchor_path() is None

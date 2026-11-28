@@ -283,7 +283,7 @@ def _load_character_registry() -> dict:
     try:
         from shared.character_bank import CharacterBank
         bank = CharacterBank()
-        bank.load()
+        bank.load(read_only=True)
         reg = bank.get_all_portraits_as_registry()
         return reg if isinstance(reg, dict) else {}
     except Exception:

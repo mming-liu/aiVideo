@@ -44,12 +44,14 @@ def test_prompt_roster_and_state_follow_contract(names, index):
 def test_portraits_do_not_require_names_in_prose(tmp_path, monkeypatch):
     from shared import vimax_bridge as bridge
     from shared import paths
+    monkeypatch.setenv("VIDEO_STYLE", "gufeng")
     shot, chars = sample()
     registry = {}
     for c in chars:
         p = tmp_path / (c['identifier'] + '.png')
         Image.new("RGB", (24, 24), "blue").save(p)
-        registry[c['identifier']] = {"front": {"path": str(p)}}
+        registry[c['identifier']] = {"front": {"path": str(p),
+                                               "video_style": "gufeng"}}
     (tmp_path / 'character_portraits_registry.json').write_text(
         json.dumps(registry), encoding='utf-8')
     monkeypatch.setattr(paths, "vimax_working_dir", lambda: tmp_path)

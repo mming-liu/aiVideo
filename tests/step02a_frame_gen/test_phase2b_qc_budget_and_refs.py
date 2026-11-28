@@ -154,11 +154,13 @@ def test_last_frame_head_crop_parity_and_readonly_plan_state(tmp_path, monkeypat
     (char_dir / "characters_bank.json").write_text(json.dumps(bank, ensure_ascii=False), encoding="utf-8")
     (work_dir / "character_portraits_registry.json").write_text(
         json.dumps({
-            "甲": {"base": {"path": a_base, "approved": True}, "face": {"path": a_face, "approved": True}},
-            "乙": {"base": {"path": b_base, "approved": True}},
+            "甲": {"base": {"path": a_base, "approved": True, "video_style": "gufeng"},
+                   "face": {"path": a_face, "approved": True, "video_style": "gufeng"}},
+            "乙": {"base": {"path": b_base, "approved": True, "video_style": "gufeng"}},
         }, ensure_ascii=False),
         encoding="utf-8",
     )
+    monkeypatch.setenv("VIDEO_STYLE", "gufeng")
     monkeypatch.setattr("shared.paths.characters_bank_dir", lambda *a, **k: char_dir)
     monkeypatch.setattr("shared.paths.scenes_bank_dir", lambda *a, **k: tmp_path / "global" / "scenes_bank")
     monkeypatch.setattr("shared.paths.props_bank_dir", lambda *a, **k: tmp_path / "global" / "props_bank")

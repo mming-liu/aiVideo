@@ -122,6 +122,27 @@ def test_precheck_accepts_same_style_portrait(tmp_path, monkeypatch):
     assert gate["missing_portraits"] == []
 
 
+def test_precheck_rejects_legacy_unstamped_assets_by_default(tmp_path, monkeypatch):
+    """S03：缺标记的肖像与锚点都默认拒收，库级纪元不能替代逐资产来源."""
+    from step02a_frame_gen.execution_plan import check_pre_shot_asset_gate
+
+    _set_style(monkeypatch, "gufeng")
+    front = _png(tmp_path / "global" / "characters_bank" / "甲" / "base.png")
+    _env(tmp_path, monkeypatch,
+         bank={"characters": {"甲": {
+                   "identifier": "甲", "video_style": "gufeng",
+                   "portraits": {"base": {"path": str(front)}}}},
+               "meta": {"style_stamp": {"video_style": "gufeng"}}},
+         registry={"甲": {"base": {"path": str(front)}}},
+         with_anchor=True)
+    gate = check_pre_shot_asset_gate(_script("甲"), only_indices={1}, frames={"ff"})
+    assert gate["status"] == "blocked"
+    assert gate["missing_portraits"][0]["reason"] == "legacy_unstamped"
+    assert gate["style_anchor_reason"] == "legacy_unstamped"
+    codes = {issue.get("code") for issue in gate["issues"]}
+    assert "style_anchor_rejected" in codes
+
+
 # ---------------------------------------------------------------------------
 # 参考图收集：与预检同一判据
 # ---------------------------------------------------------------------------

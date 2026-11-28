@@ -117,8 +117,9 @@ def test_read_only_load_and_queries_do_not_mutate(tmp_path, monkeypatch):
     bank.style_audit()
     bank.style_context()
 
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "legacy_unstamped"
     assert resolved["epoch"] == ""
-    assert resolved["reason"] == "legacy_adopted"
     assert json.dumps(bank._data, ensure_ascii=False, sort_keys=True) == before_memory
     assert path.read_bytes() == before_bytes
     assert sorted(p.name for p in bank_dir.iterdir()) == ["characters_bank.json"]

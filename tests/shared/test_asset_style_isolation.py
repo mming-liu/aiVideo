@@ -51,7 +51,7 @@ def gufeng_style(monkeypatch):
 @pytest.mark.parametrize("entry,current,epoch,expected", [
     ("gufeng", "gufeng", "gufeng", "ok"),
     ("anime", "gufeng", "anime", "style_mismatch"),
-    ("", "gufeng", "gufeng", "legacy_in_epoch"),
+    ("", "gufeng", "gufeng", "legacy_unstamped"),
     ("", "gufeng", "anime", "legacy_unstamped"),
     ("", "", "", "style_unknown"),
     ("", "", "", "style_unknown"),
@@ -104,35 +104,41 @@ def test_portrait_records_are_stamped(tmp_path, gufeng_style):
 # ---------------------------------------------------------------------------
 # 历史资产：风格纪元
 # ---------------------------------------------------------------------------
-def test_legacy_assets_are_adopted_in_the_current_epoch(tmp_path, gufeng_style):
+def test_legacy_assets_without_marker_are_rejected_and_views_stay_unstamped(
+        tmp_path, gufeng_style):
+    """S03：缺标记默认拒收；save/查询都不得给历史图片补来源."""
     _raw_bank(tmp_path / "cb", characters={"旧角色": _legacy_char("旧角色")})
     bank = cb.CharacterBank(tmp_path / "cb")
     bank.load()
     before = json.dumps(bank._data, ensure_ascii=False, sort_keys=True)
 
     resolved = bank.resolve_portraits("旧角色")
-    assert resolved["ok"] is True
-    # S02：查询是纯读取——没有纪元时按 legacy_adopted 放行，但不得就地盖章。
-    assert resolved["reason"] == "legacy_adopted"
+    assert resolved["ok"] is False
+    assert resolved["reason"] == "legacy_unstamped"
     assert resolved["epoch"] == ""
     assert json.dumps(bank._data, ensure_ascii=False, sort_keys=True) == before
-    assert bank.get_all_portraits_as_registry()
+    assert bank.get_all_portraits_as_registry() == {}
 
-    # 纪元随 save 落盘
     assert bank.save(run_id="run-1") is True
     saved = json.loads((tmp_path / "cb" / "characters_bank.json").read_text(encoding="utf-8"))
+    # 库级纪元可以落盘，但**不能**变成逐视图来源证明。
     assert saved["meta"]["style_stamp"]["video_style"] == "gufeng"
-    assert bank.style_context()[1] == "gufeng"
+    assert "video_style" not in saved["characters"]["旧角色"]["portraits"]["front"]
+
+    # 显式登记/新生成才记录本次明确画风
+    bank.register_character("新角色", "s", "d", 1, video_style="gufeng")
+    bank.set_portraits("新角色", {"front": {"path": "n.png"}}, video_style="gufeng")
+    assert bank.resolve_portraits("新角色")["ok"] is True
 
 
-def test_style_switch_rejects_legacy_assets(tmp_path, gufeng_style):
+def test_style_switch_rejects_unstamped_and_uses_explicit_labels(tmp_path, gufeng_style):
     _raw_bank(tmp_path / "cb", characters={"旧角色": _legacy_char("旧角色")})
     bank = cb.CharacterBank(tmp_path / "cb")
     bank.load()
-    assert bank.resolve_portraits("旧角色")["ok"] is True     # 先在 gufeng 纪元里被采纳
+    assert bank.resolve_portraits("旧角色")["ok"] is False
     bank.save(run_id="run-1")
 
-    # 切到 anime：历史无标记资产无法证明属于 anime ⇒ 拒收
+    # 切到 anime：无标记资产仍无法证明来源 ⇒ 拒收
     switched = bank.resolve_portraits("旧角色", style="anime")
     assert switched["ok"] is False and switched["reason"] == "legacy_unstamped"
     # 显式标了 anime 的资产仍然可用

@@ -70,13 +70,15 @@ def style_strict() -> bool:
         "0", "false", "off", "no")
 
 
-def resolve_style_state(entry_style, *, current: str, epoch: str) -> str:
-    """判定单个资产在当前画风下能否复用.
+def resolve_style_state(entry_style, *, current: str, epoch: str = "") -> str:
+    """判定单个资产在当前画风下能否复用（**逐资产来源判据**）.
 
     返回：`ok`（带标记且一致）/ `style_mismatch`（带标记但不一致）/
-    `legacy_in_epoch`（无标记，但纪元就是当前画风 ⇒ 允许）/
-    `legacy_unstamped`（无标记，且纪元已是别的画风 ⇒ 拒绝）/ `style_unknown`
-    （当前画风读不到，不做过滤）。
+    `legacy_unstamped`（缺标记——无论库级风格纪元是什么，纪元都不能替代
+    逐资产来源证明）/ `style_unknown`（当前画风读不到，明确失败）。
+
+    `epoch` 仅保留签名兼容：S03 起它**不参与放行**；缺标记一律
+    `legacy_unstamped`，由调用方按 `strict` 决定拒收或诊断降级。
     """
     current = normalize_video_style(current)
     entry = normalize_video_style(entry_style)
@@ -84,16 +86,15 @@ def resolve_style_state(entry_style, *, current: str, epoch: str) -> str:
         return "style_unknown"
     if entry:
         return "ok" if entry == current else "style_mismatch"
-    if not normalize_video_style(epoch):
-        return "legacy_adopted"
-    return "legacy_in_epoch" if normalize_video_style(epoch) == current \
-        else "legacy_unstamped"
+    return "legacy_unstamped"
 
 
 _STYLE_REASON_TEXT = {
     "style_mismatch": "资产画风与当前 VIDEO_STYLE 不一致",
-    "legacy_unstamped": "历史资产无画风标记，且当前已不在其风格纪元内",
-    "style_unknown": "无法读取当前 VIDEO_STYLE，未做画风过滤",
+    "legacy_unstamped": "资产缺少画风标记，无法证明其来源画风",
+    "style_unknown": "无法读取当前 VIDEO_STYLE，按明确失败处理",
+    "unsupported_contract": "资产合同版本高于本代码支持版本",
+    "invalid_structure": "资产字段类型非法",
     "no_portraits": "没有肖像",
     "not_found": "角色/锚点不存在",
 }
@@ -144,6 +145,18 @@ class BankLoadError(ValueError):
         return {"path": self.path, "reason": self.reason, "message": self.message}
 
 
+def _contract_problem(record: dict | None) -> str:
+    """资产合同版本检查：`""` / `invalid_structure` / `unsupported_contract`."""
+    if not isinstance(record, dict) or "asset_contract_version" not in record:
+        return ""
+    version = record.get("asset_contract_version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return "invalid_structure"
+    if version > ASSET_CONTRACT_VERSION:
+        return "unsupported_contract"
+    return ""
+
+
 def style_epoch(data: dict | None) -> str:
     """读取资产库里的**风格纪元**（`meta.style_stamp.video_style`），纯读取.
 
@@ -171,14 +184,33 @@ def filter_portraits_by_style(
     _strict = style_strict() if strict is None else bool(strict)
     allowed: dict = {}
     rejected: list[dict] = []
+    if not normalize_video_style(current):
+        for view, record in (portraits or {}).items():
+            rejected.append({"view": str(view), "reason": "style_unknown",
+                             "video_style": normalize_video_style(
+                                 (record or {}).get("video_style")
+                                 if isinstance(record, dict) else "")})
+        return {}, rejected
     for view, record in (portraits or {}).items():
-        rec = dict(record) if isinstance(record, dict) else {"path": str(record or "")}
-        state = resolve_style_state(rec.get("video_style"), current=current, epoch=epoch)
-        if state in ("style_mismatch", "legacy_unstamped") and _strict:
-            rejected.append({"view": str(view), "reason": state,
-                             "video_style": normalize_video_style(rec.get("video_style"))})
+        if not isinstance(record, dict):
+            rejected.append({"view": str(view), "reason": "invalid_structure",
+                             "video_style": ""})
             continue
-        allowed[view] = rec
+        problem = _contract_problem(record)
+        if problem:
+            rejected.append({"view": str(view), "reason": problem,
+                             "video_style": normalize_video_style(
+                                 record.get("video_style"))})
+            continue
+        state = resolve_style_state(record.get("video_style"), current=current,
+                                    epoch=epoch)
+        if state in ("style_mismatch", "legacy_unstamped"):
+            rejected.append({"view": str(view), "reason": state,
+                             "video_style": normalize_video_style(
+                                 record.get("video_style"))})
+            if _strict:
+                continue
+        allowed[view] = record
     return allowed, rejected
 
 
@@ -565,41 +597,68 @@ class CharacterBank:
         return current, style_epoch(self._data)
 
     def resolve_portraits(self, identifier: str, *, style: str | None = None) -> dict:
-        """按画风解析某角色的可用肖像；返回 `{ok, reason, video_style, portraits, rejected}`."""
+        """按画风解析某角色的可用肖像；返回 `{ok, reason, video_style, portraits, rejected}`.
+
+        S03 默认政策：**逐视图**要求明确的画风标记——缺标记/空白/null 一律
+        `legacy_unstamped`，即使库里有风格纪元也不放行；角色级 `video_style`
+        只能用于拒收，不能证明未标记视图的来源。`ASSET_STYLE_STRICT=0` 时
+        降级放行并如实返回 `strict=False` 与原因，不报告成严格通过。
+        """
         current, epoch = self.style_context(style)
+        strict = style_strict()
         char = self.get_character(identifier)
         if not char:
             return {"ok": False, "reason": "not_found", "identifier": identifier,
-                    "video_style": current, "epoch": epoch, "portraits": {}}
+                    "video_style": current, "epoch": epoch, "strict": strict,
+                    "portraits": {}}
+        if not current:
+            return {"ok": False, "reason": "style_unknown", "identifier": identifier,
+                    "video_style": "", "epoch": epoch, "strict": strict,
+                    "message": style_reason_text("style_unknown"), "portraits": {}}
+        entry_problem = _contract_problem(char)
+        if entry_problem:
+            return {"ok": False, "reason": entry_problem, "identifier": identifier,
+                    "video_style": current, "epoch": epoch, "strict": strict,
+                    "portraits": {}}
         entry_state = resolve_style_state(char.get("video_style"), current=current,
                                           epoch=epoch)
-        if entry_state in ("style_mismatch", "legacy_unstamped") and style_strict():
+        entry_rejected = entry_state in ("style_mismatch",)
+        if entry_rejected and strict:
             return {"ok": False, "reason": entry_state, "identifier": identifier,
-                    "video_style": current, "epoch": epoch,
+                    "video_style": current, "epoch": epoch, "strict": strict,
                     "message": style_reason_text(entry_state), "portraits": {}}
         portraits: dict = {}
         rejected: list[dict] = []
         for view, record in (char.get("portraits") or {}).items():
-            rec = dict(record or {})
-            state = resolve_style_state(
-                rec.get("video_style") or char.get("video_style"),
-                current=current, epoch=epoch)
-            if state in ("style_mismatch", "legacy_unstamped") and style_strict():
-                rejected.append({"view": view, "reason": state,
-                                 "video_style": normalize_video_style(
-                                     rec.get("video_style") or char.get("video_style"))})
+            if not isinstance(record, dict):
+                rejected.append({"view": str(view), "reason": "invalid_structure",
+                                 "video_style": ""})
                 continue
-            portraits[view] = rec
+            problem = _contract_problem(record)
+            if problem:
+                rejected.append({"view": str(view), "reason": problem,
+                                 "video_style": normalize_video_style(
+                                     record.get("video_style"))})
+                continue
+            state = resolve_style_state(record.get("video_style"), current=current,
+                                        epoch=epoch)
+            if state in ("style_mismatch", "legacy_unstamped"):
+                rejected.append({"view": str(view), "reason": state,
+                                 "video_style": normalize_video_style(
+                                     record.get("video_style"))})
+                if strict:
+                    continue
+            portraits[str(view)] = record
         if not portraits:
             reason = rejected[0]["reason"] if rejected else "no_portraits"
             return {"ok": False, "reason": reason, "identifier": identifier,
-                    "video_style": current, "epoch": epoch,
+                    "video_style": current, "epoch": epoch, "strict": strict,
                     "message": style_reason_text(reason), "portraits": {},
                     "rejected": rejected}
         reason = rejected[0]["reason"] if rejected else (
-            entry_state if entry_state != "ok" else "ok")
-        return {"ok": True, "reason": reason,
-                "identifier": identifier, "video_style": current, "epoch": epoch,
+            entry_state if entry_state in ("style_mismatch",) else "ok")
+        return {"ok": True, "reason": reason, "identifier": identifier,
+                "video_style": current, "epoch": epoch, "strict": strict,
                 "portraits": portraits, "rejected": rejected}
 
     def style_audit(self, *, style: str | None = None) -> dict:
@@ -704,6 +763,10 @@ class CharacterBank:
 
         2026-11-28 O9：逐视图盖 `video_style` + `asset_contract_version`（解析时
         按画风过滤）；未显式给画风时取当前 `VIDEO_STYLE`。
+
+        S03：本方法是**显式写入新肖像**的入口，传入的记录视为本次新数据——
+        已有标记被当前画风覆盖（而不是 setdefault 留下旧标记）；调用方不得
+        用它给历史图片补来源。查询/普通保存不会走到这里。
         """
         char = self.get_character(identifier)
         if char:
@@ -712,12 +775,13 @@ class CharacterBank:
             stamped = {}
             for view, record in (portraits or {}).items():
                 rec = dict(record or {})
-                rec.setdefault("video_style", style)
-                rec.setdefault("asset_contract_version", ASSET_CONTRACT_VERSION)
+                if style:
+                    rec["video_style"] = style
+                rec["asset_contract_version"] = ASSET_CONTRACT_VERSION
                 stamped[view] = rec
             char["portraits"] = stamped
-            if style:
-                char.setdefault("video_style", style)
+            if style and not normalize_video_style(char.get("video_style")):
+                char["video_style"] = style
             self._touched.add(str(char.get("identifier") or identifier))
 
     def get_meta(self) -> dict:
@@ -817,25 +881,41 @@ class StyleBank:
         return current, style_epoch(self._data)
 
     def get_anchor_for_style(self, style: str | None = None) -> dict:
-        """按画风解析风格锚点；不一致/历史无标记且已换画风 ⇒ 拒绝复用."""
+        """按画风解析风格锚点；缺标记/不一致按 S03 默认政策拒收.
+
+        `ASSET_STYLE_STRICT=0` 时降级放行并返回 `strict=False` 与原因；
+        当前画风不可确定、字段非法或合同版本过高时不因该开关放行。
+        """
         current, epoch = self.style_context(style)
+        strict = style_strict()
         path = str(self._data.get("style_anchor_image") or "")
         if not path or not Path(path).exists():
             default = self._dir / "style_anchor.png"
             path = str(default.resolve()) if default.exists() else ""
         if not path:
             return {"ok": False, "reason": "not_found", "path": None,
-                    "video_style": current, "epoch": epoch,
+                    "video_style": current, "epoch": epoch, "strict": strict,
                     "message": style_reason_text("not_found")}
+        if not current:
+            return {"ok": False, "reason": "style_unknown", "path": None,
+                    "candidate": path, "video_style": "", "epoch": epoch,
+                    "strict": strict,
+                    "message": style_reason_text("style_unknown")}
+        problem = _contract_problem(self._data)
+        if problem:
+            return {"ok": False, "reason": problem, "path": None,
+                    "candidate": path, "video_style": current, "epoch": epoch,
+                    "strict": strict, "message": style_reason_text(problem)}
         state = resolve_style_state(self._data.get("video_style"), current=current,
                                     epoch=epoch)
-        if state in ("style_mismatch", "legacy_unstamped") and style_strict():
+        if state in ("style_mismatch", "legacy_unstamped") and strict:
             return {"ok": False, "reason": state, "path": None, "candidate": path,
-                    "video_style": current, "epoch": epoch,
+                    "video_style": current, "epoch": epoch, "strict": strict,
                     "asset_video_style": normalize_video_style(self._data.get("video_style")),
                     "message": style_reason_text(state)}
-        return {"ok": True, "reason": "ok" if state in ("ok", "style_unknown") else state,
+        return {"ok": True, "reason": "ok" if state == "ok" else state,
                 "path": path, "video_style": current, "epoch": epoch,
+                "strict": strict,
                 "asset_video_style": normalize_video_style(self._data.get("video_style"))}
 
     def style_audit(self, *, style: str | None = None) -> dict:

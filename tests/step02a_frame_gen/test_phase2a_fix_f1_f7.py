@@ -345,6 +345,7 @@ def test_f5_unified_portrait_resolver_parity_and_rejections(tmp_path, monkeypatc
     from shared import vimax_bridge as vb
     from step02a_frame_gen.execution_plan import check_pre_shot_asset_gate
 
+    monkeypatch.setenv("VIDEO_STYLE", "gufeng")
     work_dir = tmp_path / "work"
     bank_dir = tmp_path / "global" / "characters_bank"
     sbank_dir = tmp_path / "global" / "style_bank"
@@ -362,7 +363,7 @@ def test_f5_unified_portrait_resolver_parity_and_rejections(tmp_path, monkeypatc
 
     # Case 1: registry ONLY has base.path -> BOTH gate and collector succeed!
     base_p = _png(bank_dir / "角色丙" / "base.png")
-    reg_file.write_text(json.dumps({"角色丙": {"base": {"path": str(base_p)}}}, ensure_ascii=False), encoding="utf-8")
+    reg_file.write_text(json.dumps({"角色丙": {"base": {"path": str(base_p), "video_style": "gufeng"}}}, ensure_ascii=False), encoding="utf-8")
     gate_base = check_pre_shot_asset_gate(script, only_indices={1}, frames={"ff"})
     col_base = vb._collect_portrait_refs_for_shot(shot, chars, roster={"角色丙"}, return_details=True, apply_head_crop=False)
     assert gate_base["status"] == "ok"
@@ -382,7 +383,7 @@ def test_f5_unified_portrait_resolver_parity_and_rejections(tmp_path, monkeypatc
     # Restore valid image, test Case 3: wrong identity metadata -> BOTH reject with portrait_identity_mismatch!
     _png(bad_p)
     reg_file.write_text(json.dumps({
-        "角色丙": {"front": {"path": str(bad_p), "character_id": "其他角色"}},
+        "角色丙": {"front": {"path": str(bad_p), "character_id": "其他角色", "video_style": "gufeng"}},
     }, ensure_ascii=False), encoding="utf-8")
     gate_id = check_pre_shot_asset_gate(script, only_indices={1}, frames={"ff"})
     col_id = vb._collect_portrait_refs_for_shot(shot, chars, roster={"角色丙"}, return_details=True, apply_head_crop=False)
@@ -391,7 +392,7 @@ def test_f5_unified_portrait_resolver_parity_and_rejections(tmp_path, monkeypatc
 
     # Case 4: unapproved asset -> BOTH reject with portrait_unapproved!
     reg_file.write_text(json.dumps({
-        "角色丙": {"front": {"path": str(bad_p), "approved": False}},
+        "角色丙": {"front": {"path": str(bad_p), "approved": False, "video_style": "gufeng"}},
     }, ensure_ascii=False), encoding="utf-8")
     gate_unapp = check_pre_shot_asset_gate(script, only_indices={1}, frames={"ff"})
     col_unapp = vb._collect_portrait_refs_for_shot(shot, chars, roster={"角色丙"}, return_details=True, apply_head_crop=False)
@@ -400,7 +401,7 @@ def test_f5_unified_portrait_resolver_parity_and_rejections(tmp_path, monkeypatc
 
     # Case 5: face-only rejected for full-body, accepted for closeup
     face_p = _png(bank_dir / "角色丙" / "face.png")
-    reg_file.write_text(json.dumps({"角色丙": {"face": {"path": str(face_p)}}}, ensure_ascii=False), encoding="utf-8")
+    reg_file.write_text(json.dumps({"角色丙": {"face": {"path": str(face_p), "video_style": "gufeng"}}}, ensure_ascii=False), encoding="utf-8")
     gate_face = check_pre_shot_asset_gate(script, only_indices={1}, frames={"ff"})
     col_face = vb._collect_portrait_refs_for_shot(shot, chars, roster={"角色丙"}, return_details=True, apply_head_crop=False)
     assert gate_face["status"] == "blocked" and gate_face["missing_portraits"][0]["reason"] == "portrait_role_insufficient"
