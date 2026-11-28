@@ -55,7 +55,8 @@ def test_global_render_config_resolution_from_config(monkeypatch):
 def test_prompt_paths_use_frame_ratio_not_hardcoded():
     """两条视频路径都必须经 frame_canvas_ratio()，不得再写死 ratio=\"9:16\"."""
     files = [REPO / "step02_video_gen" / "prompt_builder.py",
-             REPO / "step02_video_gen" / "submit_poll.py"]
+             # S07：submit_poll 的冻结请求/哈希实现迁到 parts/frozen.py（父模块只 re-export）
+             REPO / "step02_video_gen" / "parts" / "frozen.py"]
     for path in files:
         text = path.read_text(encoding="utf-8")
         assert 'style_profile(ratio="9:16")' not in text, path.name
