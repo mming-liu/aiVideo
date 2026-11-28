@@ -770,24 +770,49 @@ def _get_frame_content_hash(shot: dict, empty_scene: bool = False,
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 def _resolve_style_anchor_path() -> str | None:
-    """Read-only lookup for locked global style_anchor.png (returns path or None without creating dirs)."""
+    """Read-only lookup for locked global style_anchor.png (returns path or None without creating dirs).
+
+    2026-11-28 S02：与 `StyleBank.get_anchor_for_style()` 用**同一判据**——带标记
+    但与当前画风不符（`style_mismatch`）、无标记且纪元已是别的画风
+    （`legacy_unstamped`）时一律返回 `None`，不得再回落到裸 JSON 或默认
+    `style_anchor.png`。本函数保持只读：不建目录、不盖纪元戳、不改内存。
+    """
     try:
+        from shared.character_bank import (
+            current_video_style, normalize_video_style, resolve_style_state,
+            style_strict,
+        )
         from shared.paths import style_bank_dir
         sdir = style_bank_dir()
         if not sdir.is_dir():
             return None
+        data: dict = {}
         json_path = sdir / "style_bank.json"
         if json_path.is_file():
             data = json.loads(json_path.read_text(encoding="utf-8"))
-            img = str(data.get("style_anchor_image") or "").strip()
-            if img and Path(img).is_file():
-                return img
-        default = sdir / "style_anchor.png"
-        if default.is_file():
-            return str(default.resolve())
+            if not isinstance(data, dict):
+                data = {}
+        path = ""
+        img = str(data.get("style_anchor_image") or "").strip()
+        if img and Path(img).is_file():
+            path = img
+        if not path:
+            default = sdir / "style_anchor.png"
+            if default.is_file():
+                path = str(default.resolve())
+        if not path:
+            return None
+        meta = data.get("meta")
+        stamp = meta.get("style_stamp") if isinstance(meta, dict) else None
+        epoch = normalize_video_style(
+            stamp.get("video_style") if isinstance(stamp, dict) else "")
+        state = resolve_style_state(data.get("video_style"),
+                                    current=current_video_style(), epoch=epoch)
+        if state in ("style_mismatch", "legacy_unstamped") and style_strict():
+            return None
+        return path
     except Exception:
         return None
-    return None
 
 def _head_portrait_path(src: str, create_if_missing: bool = True) -> str:
     """把角色立绘转换为头肩胸像缓存（v6.52 参考图防姿态/持物泄漏）.
