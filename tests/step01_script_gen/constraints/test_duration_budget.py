@@ -10,15 +10,20 @@ from step01_script_gen.quality_issues import _duration_budget_issues
 
 
 def test_duration_budget_reports_without_compressing():
-    """总时长超 90s → **只报告**，不再按比例压缩各镜时长（v6.79，审核发现 1）.
+    """总时长超生效上限 → **只报告**，不再按比例压缩各镜时长（v6.79，审核发现 1）.
 
     压缩是链后写入：它发生在 KF 时间检查之后，会让「审计通过的时长」≠
     「最终时长」，且压缩后没有重新校验 KF 归属。正确处置是输出需要重写/拆分的
     镜头集合，交完整镜头事务处理。
     """
+    from step01_script_gen.constraints import duration_budget as db
+
+    max_total = float(db._MAX_TOTAL)
     script = {"shots": [
-        {"index": 1, "duration_sec": 60.0, "narration_segment": "", "motion_desc": ""},
-        {"index": 2, "duration_sec": 50.0, "narration_segment": "", "motion_desc": ""},
+        {"index": 1, "duration_sec": max_total * 0.6,
+         "narration_segment": "", "motion_desc": ""},
+        {"index": 2, "duration_sec": max_total * 0.6,
+         "narration_segment": "", "motion_desc": ""},
     ]}
     before = [sh["duration_sec"] for sh in script["shots"]]
     repairs = DurationBudgetConstraint().apply(ConstraintContext.from_script(script))
@@ -27,7 +32,15 @@ def test_duration_budget_reports_without_compressing():
     assert [sh["duration_sec"] for sh in script["shots"]] == before, "时长不得被压缩"
 
 
-def test_duration_budget_blocks_when_minimum_total_is_still_too_long():
+def test_duration_budget_blocks_when_minimum_total_is_still_too_long(monkeypatch):
+    """最低总需求仍超生效上限 → HARD，且不压缩.
+
+    生产上限已从 90s 放宽到 120s；本用例固定一个较小的上限，才能继续打到
+    「minimum total 仍超限」这一分支，而不依赖现场配置。
+    """
+    from step01_script_gen.constraints import duration_budget as db
+
+    monkeypatch.setattr(db, "_MAX_TOTAL", 40.0)
     script = {"shots": [
         {"index": i, "duration_sec": 9.0,
          "narration_segment": "长台词", "motion_desc": "0-8秒：持续动作"}
@@ -41,7 +54,10 @@ def test_duration_budget_blocks_when_minimum_total_is_still_too_long():
 
 
 def test_duration_budget_issue_is_blocking():
-    issues = _duration_budget_issues({"shots": [{"duration_sec": 100}]})
+    from step01_script_gen import quality_issues as qi
+
+    issues = _duration_budget_issues(
+        {"shots": [{"duration_sec": float(qi.DURATION_MAX_SEC) + 20.0}]})
     assert issues and issues[0].code == "duration_budget"
     assert issues[0].severity == "visual_risk"
 
@@ -54,10 +70,12 @@ def test_duration_budget_never_clamps_real_minimum_to_shot_cap():
     from step01_script_gen.timecode import active_shot_cap
 
     over = active_shot_cap() + 2.0
+    # 总数必须同时超出生效总上限，否则 apply() 在 total 检查就提前返回；
+    # 12 镜 × 12s = 144s > 120s，且每镜最低需求都超过单镜 cap。
     script = {"shots": [
         {"index": i, "duration_sec": 12.0,
          "narration_segment": "", "motion_desc": f"0-{over:g}秒：连续动作"}
-        for i in range(1, 9)
+        for i in range(1, 13)
     ]}
     ctx = ConstraintContext.from_script(script)
     repairs = DurationBudgetConstraint().apply(ctx)

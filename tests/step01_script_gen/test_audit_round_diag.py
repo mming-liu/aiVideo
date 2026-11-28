@@ -369,6 +369,7 @@ def test_final_audit_payload_records_the_actual_channel_and_model(chapter, monke
 def _mk_reusable_audit(script, **extra):
     """造一份「按既有判据可复用」的审计产物；extra 用于改通道字段."""
     import step01_script_gen.main as m
+    from shared.config import duration_band as _db
     from step01_script_gen.audit import audit_prompt_version
     from shared.quality_gate import compute_script_revision
 
@@ -377,6 +378,7 @@ def _mk_reusable_audit(script, **extra):
         "input_revision": compute_script_revision(script),
         "rule_source_fingerprint": m.RULE_SOURCE_FINGERPRINT,
         "audit_scope": m.STEP01_AUDIT_SCOPE,
+        "duration_band": _db(),
         "audit_prompt_version": audit_prompt_version(),
         "audit_focus_version": m._audit_focus_version(),
         "issues": [],

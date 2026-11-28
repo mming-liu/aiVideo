@@ -40,6 +40,9 @@ def _payload(script: dict, **over) -> dict:
         "run_id": "test-run",
         "content_identity": "cid-ok",
         "source_identity": "src-ok",
+        # 复用判据会把 duration_band 当作合同身份的一部分；payload 必须携带
+        # 本进程生效值，否则"全部相符"的样本也会被判成 duration_band 失配。
+        "duration_band": m.duration_band(),
     }
     # 通道判据只在配置了审计专用通道时生效——按本进程的生效值写进 payload，
     # 否则"全部相符"的样本会被通道判据判成失配（那是另一条契约，不该混进本用例）。

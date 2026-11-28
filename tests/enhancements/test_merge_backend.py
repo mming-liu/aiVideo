@@ -378,7 +378,9 @@ def test_silent_clip_gets_an_explicit_anullsrc_track(tmp_path):
                          duration_sec=0.0, raw_duration_sec=0.5, frames=0, has_audio=False),),
         boundary_transitions=()))
     _inputs, graph, _v, _a, meta = be.compile_graph(tl, _settings())
-    assert "anullsrc=r=44100:channel_layout=stereo" in graph
+    from step04_merge.backends.ffmpeg import AUDIO_SAMPLE_RATE
+
+    assert "anullsrc=r=%d:channel_layout=stereo" % AUDIO_SAMPLE_RATE in graph
     result = be.render(tl, tmp_path / "c.mp4", tmp_path / "work", settings=_settings())
     assert result.has_audio and abs(result.duration_sec - 0.5) <= be.duration_tolerance_sec(MERGE_FPS)
     assert any("无音频流" in w for w in meta["warnings"])

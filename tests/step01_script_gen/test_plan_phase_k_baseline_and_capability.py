@@ -341,11 +341,14 @@ def test_k06_a_mixed_budget_and_orphan_plan_is_fully_declared(monkeypatch):
 # K07 预算重选的失败出口：统一协议 + 调用身份（不许裸异常）
 # ---------------------------------------------------------------------------
 def _budget_only_plan():
-    """**只有**预算超限：31 句（逐字取自原文）且每句都有承载 ⇒ 走预算重选路."""
+    """**只有**预算超限：35 句（逐字取自原文）且每句都有承载 ⇒ 走预算重选路.
+
+    35×3.65s ≈ 127.8s > 120s 生效上限；旧夹具 31 句 ≈ 113s，在 120s 下已合法。
+    """
     _p = _legal_plan()
-    _p["dialogue_lines"] = [_LINE] * 31
+    _p["dialogue_lines"] = [_LINE] * 35
     _p["shot_beats"] = ["节拍：画面%d｜本镜信息目的：推进｜原文依据：“%s”｜载体：台词%d"
-                        % (i, _LINE, i) for i in range(1, 32)]
+                        % (i, _LINE, i) for i in range(1, 36)]
     return o._validate_outline(_p, _SRC)
 
 

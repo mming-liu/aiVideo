@@ -37,6 +37,7 @@ def _script(n: int = 2) -> dict:
 
 def _payload(script: dict, *, content_identity="", source_identity="") -> dict:
     import step01_script_gen.main as m
+    from shared.config import duration_band as _db
     from shared.quality_gate import compute_script_revision
     from step01_script_gen.audit import audit_prompt_version
 
@@ -45,6 +46,7 @@ def _payload(script: dict, *, content_identity="", source_identity="") -> dict:
         "input_revision": compute_script_revision(script),
         "rule_source_fingerprint": m.RULE_SOURCE_FINGERPRINT,
         "audit_scope": m.STEP01_AUDIT_SCOPE,
+        "duration_band": _db(),
         "audit_prompt_version": audit_prompt_version(),
         "audit_focus_version": m._audit_focus_version(),
         "created_at": "2026-11-11T00:00:00",

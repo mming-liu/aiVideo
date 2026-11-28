@@ -250,7 +250,10 @@ class StubVideoService(VideoGenerationService):
                 # 桩产物一律造**有运动**的画面：真实生成结果不会是整段静帧，
                 # 静态色块会被 0 元媒体探针如实判成"整片静帧"（需要静态/坏片的
                 # 用例走 `video_source=` 显式给冻结/黑场素材）。
+                # testsrc2 画面本身是确定性的；用 task 序号改变测试音频率，
+                # 让不同 task 的字节/音频身份可区分（颜色仍记录在 tasks 里）。
                 make_video(Path(target), motion=True,
+                           tone_hz=440 + int(rec.get("n") or 1) * 20,
                            seconds=float(getattr(req, "duration", 1) or 1))
         except Exception as exc:  # noqa: BLE001
             return VideoGenerationResult(clip_index=req.clip_index, success=False,

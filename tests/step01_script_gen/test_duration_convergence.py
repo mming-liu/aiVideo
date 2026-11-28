@@ -21,9 +21,23 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+
+@pytest.fixture(autouse=True)
+def _legacy_duration_limit(monkeypatch):
+    """本文件验证的是「超过生效上限才收敛」的判定/采纳逻辑，不是现场 120s 配置.
+
+    固定 90s 上限，原有 96s/104s 夹具才继续打到 _regen_over_limit 的触发分支；
+    若不固定，夹具全部落在 120s 合法区间，测试会因前提失效而假红。
+    """
+    from step01_script_gen.orchestrator import regen as _regen
+
+    monkeypatch.setattr(_regen._mrt, "DURATION_MAX_SEC", 90.0, raising=False)
 
 
 def _frames_for(motion, dur):

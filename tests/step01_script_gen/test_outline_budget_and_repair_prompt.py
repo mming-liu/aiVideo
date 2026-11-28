@@ -44,16 +44,21 @@ def test_repair_prompt_requires_linked_fields_in_one_go():
 
 # --------------------------------------------------------------- 2) 大纲预算
 def test_time_budget_is_calibrated_into_the_target_range():
+    from shared.config import (DURATION_MAX_SEC, DURATION_TARGET_MAX_SEC,
+                               DURATION_TARGET_MIN_SEC)
     from step01_script_gen.outline import _calibrate_time_budget
 
-    # 实测形态：30+60+30 = 120s，远超 70-80s 目标
-    out = _calibrate_time_budget("对白约30s；动作约60s；反应约30s")
+    # 超过**生效**合法上限才校准（120s 已是合法上限，旧 120s 夹具不再触发）
+    over = float(DURATION_MAX_SEC) + 60.0
+    out = _calibrate_time_budget(
+        f"对白约30s；动作约{over:g}s；反应约30s")
     import re
     nums = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)s", out)]
-    assert 70 <= sum(nums) <= 80, out
-    assert "已按目标 70-80 秒校准" in out
+    assert DURATION_TARGET_MIN_SEC <= sum(nums) <= DURATION_TARGET_MAX_SEC, out
+    assert ("已按目标 %g-%g 秒校准"
+            % (DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC)) in out
 
-    # 已在区间内 → 一字不动
+    # 已在合法区间内 → 一字不动
     same = "对白约25s；动作约35s；反应约15s"
     assert _calibrate_time_budget(same) == same
 
@@ -66,19 +71,23 @@ def test_time_budget_free_text_and_empty_are_safe():
 
 
 def test_anchor_injects_calibrated_budget():
+    from shared.config import (DURATION_MAX_SEC, DURATION_TARGET_MAX_SEC,
+                               DURATION_TARGET_MIN_SEC)
     from step01_script_gen.outline import outline_to_anchor
 
+    over = float(DURATION_MAX_SEC) + 60.0
     anchor = outline_to_anchor({
         "main_events": ["甲与乙对峙", "乙揭穿甲的身份", "甲被逼入死角"],
         "climax": "乙亮出信物",
         "required_facts": ["甲持信物"],
         "causal_chain": ["对峙→揭穿→逼入死角"],
         "shot_beats": ["甲与乙对峙", "乙揭穿甲的身份", "甲被逼入死角"],
-        "time_budget": "对白约30s；动作约60s；反应约30s",
+        "time_budget": f"对白约30s；动作约{over:g}s；反应约30s",
     })
     assert "【时间预算】" in anchor
-    assert "对白约30s" not in anchor          # 120s 版本不得注入
-    assert "已按目标 70-80 秒校准" in anchor
+    assert "对白约30s" not in anchor          # 超上限版本不得原样注入
+    assert ("已按目标 %g-%g 秒校准"
+            % (DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC)) in anchor
 
 
 # --------------------------------------------------------------- 重生复用大纲

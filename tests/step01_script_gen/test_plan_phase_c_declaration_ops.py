@@ -276,6 +276,12 @@ def test_c04_the_pipeline_dedupe_does_not_preempt_the_controller_quota(monkeypat
     """`plan_replan.already_attempted` 只对**流水线直调**生效；控制器驱动时次数归额度."""
     from step01_script_gen import plan_feasibility as _pf
     from step01_script_gen import outline as _o
+    from step01_script_gen import validation as _val
+
+    # 本用例的 `_over_budget_plan()` 按 60–90s 合同构造；固定上限，避免生产
+    # 默认放宽到 120s 后「已超预算」前提消失。
+    monkeypatch.setattr(_val, "_REDGUO_DURATION_MIN", 60.0)
+    monkeypatch.setattr(_val, "_REDGUO_DURATION_MAX", 90.0)
 
     _calls: list = []
 

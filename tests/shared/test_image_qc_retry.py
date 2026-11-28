@@ -42,14 +42,20 @@ def _env(monkeypatch):
 def _patch_posts(monkeypatch, responses):
     calls: list[dict] = []
 
-    def fake_post(*args, **kwargs):
-        calls.append(kwargs)
-        item = responses[len(calls) - 1]
-        if isinstance(item, BaseException):
-            raise item
-        return item
+    class _Session:
+        def post(self, *args, **kwargs):
+            calls.append(kwargs)
+            item = responses[len(calls) - 1]
+            if isinstance(item, BaseException):
+                raise item
+            return item
 
-    monkeypatch.setattr(image_qc.requests, "post", fake_post)
+        def close(self):
+            pass
+
+    # 生产走受管 requests.Session（连接池/脏池重建）；直接替换会话工厂，
+    # 既避免真实网络，又不绕过 session.post 这一实际调用点。
+    monkeypatch.setattr(image_qc, "_get_qc_session", lambda: _Session())
     return calls
 
 

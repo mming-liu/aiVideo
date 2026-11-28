@@ -44,13 +44,17 @@ def _mkdir_with_file(path: Path) -> Path:
     return path
 
 
-def test_probe_validity_dead_pid_is_reported_dead(conftest_mod):
+def test_probe_validity_dead_pid_is_reported_dead():
     """先证明判据本身有效：否则「死 PID 被删」可能只是因为判据恒为假."""
-    assert conftest_mod._pid_is_alive(_DEAD_PID) is False
-    assert conftest_mod._pid_is_alive(os.getpid()) is True
+    from shared.test_scratch import pid_is_alive
+
+    assert pid_is_alive(_DEAD_PID) is False
+    assert pid_is_alive(os.getpid()) is True
 
 
 def test_reaper_removes_dead_pid_dirs_and_keeps_live_ones(conftest_mod, tmp_path):
+    from shared.test_scratch import plan_pid_reap
+
     dead_revise = _mkdir_with_file(tmp_path / f"motion_revise_{_DEAD_PID}")
     dead_cli = _mkdir_with_file(tmp_path / f"motion_cli_{_DEAD_PID}")
     dead_fixtures = _mkdir_with_file(tmp_path / f"motion_fixtures_{_DEAD_PID}")
@@ -59,7 +63,10 @@ def test_reaper_removes_dead_pid_dirs_and_keeps_live_ones(conftest_mod, tmp_path
     keep_chapter = _mkdir_with_file(tmp_path / "锦衣夜行")
     keep_non_numeric = _mkdir_with_file(tmp_path / "motion_revise_abc")
 
-    survivors = conftest_mod._reap_stale_pid_dirs(tmp_path, os.getpid())
+    plan = plan_pid_reap(tmp_path, current_pid=os.getpid(),
+                         min_age_sec=0.0, keep_latest=0)
+    _removed, _survivors = conftest_mod._reap_planned(
+        plan, max_roots=50, time_budget=20.0)
 
     assert not dead_revise.exists(), "死 PID 的 motion_revise_ 必须被回收"
     assert not dead_cli.exists(), "死 PID 的 motion_cli_ 必须被回收"
@@ -67,12 +74,15 @@ def test_reaper_removes_dead_pid_dirs_and_keeps_live_ones(conftest_mod, tmp_path
     assert live_revise.exists(), "当前进程的隔离根必须保留（否则会删掉正在跑的会话）"
     assert keep_chapter.exists(), "非 PID 形态的目录不得被误删"
     assert keep_non_numeric.exists(), "后缀非数字的目录不得被误删"
-    assert set(survivors) == {live_revise.name}
+    assert {c.path.name for c in plan["active"]} == {live_revise.name}
 
 
 def test_reaper_survives_missing_root(conftest_mod, tmp_path):
     """根目录不存在时不抛异常（会话可能在干净检出上首次运行）."""
-    assert conftest_mod._reap_stale_pid_dirs(tmp_path / "nope", os.getpid()) == []
+    from shared.test_scratch import plan_pid_reap
+
+    plan = plan_pid_reap(tmp_path / "nope", current_pid=os.getpid())
+    assert conftest_mod._reap_planned(plan, max_roots=50, time_budget=20.0)[1] == []
 
 
 def test_log_cap_truncates_only_oversized_logs(conftest_mod, tmp_path):

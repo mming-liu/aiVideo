@@ -42,6 +42,19 @@ from tests.verification_helpers import step01_getsource  # noqa: E402
 _FIX = Path(__file__).resolve().parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _legacy_90s_contract(monkeypatch):
+    """本文件按 60–90s 合同编写（90.62s 判不可行）；生产默认已放宽到 60–120s.
+
+    固定本文件依赖的边界，保持「代码估算优先于计划自报」的判别力；120s 合同由
+    duration_budget / outline 的用例覆盖。
+    """
+    from step01_script_gen import validation
+
+    monkeypatch.setattr(validation, "_REDGUO_DURATION_MIN", 60.0)
+    monkeypatch.setattr(validation, "_REDGUO_DURATION_MAX", 90.0)
+
+
 def _failed_draft_lines() -> list:
     """失败稿里**真实**的对白逐句（不带标点差异，直接取 narration_segment）."""
     p = _FIX / "draft_failed_20260925_184302.json"
@@ -613,7 +626,10 @@ def test_replan_feedback_carries_code_computed_numbers(monkeypatch):
     _prompt = box["prompts"][0]
     assert _prompt.startswith("BASE-PROMPT"), "重选必须复用同一份大纲提示"
     assert "90.62" in _prompt, "没有把代码算出的对白估时反馈回去"
-    assert "60-90" in _prompt and "70-80" in _prompt, "没有把预算区间/规划目标交出去"
+    from shared.config import DURATION_TARGET_MAX_SEC, DURATION_TARGET_MIN_SEC
+    assert "60-90" in _prompt, "没有把生效合法区间交出去"
+    assert ("%g-%g" % (DURATION_TARGET_MIN_SEC, DURATION_TARGET_MAX_SEC)) in _prompt, \
+        "没有把规划目标区间交出去"
     assert '"dialogue_lines"' in _prompt, "没有把上一版计划带回去"
     assert info["rounds"] == 1 and info["before_dialogue_sec"] == pytest.approx(90.62, abs=0.05)
     assert info["result"] == "feasible" and info["after_lines"] == 2, info
@@ -934,10 +950,10 @@ def test_compressed_summary_keeps_climax_and_packs_what_fits():
 # 10) 规划契约：提示里必须写明判定用的预算数字（否则规划器无从"先算再选"）
 # ---------------------------------------------------------------------------
 def test_outline_prompt_states_the_budget_it_is_judged_by():
+    from shared.config import DURATION_MAX_SEC, DURATION_MIN_SEC
     from step01_script_gen.outline import OUTLINE_PROMPT, _TARGET_MAX_SEC, _TARGET_MIN_SEC
-    from step01_script_gen.validation import _REDGUO_DURATION_MAX, _REDGUO_DURATION_MIN
 
-    assert "合法 %d-%d 秒" % (_REDGUO_DURATION_MIN, _REDGUO_DURATION_MAX) in OUTLINE_PROMPT
+    assert "合法 %d-%d 秒" % (DURATION_MIN_SEC, DURATION_MAX_SEC) in OUTLINE_PROMPT
     assert "规划目标 %d-%d 秒" % (_TARGET_MIN_SEC, _TARGET_MAX_SEC) in OUTLINE_PROMPT
     assert "留出时间" in OUTLINE_PROMPT
 

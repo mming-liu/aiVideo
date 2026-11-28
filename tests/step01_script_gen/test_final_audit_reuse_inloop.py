@@ -365,8 +365,9 @@ def test_only_a_conclusive_audit_is_memoizable(status):
     所以这条判据抽成了 `_memoizable_final_audit`。
     """
     import step01_script_gen.main as m
+    from shared.config import duration_band as _db
 
-    payload = {"status": status, "issues": []}
+    payload = {"status": status, "issues": [], "duration_band": _db()}
     assert (m._memoizable_final_audit(payload) is not None) == (status == "ok")
     assert m._memoizable_final_audit(None) is None
     assert m._memoizable_final_audit("not-a-dict") is None

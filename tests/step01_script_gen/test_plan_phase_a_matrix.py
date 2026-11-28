@@ -38,6 +38,15 @@ def _beat(body, carrier, cite=_CITE1):
     return "节拍：%s｜本镜信息目的：推进｜原文依据：“%s”｜载体：%s" % (body, cite, carrier)
 
 
+#: 超预算夹具：13 条 11.4s 台词（每条都能单镜表示），合计 148.2s > 120s 上限。
+#: 旧夹具用整条 `_LONG`（13.13s > 单镜 cap）只能触发逐条不可表示，不触发总量问题。
+_BUDGET_LINES = [_LONG[:45]] * 13
+_BUDGET_BEATS = (
+    [_beat("甲喝止", "画面"), _beat("丙把茶壶踢翻了", "台词1")]
+    + [_beat("长廊尽头的那间屋子", "台词%d" % _k) for _k in range(2, 14)]
+)
+
+
 _FACT_OK = "丙把茶壶踢翻了｜原文证据：“%s”｜承载：B2/台词1" % _CITE1
 
 
@@ -1073,9 +1082,7 @@ _A13 = [
         shot_beats=[_beat("甲喝止", "画面"), _beat("丙把茶壶踢翻了", "台词1"),
                     _beat("丁吓得直发抖", "台词9")]), "carrier_dangling"),
     ("事实缺承载＋预算问题等", lambda: _fact_missing_carrier(
-        dialogue_lines=[_CITE1] + [_LONG] * 7,
-        shot_beats=[_beat("甲喝止", "画面"), _beat("丙把茶壶踢翻了", "台词1")]
-        + [_beat("长廊尽头的那间屋子", "台词%d" % _k) for _k in range(2, 9)]), "budget_infeasible"),
+        dialogue_lines=_BUDGET_LINES, shot_beats=_BUDGET_BEATS), "budget_infeasible"),
 ]
 
 
@@ -1121,9 +1128,7 @@ def test_budget_problem_carries_per_unit_costs_and_the_required_cut():
     的循环在它前面。判别性：把末尾那段 `_budget_limits` 去掉 ⇒ 本用例红。
     """
     _p = _fact_missing_carrier(
-        dialogue_lines=[_CITE1] + [_LONG] * 7,
-        shot_beats=[_beat("甲喝止", "画面"), _beat("丙把茶壶踢翻了", "台词1")]
-        + [_beat("长廊尽头的那间屋子", "台词%d" % _k) for _k in range(2, 9)])
+        dialogue_lines=_BUDGET_LINES, shot_beats=_BUDGET_BEATS)
     _ps = o.plan_acceptance_problems(_p, _SRC)
     _b = [x for x in _ps if x["code"] == "budget_infeasible"]
     assert len(_b) == 1, [x["code"] for x in _ps]
@@ -1135,4 +1140,4 @@ def test_budget_problem_carries_per_unit_costs_and_the_required_cut():
     assert all(_u.get("uid") and _u.get("sec", 0) > 0 for _u in _units), _units
     assert [u["sec"] for u in _units] == sorted((u["sec"] for u in _units), reverse=True), _units
     # 逐条成本必须覆盖**全部**发声条目（漏一条就等于让模型算错净减量）
-    assert sum(1 for _u in _units if _u["kind"] == "dialogue") == 8, _units
+    assert sum(1 for _u in _units if _u["kind"] == "dialogue") == 13, _units

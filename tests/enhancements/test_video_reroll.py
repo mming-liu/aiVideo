@@ -694,6 +694,7 @@ def test_audio_policy_enters_generation_key_only_when_it_changes_payload(monkeyp
 
     # 换成原生发声通道（volcengine/agent_plan/minimax）⇒ 政策改变 payload，必须进 key
     monkeypatch.setattr("shared.model_caps.active_video_uses_native_voice", lambda: True)
+    monkeypatch.setattr("shared.model_caps.active_video_supports_audio", lambda: True)
     ctx2 = _ctx()
     _run_candidate(monkeypatch, ctx2, shot=shot, script=script, service=service,
                    frame_paths=_frames(ctx2.attempt_dir / "frames"))

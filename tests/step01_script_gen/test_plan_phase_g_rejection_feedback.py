@@ -677,7 +677,9 @@ def _many_problems_plan():
     return _legal_plan(
         required_facts=["事实%d｜原文证据：“%s”｜承载：B3/台词1" % (i, _LINE)
                         for i in range(1, 15)],
-        dialogue_lines=[_LINE] + [_LONG] * 11)
+        # 11×11.4s + 1 条短句 ≈ 126s > 120s：每条都能单镜表示，问题才是**总量**
+        # `budget_infeasible`；整条 `_LONG`（13.13s）会先落进逐条不可表示。
+        dialogue_lines=[_LINE] + [_LONG[:45]] * 13)
 
 
 def test_g17_the_feedback_keeps_every_problem_identity(monkeypatch):

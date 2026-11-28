@@ -52,6 +52,8 @@ python tools/run_tests_grouped.py --out .tmp/offline-closure-r1/S10/junit
 
 - 63 项失败全部是 S01 冻结基线既有项（`test_image_qc_retry` 6、`test_plan_feasibility` 15、
   `test_reuse_miss_reason` 9、`test_duration_convergence` 7 等），无新增。
+- **2026-11-29 后续**：这 63 项已全部修复到通过，整包分组 6,259 收集 / 6,074 passed /
+  **0 failed** / 185 skipped；见 [S11 清零记录](S11-test-baseline-clear-20261129.md)。
 - `ruff_gate`：**PASS**（F401 189 / F811 12 / F821 0，低于基线 199/15）。
 - 子模块独立 import：父模块与四个文件的全部子模块均可单独 import。
 - 证据：`.tmp/offline-closure-r1/S10/junit/{merged.xml,summary.json}`。

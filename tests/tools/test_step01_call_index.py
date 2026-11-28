@@ -16,6 +16,8 @@
 """
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,11 +28,11 @@ BASELINE = ROOT / "baselines/2026-11-12-pre-layered/s06_ab"
 FIXTURES = ROOT / "tests/step01_script_gen/fixtures/audit_narrative_families"
 
 
-def _build():
+def _build(fixtures: Path = FIXTURES):
     from tools.build_step01_call_index import build
     return build(SimpleNamespace(baseline_root=str(BASELINE),
                                  live_root=None,
-                                 fixtures=str(FIXTURES)))
+                                 fixtures=str(fixtures)))
 
 
 @pytest.mark.skipif(not BASELINE.exists(), reason="S06 冻结原件缺失（需 baselines/）")
@@ -73,13 +75,36 @@ def test_repair_round_ledger_contradicts_the_applied_but_unverified_claim():
 
 
 @pytest.mark.skipif(not BASELINE.exists(), reason="S06 冻结原件缺失（需 baselines/）")
-def test_fixture_drift_separates_the_rewritten_sample_from_the_stable_ones():
-    """`time_ellipsis_legal` 漂移，另两份逐字可重建——两者不能混为一谈。"""
-    index = _build()
-    drift = index["fixture_drift"]
-    assert drift["checked"] == 6
-    rows = {(r["sample"], r["contract"]): r["status"] for r in drift["rows"]}
-    for contract in ("old", "new"):
-        assert rows[("time_ellipsis_legal", contract)] == "drift"
-        assert rows[("state_broken", contract)] == "match"
-        assert rows[("voice_broken", contract)] == "match"
+def test_fixture_drift_separates_the_rewritten_sample_from_the_stable_ones(tmp_path):
+    """漂移判据必须**逐样本、逐契约**区分：未改样本 match，只改一份才 drift.
+
+    当前提示词构建器已整体演进，S06 记录的 6 份历史 sha 全部不再匹配；因此本用例
+    不拿历史值当"稳定样本"前提，而是用**当前构建器**为同一份夹具生成 recorded
+    基线（应 match），再改其中一份的输入（应 drift）——这样同时锁住"能认匹配"
+    与"能认漂移"两半，且不依赖现场历史版本。
+    """
+    from tools.build_step01_call_index import _load_old_audit, _sha1, fixture_drift
+    from step01_script_gen import audit as new_mod
+
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    path = fixtures / "time_ellipsis_legal.json"
+    shutil.copy2(FIXTURES / "time_ellipsis_legal.json", path)
+    case = json.loads(path.read_text(encoding="utf-8"))
+    old_mod = _load_old_audit(BASELINE / "tools/audit_old.py")
+    recorded = {
+        ("time_ellipsis_legal", "new"): _sha1(new_mod.build_audit_prompt(
+            case["novel"], case["plan"], case["script"])),
+        ("time_ellipsis_legal", "old"): _sha1(old_mod.build_audit_prompt(
+            case["novel"], case["plan"], case["script"])),
+    }
+
+    stable = fixture_drift(fixtures, recorded)
+    assert stable["checked"] == 2 and stable["drift"] == 0, stable
+    assert all(r["status"] == "match" for r in stable["rows"]), stable
+
+    case["novel"] = str(case.get("novel") or "") + "（漂移探针）"
+    path.write_text(json.dumps(case, ensure_ascii=False, indent=1), encoding="utf-8")
+    drift = fixture_drift(fixtures, recorded)
+    assert drift["checked"] == 2 and drift["match"] == 0, drift
+    assert all(r["status"] == "drift" for r in drift["rows"]), drift
