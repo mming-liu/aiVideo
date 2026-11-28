@@ -156,12 +156,13 @@ _GLOBAL_RENDER_DEFAULTS = {
     # resolution / fps 由 get_global_render_config() 从 shared.config 动态取
     # （2026-11-27 配置解耦：不再在 4 个文件各写一套分辨率默认）。
     "resolution": "",
-    "ratio": "9:16",
+    "ratio": "",
     "fps": 24,
     # render_style / negative_prompt 由 get_global_render_config() 按当前
     # VIDEO_STYLE 动态派生（2026-11-27 复核：写死古风会让切画风时元数据不跟随）。
     "render_style": "",
-    "global_lighting": "电影质感，暗调低饱和，光源随场景（白天日光/夜晚烛火灯笼）",
+    # 灯光/机位也从当前画风预设取，不再写死古风（烛火/灯笼）。
+    "global_lighting": "",
     "global_camera_base": "浅景深，支持缓慢向前推镜，推镜速度约 0.3 倍常规",
     # 题材性天气/氛围不设全局兜底：由具体剧本或输入决定。
     "global_weather": "",
@@ -414,21 +415,22 @@ def style_profile(name: str | None = None, ratio: str = "9:16") -> StyleProfile:
 def get_global_render_config() -> dict:
     """获取当前全局渲染配置（可从 .env.content 覆盖）.
 
-    解析顺序（v6.43 08-23 审计）：
+    解析顺序（v6.43 08-23 审计；2026-11-27 单源化）：
       1. RENDER_RESOLUTION（专用 override，未设则空）
       2. VIDEO_SIZE（项目统一目标尺寸，格式 `WIDTH*HEIGHT`，如 `1440*2560`）
-      3. _GLOBAL_RENDER_DEFAULTS["resolution"] = "1080*1920"（仅作 fallback）
-    原顺序只查 RENDER_RESOLUTION，没设就回到硬编码 1080*1920——但项目里
-    VIDEO_SIZE 才是真值（与 step04 MERGE_RESOLUTION 一致）。
+      3. DEFAULT_VIDEO_SIZE（shared.config 的唯一 fallback）
+    画幅与帧率分别由 VIDEO_SIZE / RENDER_FPS 派生，不再写死 9:16、24。
     """
     config = dict(_GLOBAL_RENDER_DEFAULTS)
-    # 分辨率/帧率从 shared.config 单源取（VIDEO_SIZE 是生成画布真值）。
+    # 分辨率/画幅/帧率从 shared.config 单源取（VIDEO_SIZE 是生成画布真值）。
     from shared.config import DEFAULT_VIDEO_SIZE, RENDER_FPS
     config["resolution"] = os.getenv("VIDEO_SIZE") or DEFAULT_VIDEO_SIZE
+    config["ratio"] = frame_canvas_ratio()
     config["fps"] = RENDER_FPS
     # 画风相关元数据跟随当前 VIDEO_STYLE 动态派生（不再写死古风口径）。
     profile = style_profile()
     config["render_style"] = profile.label
+    config["global_lighting"] = get_style_preset(profile.name).get("lighting", "")
     config["negative_prompt"] = _merge_negative(
         profile.negative, STYLE_NEUTRAL_NEGATIVE, _GLOBAL_QUALITY_NEGATIVE)
     # 允许 .env.content 选择性覆盖
@@ -441,7 +443,11 @@ def get_global_render_config() -> dict:
     for k, v in env_overrides.items():
         if v:
             if k == "fps":
-                config[k] = int(v)
+                try:
+                    config[k] = int(v)
+                except (TypeError, ValueError):
+                    # 非法 RENDER_FPS 不静默改值也不崩：保留 config.RENDER_FPS 的有效值。
+                    pass
             else:
                 config[k] = v
     return config

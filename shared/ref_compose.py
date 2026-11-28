@@ -140,7 +140,15 @@ def get_ref_limit(model: str | None, default: int | None = None) -> int:
     未设置时保持模型能力原值（未注册模型仍回退 3）。
     """
     env_raw = os.getenv("IMAGE_MAX_REFS")
-    env_cap = int(env_raw) if env_raw else None
+    env_cap = None
+    if env_raw is not None and env_raw.strip():
+        try:
+            parsed = int(env_raw)
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None and parsed > 0:
+            env_cap = parsed
+        # 0 / 负数 / 非数字：视为未设置，回退模型能力（不静默返回非法上限）。
     if default is None:
         default = env_cap if env_cap else 3
     if not model:

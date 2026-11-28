@@ -62,6 +62,45 @@ def test_prompt_paths_use_frame_ratio_not_hardcoded():
         assert "frame_canvas_ratio()" in text, path.name
 
 
+def test_global_render_config_ratio_from_video_size(monkeypatch):
+    from shared.style_prefix import get_global_render_config
+
+    monkeypatch.delenv("RENDER_RATIO", raising=False)
+    monkeypatch.setenv("VIDEO_SIZE", "1280*720")
+    config = get_global_render_config()
+    assert config["resolution"] == "1280*720"
+    assert config["ratio"] == "16:9"
+
+
+def test_invalid_render_fps_keeps_default(monkeypatch):
+    from shared.style_prefix import get_global_render_config
+
+    monkeypatch.setenv("RENDER_FPS", "abc")
+    assert get_global_render_config()["fps"] == 24
+
+
+def test_image_request_ratio_follows_size(monkeypatch):
+    from shared.vimax_adapters import ImageGeneratorAiVideoAdapter
+
+    adapter = ImageGeneratorAiVideoAdapter.__new__(ImageGeneratorAiVideoAdapter)
+    adapter.size = "1280x720"
+    adapter.negative_prompt = ""
+    adapter._skip_prefix = False
+    adapter._skip_sanitize = True
+    adapter._enable_hallucination_lock = False
+    req = adapter.prepare_single_image("测试画面", [])
+    assert req.ratio == "16:9"
+    assert req.frame_contract["ratio"] == req.ratio
+
+
+def test_ref_limit_rejects_invalid_env(monkeypatch):
+    from shared.ref_compose import get_ref_limit
+
+    for raw in ("0", "-1", "abc"):
+        monkeypatch.setenv("IMAGE_MAX_REFS", raw)
+        assert get_ref_limit("seedream-5-0-pro") == 10, raw
+
+
 def test_duration_floor_follows_config():
     out = _run("from shared.config import DURATION_MIN_SEC;"
                "from step01_script_gen.timecode import MIN_TOTAL_SHOTS_DURATION;"

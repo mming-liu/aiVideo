@@ -166,12 +166,16 @@ class ImageGeneratorAiVideoAdapter:
             ref_paths = composed
 
         if not skip_prefix:
-            _prefix = style_profile(ratio=_canvas_ratio(self.size)).prefix
+            _prefix = style_profile(ratio=_canvas_ratio(size)).prefix
             full_prompt = sanitize_prompt(ensure_prefix(prompt, _prefix)) if not skip_sanitize else ensure_prefix(prompt, _prefix)
         elif not skip_sanitize:
             full_prompt = sanitize_prompt(prompt)
         else:
             full_prompt = prompt
+
+        # 画幅单源：调用方未显式传 ratio 时，按本次请求的 size 推导，
+        # 不再固定发 9:16（VIDEO_SIZE 切横屏时 contract 与请求体必须一致）。
+        request_ratio = kwargs.get("ratio") or _canvas_ratio(size)
 
         final_refs = ref_paths if ref_paths else ([ref] if ref else [])
         _consumer = (
@@ -209,7 +213,7 @@ class ImageGeneratorAiVideoAdapter:
             "manifest_injected": bool(manifest_text),
             "consumer_kind": _consumer,
             "size": size,
-            "ratio": kwargs.get("ratio", "9:16"),
+            "ratio": request_ratio,
             "shot_index": shot_index,
             "frame_desc": frame_desc,
             "operation_id": operation_id,
@@ -222,7 +226,7 @@ class ImageGeneratorAiVideoAdapter:
             negative_prompt=self.negative_prompt,
             size=size,
             save_path=kwargs.get("save_path"),
-            ratio=kwargs.get("ratio", "9:16"),
+            ratio=request_ratio,
             reference_image_path=ref,
             reference_image_paths=ref_paths,
             frame_desc=frame_desc,
