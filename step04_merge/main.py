@@ -624,12 +624,25 @@ def _encode_settings(*, require_explicit_font: bool = False) -> EncodeSettings:
         _cut_fade_ms = max(0, int(os.getenv("MERGE_AUDIO_CUT_FADE_MS", "20").strip()))
     except ValueError:
         _cut_fade_ms = 20
+    # 2026-11-28 O8：BGM 默认关闭；开关打开但配置非法时**在编码前**失败，
+    # 不静默输出没有氛围层的成片。
+    from shared.config import bgm_config
+    from step04_merge.bgm_mix import BgmConfig, BgmError
+
+    try:
+        _bgm = BgmConfig.from_mapping(bgm_config())
+        if _bgm is not None:
+            _bgm.validate(require_file=True)
+    except (BgmError, ValueError) as exc:
+        raise RenderError(getattr(exc, "code", "bgm_config_invalid"), "compile",
+                          str(exc), exit_code=2) from exc
     return EncodeSettings(
         width=OUT_W, height=OUT_H, crf=str(_CRF), preset=str(VIDEO_PRESET),
         audio_volume=_AUDIO_VOLUME, loudnorm=(_LOUDNORM == "1"),
         tts_base_gain=_TTS_BASE_GAIN, narration_base_gain=_NARRATION_BASE_GAIN,
         narration_gain=_NARRATION_GAIN, subtitle_style=_subtitle_style(),
         require_explicit_font=require_explicit_font, cut_fade_ms=_cut_fade_ms,
+        bgm=_bgm,
     )
 
 

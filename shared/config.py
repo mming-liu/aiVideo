@@ -667,3 +667,52 @@ if RENDER_FPS <= 0:
     RENDER_FPS = 24
 # 逐镜响度归一（EBU R128，消除镜头间音量跳变；关闭则退回固定增益）
 MERGE_AUDIO_LOUDNORM = os.getenv("MERGE_AUDIO_LOUDNORM", "1")
+
+# ============================================================================
+# BGM 氛围层（step04，2026-11-28 O8）——默认关闭，不影响既有 tts_mix 合同
+# ============================================================================
+# 只有 MERGE_BGM_ENABLED=1 才启用；开关打开但文件缺失/增益非法时**直接报错**
+# （不静默跳过：静音成片比失败更难发现）。
+MERGE_BGM_ENABLED = os.getenv("MERGE_BGM_ENABLED", "0").strip().lower() in (
+    "1", "true", "yes", "on")
+MERGE_BGM_PATH = os.getenv("MERGE_BGM_PATH", "").strip()
+MERGE_BGM_BASE_GAIN_DB = float(os.getenv("MERGE_BGM_BASE_GAIN_DB", "-16.0"))
+MERGE_BGM_DUCK_GAIN_DB = float(os.getenv("MERGE_BGM_DUCK_GAIN_DB", "-26.0"))
+MERGE_BGM_FADE_IN_SEC = float(os.getenv("MERGE_BGM_FADE_IN_SEC", "1.0"))
+MERGE_BGM_FADE_OUT_SEC = float(os.getenv("MERGE_BGM_FADE_OUT_SEC", "2.0"))
+MERGE_BGM_ATTACK_SEC = float(os.getenv("MERGE_BGM_ATTACK_SEC", "0.15"))
+MERGE_BGM_RELEASE_SEC = float(os.getenv("MERGE_BGM_RELEASE_SEC", "0.35"))
+
+
+def bgm_config() -> dict:
+    """BGM 生效配置（**唯一**读数入口；非法值显式失败，不静默改默认）.
+
+    校验（开启时）：
+    - `MERGE_BGM_DUCK_GAIN_DB <= MERGE_BGM_BASE_GAIN_DB`（压低必须更小）；
+    - 全部增益/淡入淡出/attack/release 有限且非负（增益为负值才正常，故只要求有限）；
+    - `MERGE_BGM_PATH` 非空且文件存在（由调用方在真正渲染前再核一次，这里只核非空）。
+    """
+    cfg = {
+        "enabled": bool(MERGE_BGM_ENABLED),
+        "path": MERGE_BGM_PATH,
+        "base_gain_db": float(MERGE_BGM_BASE_GAIN_DB),
+        "duck_gain_db": float(MERGE_BGM_DUCK_GAIN_DB),
+        "fade_in_sec": float(MERGE_BGM_FADE_IN_SEC),
+        "fade_out_sec": float(MERGE_BGM_FADE_OUT_SEC),
+        "attack_sec": float(MERGE_BGM_ATTACK_SEC),
+        "release_sec": float(MERGE_BGM_RELEASE_SEC),
+    }
+    if not all(math.isfinite(cfg[key]) for key in (
+            "base_gain_db", "duck_gain_db", "fade_in_sec", "fade_out_sec",
+            "attack_sec", "release_sec")):
+        raise ValueError("BGM 配置含非法数值（NaN/Inf）：%r" % cfg)
+    for key in ("fade_in_sec", "fade_out_sec", "attack_sec", "release_sec"):
+        if cfg[key] < 0:
+            raise ValueError("BGM %s 不能为负：%r" % (key, cfg[key]))
+    if cfg["duck_gain_db"] > cfg["base_gain_db"]:
+        raise ValueError(
+            "MERGE_BGM_DUCK_GAIN_DB(%.2f) 必须 <= MERGE_BGM_BASE_GAIN_DB(%.2f)："
+            "否则有人声时反而比无人声更响" % (cfg["duck_gain_db"], cfg["base_gain_db"]))
+    if cfg["enabled"] and not cfg["path"]:
+        raise ValueError("MERGE_BGM_ENABLED=1 但 MERGE_BGM_PATH 为空")
+    return cfg

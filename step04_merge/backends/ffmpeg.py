@@ -92,6 +92,9 @@ class EncodeSettings:
     ffmpeg: str | None = None
     ffprobe: str | None = None
     timeout_sec: float | None = None      # None = 按时间线时长推导；显式值优先
+    #: 2026-11-28 O8：BGM 氛围层（`step04_merge.bgm_mix.BgmConfig | None`）。
+    #: `None` = 关闭（默认）：滤镜图与历史逐字节一致；非 None 才追加 BGM 输入与分支。
+    bgm: object | None = None
 
 
 @dataclass(frozen=True)
@@ -443,6 +446,20 @@ def compile_graph(timeline: MergeTimeline, settings: EncodeSettings, *,
             f"{cur_a}{''.join(labels)}amix=inputs={len(labels) + 1}"
             f":duration=first:normalize=0:weights={weights}[outa]")
         cur_a = "[outa]"
+
+    # 2026-11-28 O8：BGM 氛围层（默认关闭；`settings.bgm is None` 时本段完全不执行，
+    # 滤镜图与历史逐字节一致）。混音用 normalize=0，BGM 自身的增益已在它自己的
+    # volume 包络里，amix 不再二次衰减人声。
+    bgm_cfg = getattr(settings, "bgm", None)
+    if bgm_cfg is not None and getattr(bgm_cfg, "enabled", False):
+        from step04_merge.bgm_mix import BgmError, apply_bgm_to_graph
+
+        try:
+            cur_a, inputs = apply_bgm_to_graph(
+                parts=parts, audio_label=cur_a, inputs=inputs,
+                timeline=validated, config=bgm_cfg, total_duration=total)
+        except BgmError as exc:
+            raise RenderError(exc.code, "compile", str(exc), exit_code=2) from exc
 
     # 调色 → 动效叠加 → 字幕（A4 固定次序）
     if color_filter:
